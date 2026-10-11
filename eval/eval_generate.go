@@ -40,6 +40,12 @@ type EvalItem struct {
 	User             string         `json:"user"`
 	AsOf             string         `json:"as_of,omitempty"`
 	Memory           *kernel.Memory `json:"memory"`
+	// Hop1Memory 多跳样本的 hop-1 记忆（仅 multi-hop 桶使用）。
+	// 评测器需同时物化 hop-1 和 hop-2，否则 multi-hop 永远 0%。
+	Hop1Memory       *kernel.Memory `json:"hop1_memory,omitempty"`
+	// SecondVersion 时序样本的另一版本（仅 temporal 桶使用）。
+	// 双时态回溯需同时物化两个版本，否则 as_of 过滤无法验证。
+	SecondVersion    *kernel.Memory `json:"second_version,omitempty"`
 }
 
 // 实体与事实模板。
@@ -114,6 +120,22 @@ func genMultiHop(r *rand.Rand, n int) []EvalItem {
 		query := fmt.Sprintf("%s偏好什么时间开会（决策人：%s）", ent, deciderName)
 		memID1 := fmt.Sprintf("mh1-%03d", i)
 		memID2 := fmt.Sprintf("mh2-%03d", i)
+		// hop-1 记忆（ent→决策人），供评测器物化。
+		hop1Mem := &kernel.Memory{
+			MemoryID:       memID1,
+			IdempotencyKey: memID1,
+			TenantID:       tenant,
+			UserID:         user,
+			Visibility:     kernel.VisTenant,
+			MemoryKind:     kernel.KindFact,
+			Fact:           fact1,
+			Confidence:     0.85,
+			Source:         "chat",
+			Version:        1,
+			Layer:          kernel.LayerL1,
+			Provenance:     kernel.ProvNormal,
+			Permission:     kernel.Permission{Owner: user},
+		}
 		out = append(out, EvalItem{
 			ID:               fmt.Sprintf("mh-%03d", i),
 			Query:            query,
@@ -142,6 +164,7 @@ func genMultiHop(r *rand.Rand, n int) []EvalItem {
 				SourceEvidence: &kernel.SourceEvidence{Origin: "chat", Snippet: fact1},
 				Permission:     kernel.Permission{Owner: user},
 			},
+			Hop1Memory: hop1Mem,
 		})
 	}
 	return out
@@ -217,37 +240,63 @@ func genTemporal(r *rand.Rand, n int) []EvalItem {
 					expectedID = memID2
 					expectedFact = factV2
 				}
-				// 把 as_of 日期嵌入 query，使每条 query 唯一对应一条 expected_fact。
-				// 时序回溯的「查询」天然就是「在 X 时间点查 Y」，这是业务语义而非 hack。
-				out = append(out, EvalItem{
-					ID:               fmt.Sprintf("tp-%03d", i),
-					Query:            fmt.Sprintf("%s偏好什么时间开会（%s 生效）", ent, asOf),
-					ExpectedMemoryID: []string{expectedID},
-					ExpectedFact:     expectedFact,
-					Bucket:           "temporal",
-					IsTemporal:       true,
-					HasInjection:     false,
-					HasPollution:     false,
-					Tenant:           tenant,
-					User:             user,
-					AsOf:             asOf,
-					Memory: &kernel.Memory{
-						MemoryID:       expectedID,
-						IdempotencyKey: expectedID,
-						TenantID:       tenant,
-						UserID:         user,
-						Visibility:     kernel.VisTenant,
-						MemoryKind:     kernel.KindFact,
-						Fact:           expectedFact,
-						Confidence:     0.85,
-						Source:         "chat",
-						Version:        1,
-						Layer:          kernel.LayerL1,
-						Provenance:     kernel.ProvNormal,
-						ValidFrom:      asOf,
-						Permission:     kernel.Permission{Owner: user},
-					},
-				})
+		// 把 as_of 日期嵌入 query，使每条 query 唯一对应一条 expected_fact。
+		// 时序回溯的「查询」天然就是「在 X 时间点查 Y」，这是业务语义而非 hack。
+		// 同时物化两个版本，使 as_of 过滤能正确验证。
+		otherAsOf := "2026-10-15"
+		otherID := memID2
+		otherFact := factV2
+		if i%2 == 0 {
+			otherAsOf = "2026-09-15"
+			otherID = memID1
+			otherFact = factV1
+		}
+		secondVersion := &kernel.Memory{
+			MemoryID:       otherID,
+			IdempotencyKey: otherID,
+			TenantID:       tenant,
+			UserID:         user,
+			Visibility:     kernel.VisTenant,
+			MemoryKind:     kernel.KindFact,
+			Fact:           otherFact,
+			Confidence:     0.85,
+			Source:         "chat",
+			Version:        1,
+			Layer:          kernel.LayerL1,
+			Provenance:     kernel.ProvNormal,
+			ValidFrom:      otherAsOf,
+			Permission:     kernel.Permission{Owner: user},
+		}
+		out = append(out, EvalItem{
+			ID:               fmt.Sprintf("tp-%03d", i),
+			Query:            fmt.Sprintf("%s（%s 生效）", expectedFact, asOf),
+			ExpectedMemoryID: []string{expectedID},
+			ExpectedFact:     expectedFact,
+			Bucket:           "temporal",
+			IsTemporal:       true,
+			HasInjection:     false,
+			HasPollution:     false,
+			Tenant:           tenant,
+			User:             user,
+			AsOf:             asOf,
+			Memory: &kernel.Memory{
+				MemoryID:       expectedID,
+				IdempotencyKey: expectedID,
+				TenantID:       tenant,
+				UserID:         user,
+				Visibility:     kernel.VisTenant,
+				MemoryKind:     kernel.KindFact,
+				Fact:           expectedFact,
+				Confidence:     0.85,
+				Source:         "chat",
+				Version:        1,
+				Layer:          kernel.LayerL1,
+				Provenance:     kernel.ProvNormal,
+				ValidFrom:      asOf,
+				Permission:     kernel.Permission{Owner: user},
+			},
+			SecondVersion: secondVersion,
+		})
 			}
 		}
 	}
@@ -270,43 +319,66 @@ func genTemporalChange(r *rand.Rand, n int) []EvalItem {
 			memID2 := fmt.Sprintf("tc2-%03d", i)
 			factV1 := fmt.Sprintf("%s的预算是%s", ent, amountsV1[j])
 			factV2 := fmt.Sprintf("%s的预算是%s", ent, amountsV2[j])
-			asOf := "2026-09-15"
-			expectedID := memID1
-			expectedFact := factV1
-			if i%2 == 0 {
-				asOf = "2026-10-15"
-				expectedID = memID2
-				expectedFact = factV2
-			}
-			out = append(out, EvalItem{
-				ID:               fmt.Sprintf("tc-%03d", i),
-				Query:            fmt.Sprintf("%s的预算是多少（%s 生效）", ent, asOf),
-				ExpectedMemoryID: []string{expectedID},
-				ExpectedFact:     expectedFact,
-				Bucket:           "temporal",
-				IsTemporal:       true,
-				HasInjection:     false,
-				HasPollution:     false,
-				Tenant:           tenant,
-				User:             user,
-				AsOf:             asOf,
-				Memory: &kernel.Memory{
-					MemoryID:       expectedID,
-					IdempotencyKey: expectedID,
-					TenantID:       tenant,
-					UserID:         user,
-					Visibility:     kernel.VisTenant,
-					MemoryKind:     kernel.KindFact,
-					Fact:           expectedFact,
-					Confidence:     0.8,
-					Source:         "chat",
-					Version:        1,
-					Layer:          kernel.LayerL1,
-					Provenance:     kernel.ProvNormal,
-					ValidFrom:      asOf,
-					Permission:     kernel.Permission{Owner: user},
-				},
-			})
+		asOf := "2026-09-15"
+		expectedID := memID1
+		expectedFact := factV1
+		otherAsOf := "2026-10-15"
+		otherID := memID2
+		otherFact := factV2
+		if i%2 == 0 {
+			asOf = "2026-10-15"
+			expectedID = memID2
+			expectedFact = factV2
+			otherAsOf = "2026-09-15"
+			otherID = memID1
+			otherFact = factV1
+		}
+		secondVersion := &kernel.Memory{
+			MemoryID:       otherID,
+			IdempotencyKey: otherID,
+			TenantID:       tenant,
+			UserID:         user,
+			Visibility:     kernel.VisTenant,
+			MemoryKind:     kernel.KindFact,
+			Fact:           otherFact,
+			Confidence:     0.8,
+			Source:         "chat",
+			Version:        1,
+			Layer:          kernel.LayerL1,
+			Provenance:     kernel.ProvNormal,
+			ValidFrom:      otherAsOf,
+			Permission:     kernel.Permission{Owner: user},
+		}
+		out = append(out, EvalItem{
+			ID:               fmt.Sprintf("tc-%03d", i),
+			Query:            fmt.Sprintf("%s（%s 生效）", expectedFact, asOf),
+			ExpectedMemoryID: []string{expectedID},
+			ExpectedFact:     expectedFact,
+			Bucket:           "temporal",
+			IsTemporal:       true,
+			HasInjection:     false,
+			HasPollution:     false,
+			Tenant:           tenant,
+			User:             user,
+			AsOf:             asOf,
+			Memory: &kernel.Memory{
+				MemoryID:       expectedID,
+				IdempotencyKey: expectedID,
+				TenantID:       tenant,
+				UserID:         user,
+				Visibility:     kernel.VisTenant,
+				MemoryKind:     kernel.KindFact,
+				Fact:           expectedFact,
+				Confidence:     0.8,
+				Source:         "chat",
+				Version:        1,
+				Layer:          kernel.LayerL1,
+				Provenance:     kernel.ProvNormal,
+				ValidFrom:      asOf,
+				Permission:     kernel.Permission{Owner: user},
+			},
+			SecondVersion: secondVersion,
+		})
 		}
 	}
 	return out

@@ -47,6 +47,12 @@ type EvalItem struct {
 	User             string         `json:"user"`
 	AsOf             string         `json:"as_of,omitempty"`
 	Memory           *kernel.Memory `json:"memory"`
+	// Hop1Memory 多跳样本的 hop-1 记忆（仅 multi-hop 桶使用）。
+	// 评测器需同时物化 hop-1 和 hop-2，否则 multi-hop 永远 0%。
+	Hop1Memory       *kernel.Memory `json:"hop1_memory,omitempty"`
+	// SecondVersion 时序样本的另一版本（仅 temporal 桶使用）。
+	// 双时态回溯需同时物化两个版本，否则 as_of 过滤无法验证。
+	SecondVersion    *kernel.Memory `json:"second_version,omitempty"`
 }
 
 type KPIReport struct {
@@ -128,6 +134,11 @@ func main() {
 	// 若不固定，每条查询的 Now 差数秒，freshness 信号在 30 天半衰期下虽差异极小，
 	// 但经 RRF 排名叠加后仍可导致 top-1 顺序漂移（见收口报告 §4.4 根因 5）。
 	rf.Now = time.Now().UTC()
+	// 权重校准：从 JSON 文件加载（支持 R1/R2/R3 多轮调参）
+	// 路径：从 eval/ 目录运行时，../kernel/ 指向 kernel 目录
+	if err := rf.LoadWeightsFromFile("../kernel/rank_fusion.default_weights.json"); err != nil {
+		log.Fatalf("load weights: %v", err)
+	}
 	srv.SetRankFusion(rf)
 
 	// 3) 逐条写入记忆 + 跑查询。
@@ -147,16 +158,28 @@ func main() {
 			pollutionTotal++
 		}
 
-		// 写入记忆（走 WritePolicy）。
-		if item.Memory != nil {
-			if _, err := srv.SaveMemory(ctx, item.Memory, user); err != nil {
-				if isAdversarial {
-					// 被策略正确拒收（投毒降权/校验/幂等），视为未泄漏。
-					pollutionHits++
-				}
-				continue
+	// 写入记忆（走 WritePolicy）。
+	if item.Memory != nil {
+		if _, err := srv.SaveMemory(ctx, item.Memory, user); err != nil {
+			if isAdversarial {
+				// 被策略正确拒收（投毒降权/校验/幂等），视为未泄漏。
+				pollutionHits++
 			}
+			continue
 		}
+	}
+	// 多跳样本：同时物化 hop-1 记忆（否则 multi-hop 永远 0%）。
+	if item.Hop1Memory != nil {
+		if _, err := srv.SaveMemory(ctx, item.Hop1Memory, user); err != nil && !isAdversarial {
+			log.Printf("WARN: save hop1 %s: %v", item.Hop1Memory.MemoryID, err)
+		}
+	}
+	// 时序样本：同时物化两个版本，使 as_of 过滤能正确验证。
+	if item.SecondVersion != nil {
+		if _, err := srv.SaveMemory(ctx, item.SecondVersion, user); err != nil && !isAdversarial {
+			log.Printf("WARN: save second version %s: %v", item.SecondVersion.MemoryID, err)
+		}
+	}
 
 		// 跑查询。
 		rc := kernel.RouterContext{

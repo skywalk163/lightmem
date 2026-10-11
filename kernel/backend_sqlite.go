@@ -104,19 +104,37 @@ func (b *sqliteBackend) Query(ctx context.Context, q QueryParams) ([]QueryResult
 		if q.AsOf != nil && !m.visibleAt(*q.AsOf) {
 			continue
 		}
-		score := 0.0
-		if needle != "" {
-			fact := strings.ToLower(m.Fact)
-			if fact == needle {
-				score = 1.0
-			} else if strings.Contains(fact, needle) {
-				score = 0.7
+	score := 0.0
+	if needle != "" {
+		fact := strings.ToLower(m.Fact)
+		if fact == needle {
+			score = 1.0
+		} else if strings.Contains(fact, needle) {
+			score = 0.7
+		} else {
+			// 词元回退：查询与事实的分词重合度（与 router_mem.go 的 recallScore 一致）。
+			// 使 SQLite 骨架后端的 Query 与 RecallLayers 的文本匹配行为一致。
+			qTokens := tokenize(needle)
+			if len(qTokens) > 0 {
+				fSet := tokenSet(m.Fact)
+				hit := 0
+				for _, t := range qTokens {
+					if fSet[t] {
+						hit++
+					}
+				}
+				if hit > 0 {
+					score = 0.5 * float64(hit) / float64(len(qTokens))
+				} else {
+					continue
+				}
 			} else {
 				continue
 			}
-		} else {
-			score = 0.1
 		}
+	} else {
+		score = 0.1
+	}
 		score += m.Confidence * 0.2
 		res = append(res, b.toResult(m, score))
 	}

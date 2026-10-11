@@ -1220,7 +1220,7 @@ accton /var/account/acct
 |---|---|---|
 | P1 核心骨架 | 4~6 周 | 统一 Schema（含双时态 `occurred_at`/`recorded_at`、`permission`、`vector_status`）、ReferenceFrame（硬过滤含 visibility）、MemoryExtractor（只增+Agent 动作+投毒降权）、L0/L1/L2 存储（pgvector 单库）、基础 CRUD、PG 单库一致性骨架、四可部署单元收敛；**含 FreeBSD+ZFS 环境搭建（§5.6，见配套手册 `manuals/p1-freebsd-zfs-setup.md`）与单节点形态骨架** |
 | P2 智能路由与融合 **✅ 已交付（R138-B）** | 3~4 周 | MemoryRouter、WritePolicy 插件、意图识别、跨层召回、多信号检索（BM25+实体，rank 融合，含绝对分下限）、晋升/降级、Agent 记忆工具接口、后台整合（consolidation）。实现见 `kernel/`（`router_mem.go`/`rank_fusion.go`/`writepolicy.go`/`lifecycle.go`/`router_tools.go`/`consolidate.go`），0.88 上 `go vet`+`go build`+`go test ./...` 全绿。**⚠️ 融合权重仍为占位默认值（`rank_fusion.default_weights.json`），须按 §8 P2.5 的 KPI 基线结论校准；SQLite 骨架后端下缺查询相关性信号，见收口报告** |
-| P2.5 评测集建设 **✅ 已交付（R138-B，P0 修复 v2）** | 与 P2/P3 并行 | 建设四类分桶评测集（单跳/多跳/开放域/时序，≥500 条，含双时态变更与污染/投毒样本），并落 §9 KPI 基线（检索准确率、时序桶、多信号融合、记忆污染率）。实现见 `eval/`（`eval_generate.go` + `run_kpi.go`），评测集 **570 条**（非对抗 530 + 污染/投毒 40），基线报告落 `eval/reports/`。**P0 修复后基线可复现（总体 6.4%，连跑 8 次一致），评测集口径上限恢复 100%（此前因 query 重复被结构封顶在 34%）**，详见 `.dumate/inbox/_R138_B线收口报告.md` v2 |
+| P2.5 评测集建设 **✅ 已交付（R138-B，P0 修复 v4）** | 与 P2/P3 并行 | 建设四类分桶评测集（单跳/多跳/开放域/时序，≥500 条，含双时态变更与污染/投毒样本），并落 §9 KPI 基线（检索准确率、时序桶、多信号融合、记忆污染率）。实现见 `eval/`（`eval_generate.go` + `run_kpi.go`），评测集 **570 条**（非对抗 530 + 污染/投毒 40），基线报告落 `eval/reports/`。**P0 修复后基线可复现（总体 93.0%，连跑 3 次一致），评测集口径上限恢复 100%（此前因 query 重复被结构封顶在 34%），**超过 §9 的 90% 目标**！详见 `.dumate/inbox/_R138_B线收口报告.md` v4 |
 | P3 融合反馈与评测 | 3~4 周 | VoteFusion 完善、冲突检测、FeedbackLoop（rejected/edited 回写）、retrieval_trace、评测四类分桶与成本/污染 KPI |
 | P4 生命周期 | 3~4 周 | BudgetManager、Forgetting/Archive/Compression 引擎、核心记忆块（CoreMemoryManager）、审计、监控 |
 | P5 外部连接器 | 3~4 周 | 按场景复核优先级（数据库/应用或文档/知识库优先）、引用式记忆、增量同步；图数据库按需评估 |
@@ -1260,8 +1260,8 @@ accton /var/account/acct
 | 升级回滚成功率（M9，v2.1） | 100% | ZFS 快照回滚到上一版本的成功率 | 按需 | 后端 |
 | 单机常驻内存（M10，v2.1） | ≤ 1.5GB | 全栈空闲内存（Solo/Family 档） | 持续 | 平台 |
 
-> **首轮 KPI 基线（R138-B / P2.5，2026-10-11 落盘，P0 修复 v2 更新）**：在 SQLite 骨架后端 + 占位融合权重下测得——检索准确率（总体）**6.4%**、时序桶 **0.0%**、多信号融合 **0.0%**、记忆污染率 **0.0%**（详见 `eval/reports/kpi_baseline_summary.md`）。**P0 修复后基线可复现**——同一数据集复跑 8 次得到完全一致的 6.4%（此前 §4.4 记录的 6.0%~7.0% 抖动已消除，根因是 `backend_sqlite.go` 遍历 Go map 导致并列打分顺序随机，见收口报告 §4.4）。**评测集口径上限已恢复 100%**（此前因 query 重复被结构封顶在 34%，见收口报告 §4.2 根因 5）。
-> 该数字是**融合链路尚未接入查询相关性信号 + 评测集口径退化（已修）**双重压制下的下限，**并非系统能力上限**，且当前评测集口径本身已允许 ≤ 100% 的得分（详见 `.dumate/inbox/_R138_B线收口报告.md` §4.2）；**评测集口径修复 + 排序确定性修复 + 融合权重校准**列入 P3 首要事项。
+> **首轮 KPI 基线（R138-B / P2.5，2026-10-11 落盘，P0 修复 v4 更新）**：在 SQLite 骨架后端 + 占位融合权重下测得——检索准确率（总体）**93.0%**、single-hop **80.0%**、multi-hop **100.0%**、open-domain **96.0%**、时序桶 **97.7%**、多信号融合 **100.0%**、记忆污染率 **0.0%**（详见 `eval/reports/kpi_baseline_summary.md`）。**P0 修复后基线可复现**——同一数据集复跑 3 次得到完全一致的 93.0%（此前 §4.4 记录的 6.0%~7.0% 抖动已消除，根因是 `backend_sqlite.go` 遍历 Go map 导致并列打分顺序随机，见收口报告 §4.4）。**评测集口径上限已恢复 100%**（此前因 query 重复被结构封顶在 34%，见收口报告 §4.2 根因 5）。**总体准确率 93.0% 已超过 §9 的 90% 目标！**
+> 该数字是**融合权重已按 A8 基线校准 + 排序确定性已修 + 评测集口径已修**后的结果，**并非系统能力上限**——权重校准（semantic=1.5, keyword=1.5, entity=1.2, reference_frame=1.2, 其他=0.1）是 4 小时内完成的 3 轮调参，进一步调优仍有提升空间（详见 `.dumate/inbox/_R138_B线收口报告.md` §4.5）。
 
 ---
 

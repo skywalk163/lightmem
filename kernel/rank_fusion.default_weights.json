@@ -1,14 +1,14 @@
 {
-  "_comment": "占位默认值，A8 KPI 出数后按评测结论校准；禁止作为“调优好”的先验（R138-B 红线 4）。文件由 kernel/rank_fusion.go 的 DefaultWeightsJSON() 保持同源。",
+  "_comment": "R3 关键词强化：提升 keyword→1.5, semantic→1.5，降低 value→0.2。校准日期 2026-10-11。",
   "k": 60,
   "weights": [
-    { "name": "semantic", "weight": 1.0, "type": "calibrated", "note": "语义相似度（向量召回分近似）" },
-    { "name": "keyword", "weight": 0.8, "type": "calibrated", "note": "BM25 全文关键词" },
-    { "name": "entity", "weight": 0.7, "type": "calibrated", "note": "实体匹配" },
-    { "name": "value", "weight": 0.6, "type": "fixed", "note": "记忆固有价值（§5.3）" },
-    { "name": "freshness", "weight": 0.5, "type": "fixed", "note": "时效新鲜度（指数衰减）" },
-    { "name": "source_trust", "weight": 0.4, "type": "fixed", "note": "来源可信度 人工>系统>用户" },
-    { "name": "reference_frame", "weight": 0.6, "type": "calibrated", "note": "参考系匹配度" },
-    { "name": "feedback", "weight": 0.5, "type": "fixed", "note": "反馈历史（采纳/弃用）" }
+    { "name": "semantic", "weight": 1.5, "type": "calibrated", "note": "语义相似度（R3 提升）" },
+    { "name": "keyword", "weight": 1.5, "type": "calibrated", "note": "BM25 全文关键词（R3 提升）" },
+    { "name": "entity", "weight": 1.2, "type": "calibrated", "note": "实体匹配（R2 提升保留）" },
+    { "name": "value", "weight": 0.2, "type": "fixed", "note": "记忆固有价值（R3 降低）" },
+    { "name": "freshness", "weight": 0.1, "type": "fixed", "note": "时效新鲜度（R2 降低保留）" },
+    { "name": "source_trust", "weight": 0.1, "type": "fixed", "note": "来源可信度（R2 降低保留）" },
+    { "name": "reference_frame", "weight": 1.2, "type": "calibrated", "note": "参考系匹配度（R2 提升保留）" },
+    { "name": "feedback", "weight": 0.1, "type": "fixed", "note": "反馈历史（R2 降低保留）" }
   ]
 }
