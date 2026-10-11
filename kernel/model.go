@@ -91,6 +91,8 @@ type GoalDetail struct {
 	KPI         *KPI     `json:"kpi,omitempty"`
 	Constraints []string `json:"constraints,omitempty"`
 	Status      string   `json:"status"` // active / paused / completed / expired
+	Progress    float64  `json:"progress,omitempty"`
+	Deadline    string   `json:"deadline,omitempty"`
 }
 
 // KPI 目标衡量指标（§3.8）
