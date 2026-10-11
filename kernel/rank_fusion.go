@@ -269,6 +269,79 @@ func (rf *RankFusion) Rank(ctx context.Context, query string, cands []RecalledCa
 	return out
 }
 
+// VoteFusion 多版本投票：对 top-K 候选做加权投票，权重 = 各信号归一化分。
+// 返回投票后的 top-1 候选（得分 = Σ weight_i × score_i / Σ weight_i）。
+// 若所有候选得分均为 0，返回 nil。
+func (rf *RankFusion) VoteFusion(ctx context.Context, query string, cands []RecalledCandidate, topK int) *FusedResult {
+	if len(cands) == 0 || topK <= 0 {
+		return nil
+	}
+	if topK > len(cands) {
+		topK = len(cands)
+	}
+	ranked := rf.Rank(ctx, query, cands)
+	if len(ranked) == 0 {
+		return nil
+	}
+	// 对 top-K 候选做加权投票
+	weights := make([]float64, 0, topK)
+	scores := make([]float64, 0, topK)
+	for i := 0; i < topK && i < len(ranked); i++ {
+		w := 0.0
+		for _, sig := range ranked[i].SignalScores {
+			w += sig
+		}
+		if w <= 0 {
+			w = 1.0 // 防止全 0
+		}
+		weights = append(weights, w)
+		scores = append(scores, ranked[i].Score)
+	}
+	// 加权平均
+	var totalWeight, weightedSum float64
+	for i := 0; i < len(weights); i++ {
+		totalWeight += weights[i]
+		weightedSum += weights[i] * scores[i]
+	}
+	if totalWeight <= 0 {
+		return nil
+	}
+	ranked[0].Score = weightedSum / totalWeight
+	ranked[0].Reason = fmt.Sprintf("vote_fusion: top-%d weighted average", topK)
+	return &ranked[0]
+}
+
+// ConflictDetector 检测 top-1 与 top-2 的语义冲突。
+// 冲突条件：
+//   1. 同一主体（reference_frame.entity 相同）
+//   2. 同类 kind
+//   3. 事实不同
+//   4. 向量距离 < 阈值（语义相似度高，但事实不同 → 冲突）
+// 若 embedder 不可用，退化为启发式检测（isConflict）。
+func (rf *RankFusion) ConflictDetector(ctx context.Context, top1, top2 *FusedResult) bool {
+	if top1 == nil || top2 == nil || top1.Memory == nil || top2.Memory == nil {
+		return false
+	}
+	// 启发式检测：同一主体 + 同类 + 不同事实
+	if !rf.isConflict(top1.Memory, top2.Memory) {
+		return false
+	}
+	// 向量距离检测：若 embedder 可用，计算事实的向量相似度
+	if rf.embedder != nil {
+		v1, err1 := rf.embedder(top1.Memory.Fact)
+		v2, err2 := rf.embedder(top2.Memory.Fact)
+		if err1 == nil && err2 == nil && len(v1) > 0 && len(v2) > 0 {
+			sim := cosine(v1, v2)
+			// 相似度高但事实不同 → 冲突
+			if sim > 0.7 {
+				return true
+			}
+		}
+	}
+	// 退化为启发式
+	return true
+}
+
 // Fuse 是 §3.4 的核心融合函数：先 Rank，再按融合策略返回最终结果集。
 //
 // 返回语义：
@@ -299,13 +372,11 @@ func (rf *RankFusion) Fuse(ctx context.Context, query string, cands []RecalledCa
 		return []FusedResult{top1}
 	}
 
-	// VoteFusion：对 top-3 候选做加权平均，提升多版本投票的鲁棒性。
-	// 权重 = 各信号归一化分 × 名次衰减（top1:1.0, top2:0.5, top3:0.3）。
+	// VoteFusion：对 top-3 候选做加权投票，提升多版本投票的鲁棒性。
 	if len(ranked) >= 3 {
-		w1, w2, w3 := ranked[0].Score, ranked[1].Score, ranked[2].Score
-		total := w1 + w2 + w3
-		if total > 0 {
-			ranked[0].Score = (w1*w1 + w2*w2*0.5 + w3*w3*0.3) / total
+		vf := rf.VoteFusion(ctx, query, cands, 3)
+		if vf != nil && vf.Score > top1.Score {
+			top1 = *vf
 		}
 	}
 
@@ -333,7 +404,7 @@ func (rf *RankFusion) Fuse(ctx context.Context, query string, cands []RecalledCa
 			}
 			picked[i].FusedWith = fw
 		}
-		if rf.isConflict(top1.Memory, top2.Memory) {
+		if rf.ConflictDetector(ctx, &picked[0], &picked[1]) {
 			// 冲突标记：保留多条，标 requires_confirmation，不静默选一个（§3.4）。
 			for i := range picked {
 				picked[i].RequiresConfirmation = true
@@ -628,26 +699,68 @@ func (rf *RankFusion) signalReferenceFrame(_ context.Context, _ string, cands []
 }
 
 // signalFeedbackHistory：反馈历史（采纳/弃用统计）。
+// 评分规则：
+//   - 无反馈 = 中性（0.5）
+//   - 有反馈：adopted/(adopted+rejected)，但考虑时间衰减
+//   - rejected 记忆：反馈分 < 0.3（降权）
+//   - adopted 记忆：反馈分 > 0.7（升权）
 func signalFeedbackHistory(_ context.Context, _ string, cands []RecalledCandidate) map[string]float64 {
 	out := make(map[string]float64, len(cands))
+	now := time.Now().UTC()
+	const halfLife = 90 * 24 * time.Hour // 90 天半衰期
+
 	for _, c := range cands {
 		if c.Memory == nil {
 			continue
 		}
 		var adopted, rejected int
+		var recentAdopted, recentRejected int
+
 		for _, f := range c.Memory.FeedbackRecords {
 			switch f.Status {
 			case FbAdopted, FbEdited:
 				adopted++
+				// 时间衰减：90 天内的反馈才计入 recent
+				if now.Sub(f.Time) < halfLife {
+					recentAdopted++
+				}
 			case FbRejected:
 				rejected++
+				if now.Sub(f.Time) < halfLife {
+					recentRejected++
+				}
 			}
 		}
+
 		if adopted+rejected == 0 {
 			out[c.Memory.MemoryID] = 0.5 // 无反馈 = 中性
 			continue
 		}
-		out[c.Memory.MemoryID] = float64(adopted) / float64(adopted+rejected)
+
+		// 基础分：采纳率
+		base := float64(adopted) / float64(adopted+rejected)
+
+		// 时间衰减调整：近期反馈权重更高
+		if recentAdopted+recentRejected > 0 {
+			ratio := float64(recentAdopted) / float64(recentAdopted+recentRejected)
+			// 混合近期和历史反馈
+			base = 0.7*ratio + 0.3*base
+		}
+
+		// rejected 记忆强制降权
+		if rejected > 0 && adopted == 0 {
+			base = 0.2
+		}
+
+		// 限制在 [0, 1]
+		if base < 0 {
+			base = 0
+		}
+		if base > 1 {
+			base = 1
+		}
+
+		out[c.Memory.MemoryID] = base
 	}
 	return out
 }

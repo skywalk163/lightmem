@@ -132,16 +132,67 @@ type RouterResult struct {
 	FusionScores any             `json:"fusion_scores"` // A1 阶段为 null，交 A2
 	Fused        []FusedResult   `json:"fused,omitempty"`
 	Mode         string          `json:"mode,omitempty"`
-	// Trace 检索 trace：top-3 候选的 8 路信号打分，便于调试和审计。
-	Trace        []TraceEntry    `json:"trace,omitempty"`
+	// Trace 检索 trace：完整检索链路，便于调试和审计。
+	Trace        *RetrievalTrace `json:"trace,omitempty"`
 }
 
-// TraceEntry 单条候选的 trace 条目。
+// TraceEntry 单条候选的 trace 条目（兼容旧版）。
 type TraceEntry struct {
 	MemoryID string            `json:"memory_id"`
 	Fact     string            `json:"fact"`
 	Score    float64           `json:"score"`
 	Signals  map[string]float64 `json:"signals"`
+}
+
+// RetrievalTrace 完整检索 trace（§3.4）。
+// 记录每层召回的候选数、每信号的打分、融合后的排名。
+type RetrievalTrace struct {
+	Query       string                 `json:"query"`
+	Timestamp   string                 `json:"timestamp"`
+	Layers      []TraceLayer           `json:"layers"`
+	Signals     []TraceSignal          `json:"signals"`
+	Ranked      []TraceRankedCandidate `json:"ranked"`
+	Mode        string                 `json:"mode"`
+	TotalCands  int                    `json:"total_candidates"`
+	FilteredCands int                `json:"filtered_candidates"`
+}
+
+// TraceLayer 单层召回的 trace。
+type TraceLayer struct {
+	Layer     string         `json:"layer"`
+	Candidates []TraceCand   `json:"candidates"`
+	Count     int            `json:"count"`
+	Skipped   bool           `json:"skipped,omitempty"`
+	Note      string         `json:"note,omitempty"`
+}
+
+// TraceCand 单条候选的 trace。
+type TraceCand struct {
+	MemoryID string  `json:"memory_id"`
+	Fact     string  `json:"fact"`
+	Score    float64 `json:"score"`
+	Layer    string  `json:"layer"`
+}
+
+// TraceSignal 单信号的 trace。
+type TraceSignal struct {
+	Name   string         `json:"name"`
+	Weight float64        `json:"weight"`
+	Type   string         `json:"type"`
+	Scores map[string]float64 `json:"scores"`
+}
+
+// TraceRankedCandidate 融合后的排名候选。
+type TraceRankedCandidate struct {
+	MemoryID string            `json:"memory_id"`
+	Fact     string            `json:"fact"`
+	Score    float64           `json:"score"`
+	Rank     int               `json:"rank"`
+	Ranks    map[string]int    `json:"ranks,omitempty"`
+	SignalScores map[string]float64 `json:"signal_scores,omitempty"`
+	Layer    string            `json:"layer"`
+	LowConfidence bool         `json:"low_confidence,omitempty"`
+	RequiresConfirmation bool `json:"requires_confirmation,omitempty"`
 }
 
 // ------------------------------------------------------------------
@@ -190,42 +241,109 @@ func (s *APIServer) Route(ctx context.Context, rc RouterContext) (RouterResult, 
 				}
 			}
 		}
-	rf := s.fusion
-	if rf == nil {
-		rf = DefaultRankFusion()
+		rf := s.fusion
+		if rf == nil {
+			rf = DefaultRankFusion()
+		}
+		// 确定性：仅当注入方未显式设置 Now 时才用当前时刻。
+		// 评测集跑批时由 run_kpi.go 固定 Now，避免逐条 freshness 抖动。
+		if rf.Now.IsZero() {
+			rf.Now = time.Now().UTC()
+		}
+		rf.AsOf = rc.AsOf
+		rf.QueryFrame = rc.frame()
+		fused := rf.Fuse(ctx, rc.Text, flat)
+		res.Fused = fused
+
+		// 指标：记录检索结果
+		metrics := GetMetricsCollector()
+		if len(fused) > 0 {
+			metrics.RecordHit()
+		} else {
+			metrics.RecordMiss()
+		}
+		// 记录层容量
+		for _, l := range res.Recalled {
+			metrics.SetLayerCount(MemoryLayer(l.Layer), int64(l.Count))
+		}
+
+		// 构建完整检索 trace
+		trace := &RetrievalTrace{
+			Query:        rc.Text,
+			Timestamp:    time.Now().UTC().Format(time.RFC3339),
+			Mode:         res.Mode,
+			TotalCands:   len(flat),
+			FilteredCands: len(flat),
+		}
+
+		// 填充各层召回信息
+		for _, l := range res.Recalled {
+			layer := TraceLayer{
+				Layer: l.Layer,
+				Count: l.Count,
+				Skipped: l.Skipped,
+				Note: l.Note,
+			}
+			for _, c := range l.Candidates {
+				if c != nil && c.Memory != nil {
+					layer.Candidates = append(layer.Candidates, TraceCand{
+						MemoryID: c.Memory.MemoryID,
+						Fact:     c.Memory.Fact,
+						Score:    c.RecallScore,
+						Layer:    string(c.Layer),
+					})
+				}
+			}
+			trace.Layers = append(trace.Layers, layer)
+		}
+
+		// 填充各信号打分
+		for _, sig := range rf.Signals {
+			signal := TraceSignal{
+				Name:   sig.Name,
+				Weight: sig.Weight,
+				Type:   sig.Type,
+				Scores: map[string]float64{},
+			}
+			// 重新计算该信号的打分
+			raw := sig.Fn(ctx, rc.Text, flat)
+			for id, score := range raw {
+				signal.Scores[id] = score
+			}
+			trace.Signals = append(trace.Signals, signal)
+		}
+
+		// 融合后的排名
+		for i, f := range fused {
+			ranked := TraceRankedCandidate{
+				MemoryID: f.MemoryID,
+				Fact:     f.Fact,
+				Score:    f.Score,
+				Rank:     i + 1,
+				Ranks:    f.Ranks,
+				SignalScores: f.SignalScores,
+				Layer:    string(f.Layer),
+				LowConfidence: f.LowConfidence,
+				RequiresConfirmation: f.RequiresConfirmation,
+			}
+			trace.Ranked = append(trace.Ranked, ranked)
+		}
+
+		res.Trace = trace
+
+		if len(fused) == 0 {
+			res.Mode = "empty"
+		} else if fused[0].RequiresConfirmation {
+			res.Mode = "conflict"
+		} else if fused[0].LowConfidence {
+			res.Mode = "low_confidence"
+		} else if len(fused) > 1 {
+			res.Mode = "fused"
+		} else {
+			res.Mode = "unique"
+		}
+		return res, nil
 	}
-	// 确定性：仅当注入方未显式设置 Now 时才用当前时刻。
-	// 评测集跑批时由 run_kpi.go 固定 Now，避免逐条 freshness 抖动。
-	if rf.Now.IsZero() {
-		rf.Now = time.Now().UTC()
-	}
-	rf.AsOf = rc.AsOf
-	rf.QueryFrame = rc.frame()
-	fused := rf.Fuse(ctx, rc.Text, flat)
-	res.Fused = fused
-	// retrieval_trace：填充 top-3 候选的 trace。
-	for i := 0; i < len(fused) && i < 3; i++ {
-		res.Trace = append(res.Trace, TraceEntry{
-			MemoryID: fused[i].MemoryID,
-			Fact:     fused[i].Fact,
-			Score:    fused[i].Score,
-			Signals:  fused[i].SignalScores,
-		})
-	}
-	res.FusionScores = nil
-	if len(fused) == 0 {
-		res.Mode = "empty"
-	} else if fused[0].RequiresConfirmation {
-		res.Mode = "conflict"
-	} else if fused[0].LowConfidence {
-		res.Mode = "low_confidence"
-	} else if len(fused) > 1 {
-		res.Mode = "fused"
-	} else {
-		res.Mode = "unique"
-	}
-	return res, nil
-}
 
 // RecallLayers 四层并行召回（§2.2 + §2.3）。
 // 硬过滤先做：tenant/user/project/visibility（§3.2 安全硬过滤清单）。

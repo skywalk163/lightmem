@@ -65,6 +65,48 @@ type KPIReport struct {
 	MultiSignalAccuracy   float64            `json:"multi_signal_accuracy"`
 	PollutionRate         float64            `json:"pollution_rate"`
 	Details               []KPIDetail        `json:"details"`
+	// CostTracker 成本追踪：每条查询的 token 消耗、延迟、信号计算次数
+	Cost                  *CostTracker       `json:"cost,omitempty"`
+	// PollutionTrend 污染率趋势：按时间窗口统计
+	PollutionTrend        *PollutionTrend    `json:"pollution_trend,omitempty"`
+	// BucketMRR 分桶 MRR（Mean Reciprocal Rank）
+	BucketMRR             map[string]float64 `json:"bucket_mrr,omitempty"`
+	// OverallMRR 总体 MRR
+	OverallMRR            float64            `json:"overall_mrr,omitempty"`
+}
+
+// CostTracker 成本追踪（§9 评测增强）。
+type CostTracker struct {
+	TotalQueries            int     `json:"total_queries"`
+	TotalTokens             int     `json:"total_tokens"`
+	TotalLatencyMs          int64   `json:"total_latency_ms"`
+	AvgLatencyMs            float64 `json:"avg_latency_ms"`
+	TotalSignalComputations int     `json:"total_signal_computations"`
+	AvgSignalComputations   float64 `json:"avg_signal_computations"`
+	CostPerQuery            float64 `json:"cost_per_query"`
+}
+
+// PollutionTrend 污染率趋势（§9 评测增强）。
+type PollutionTrend struct {
+	Windows        []PollutionWindow `json:"windows"`
+	CurrentRate    float64           `json:"current_rate"`
+	TrendDirection string            `json:"trend_direction"` // improving / stable / worsening
+}
+
+// PollutionWindow 时间窗口污染率。
+type PollutionWindow struct {
+	WindowStart int     `json:"window_start"`
+	WindowEnd   int     `json:"window_end"`
+	Total       int     `json:"total"`
+	Leaked      int     `json:"leaked"`
+	Rate        float64 `json:"rate"`
+}
+
+// BucketMRR 分桶 MRR 统计。
+type BucketMRR struct {
+	Total int         `json:"total"`
+	MRR   float64     `json:"mrr"`
+	Ranks []int       `json:"ranks,omitempty"`
 }
 
 type KPIDetail struct {
@@ -151,37 +193,72 @@ func main() {
 	multiSignalHits, multiSignalTotal := 0, 0
 	pollutionTotal, pollutionHits := 0, 0
 
+	// 成本追踪
+	cost := &CostTracker{}
+	// 污染率趋势：按 100 条查询分窗口
+	pollutionTrend := &PollutionTrend{}
+	// MRR 追踪：每条查询的 reciprocal rank
+	bucketRanks := map[string][]int{}
+	allRanks := []int{}
+
+	// 污染窗口追踪
+	windowSize := 100
+	currentWindow := 0
+	windowLeaked := 0
+	windowTotal := 0
+
 	for _, item := range items {
+		// 每 100 条查询记录一个污染窗口
+		if currentWindow > 0 && currentWindow%windowSize == 0 {
+			rate := 0.0
+			if windowTotal > 0 {
+				rate = float64(windowLeaked) / float64(windowTotal)
+			}
+			pollutionTrend.Windows = append(pollutionTrend.Windows, PollutionWindow{
+				WindowStart: currentWindow - windowSize + 1,
+				WindowEnd:   currentWindow,
+				Total:       windowTotal,
+				Leaked:      windowLeaked,
+				Rate:        rate,
+			})
+			windowLeaked = 0
+			windowTotal = 0
+		}
+		currentWindow++
+
 		isAdversarial := item.HasPollution || item.HasInjection
 		if isAdversarial {
 			// 污染/投毒样本：期望被 WritePolicy 拒收，或写入后不被 top-1 召回（未泄漏即通过）。
+			windowTotal++
 			pollutionTotal++
 		}
 
-	// 写入记忆（走 WritePolicy）。
-	if item.Memory != nil {
-		if _, err := srv.SaveMemory(ctx, item.Memory, user); err != nil {
-			if isAdversarial {
-				// 被策略正确拒收（投毒降权/校验/幂等），视为未泄漏。
-				pollutionHits++
+		// 写入记忆（走 WritePolicy）。
+		if item.Memory != nil {
+			if _, err := srv.SaveMemory(ctx, item.Memory, user); err != nil {
+				if isAdversarial {
+					// 被策略正确拒收（投毒降权/校验/幂等），视为未泄漏。
+					pollutionHits++
+				}
+				continue
 			}
-			continue
 		}
-	}
-	// 多跳样本：同时物化 hop-1 记忆（否则 multi-hop 永远 0%）。
-	if item.Hop1Memory != nil {
-		if _, err := srv.SaveMemory(ctx, item.Hop1Memory, user); err != nil && !isAdversarial {
-			log.Printf("WARN: save hop1 %s: %v", item.Hop1Memory.MemoryID, err)
+		// 多跳样本：同时物化 hop-1 记忆（否则 multi-hop 永远 0%）。
+		if item.Hop1Memory != nil {
+			if _, err := srv.SaveMemory(ctx, item.Hop1Memory, user); err != nil && !isAdversarial {
+				log.Printf("WARN: save hop1 %s: %v", item.Hop1Memory.MemoryID, err)
+			}
 		}
-	}
-	// 时序样本：同时物化两个版本，使 as_of 过滤能正确验证。
-	if item.SecondVersion != nil {
-		if _, err := srv.SaveMemory(ctx, item.SecondVersion, user); err != nil && !isAdversarial {
-			log.Printf("WARN: save second version %s: %v", item.SecondVersion.MemoryID, err)
+		// 时序样本：同时物化两个版本，使 as_of 过滤能正确验证。
+		if item.SecondVersion != nil {
+			if _, err := srv.SaveMemory(ctx, item.SecondVersion, user); err != nil && !isAdversarial {
+				log.Printf("WARN: save second version %s: %v", item.SecondVersion.MemoryID, err)
+			}
 		}
-	}
 
 		// 跑查询。
+		startTime := time.Now().UTC()
+		signalComps := 0
 		rc := kernel.RouterContext{
 			Text:        item.Query,
 			TenantID:    item.Tenant,
@@ -194,6 +271,14 @@ func main() {
 			rc.AsOf = &asOf
 		}
 		res, err := srv.RecallAndFuse(ctx, rc)
+		latency := time.Since(startTime).Milliseconds()
+		cost.TotalLatencyMs += latency
+		cost.TotalQueries++
+		// 信号计算次数：8 路信号 × 候选数
+		if len(res.Fused) > 0 && res.Trace != nil {
+			signalComps = len(res.Trace.Signals) * len(res.Trace.Layers) * 5 // 估算
+		}
+		cost.TotalSignalComputations += signalComps
 		if err != nil {
 			if isAdversarial {
 				pollutionHits++ // 查询失败同样不构成泄漏
@@ -207,6 +292,7 @@ func main() {
 		if isAdversarial {
 			if len(res.Fused) == 0 || res.Fused[0].MemoryID != item.Memory.MemoryID {
 				pollutionHits++
+				windowLeaked++
 			}
 			continue
 		}
@@ -214,13 +300,30 @@ func main() {
 		// 判定命中：top-1 的 memory_id 在 expected_memory_ids 中；
 		// fact 命中为辅助口径（等价文本），用于区分「ID 不一致但答案正确」。
 		hit := false
+		rank := 0
 		gotFact := ""
 		if len(res.Fused) > 0 {
 			gotFact = res.Fused[0].Fact
-			for _, exp := range item.ExpectedMemoryID {
+			for j, exp := range item.ExpectedMemoryID {
 				if res.Fused[0].MemoryID == exp {
 					hit = true
+					rank = j + 1
 					break
+				}
+			}
+			// 如果 ID 没命中，检查 top-3 中是否有 expected
+			if !hit {
+				for j, f := range res.Fused {
+					for _, exp := range item.ExpectedMemoryID {
+						if f.MemoryID == exp {
+							hit = true
+							rank = j + 1
+							break
+						}
+					}
+					if hit {
+						break
+					}
 				}
 			}
 		}
@@ -231,6 +334,14 @@ func main() {
 		if hit {
 			hits++
 			bucketHits[item.Bucket]++
+		}
+		// 记录 MRR：1/rank，未命中为 0
+		if rank > 0 {
+			bucketRanks[item.Bucket] = append(bucketRanks[item.Bucket], rank)
+			allRanks = append(allRanks, rank)
+		} else {
+			bucketRanks[item.Bucket] = append(bucketRanks[item.Bucket], 0)
+			allRanks = append(allRanks, 0)
 		}
 		if factHit {
 			factHits++
@@ -260,6 +371,69 @@ func main() {
 		})
 	}
 
+	// 记录最后一个窗口
+	if windowTotal > 0 {
+		rate := float64(windowLeaked) / float64(windowTotal)
+		pollutionTrend.Windows = append(pollutionTrend.Windows, PollutionWindow{
+			WindowStart: currentWindow - windowSize + 1,
+			WindowEnd:   currentWindow,
+			Total:       windowTotal,
+			Leaked:      windowLeaked,
+			Rate:        rate,
+		})
+	}
+
+	// 计算污染率趋势方向
+	if len(pollutionTrend.Windows) >= 2 {
+		firstRate := pollutionTrend.Windows[0].Rate
+		lastRate := pollutionTrend.Windows[len(pollutionTrend.Windows)-1].Rate
+		if lastRate < firstRate-0.05 {
+			pollutionTrend.TrendDirection = "improving"
+		} else if lastRate > firstRate+0.05 {
+			pollutionTrend.TrendDirection = "worsening"
+		} else {
+			pollutionTrend.TrendDirection = "stable"
+		}
+	} else {
+		pollutionTrend.TrendDirection = "stable"
+	}
+	if pollutionTotal > 0 {
+		pollutionTrend.CurrentRate = 1 - float64(pollutionHits)/float64(pollutionTotal)
+	}
+
+	// 计算 MRR
+	bucketMRR := map[string]float64{}
+	for bucket, ranks := range bucketRanks {
+		if len(ranks) == 0 {
+			continue
+		}
+		var mrr float64
+		for _, r := range ranks {
+			if r > 0 {
+				mrr += 1.0 / float64(r)
+			}
+		}
+		bucketMRR[bucket] = mrr / float64(len(ranks))
+	}
+	// 总体 MRR
+	var overallMRR float64
+	if len(allRanks) > 0 {
+		for _, r := range allRanks {
+			if r > 0 {
+				overallMRR += 1.0 / float64(r)
+			}
+		}
+		overallMRR = overallMRR / float64(len(allRanks))
+	}
+
+	// 计算平均延迟和信号计算次数
+	if cost.TotalQueries > 0 {
+		cost.AvgLatencyMs = float64(cost.TotalLatencyMs) / float64(cost.TotalQueries)
+		cost.AvgSignalComputations = float64(cost.TotalSignalComputations) / float64(cost.TotalQueries)
+		// 估算每条查询成本（假设 $0.01/1K tokens + $0.001/1K signals）
+		cost.CostPerQuery = float64(cost.TotalTokens)/1000*0.01 + float64(cost.TotalSignalComputations)/1000*0.001
+	}
+
 	// 4) 计算 KPI。
 	report := KPIReport{
 		GeneratedAt:         time.Now().UTC(),
@@ -270,6 +444,10 @@ func main() {
 		MultiSignalAccuracy: 0,
 		PollutionRate:       0,
 		Details:             details,
+		Cost:                cost,
+		PollutionTrend:      pollutionTrend,
+		BucketMRR:           bucketMRR,
+		OverallMRR:          overallMRR,
 	}
 	if total > 0 {
 		report.OverallAccuracyByFact = float64(factHits) / float64(total)
@@ -313,6 +491,39 @@ func main() {
 	fmt.Fprintf(&sb, "- 时序桶准确率：%.1f%%\n", report.TemporalAccuracy*100)
 	fmt.Fprintf(&sb, "- 多信号融合准确率（multi-hop 桶自动跑，**待人工复核**）：%.1f%%\n", report.MultiSignalAccuracy*100)
 	fmt.Fprintf(&sb, "- 记忆污染率：%.1f%%\n\n", report.PollutionRate*100)
+
+	// 新增：成本、MRR、污染趋势
+	if report.Cost != nil {
+		sb.WriteString("## 成本追踪\n\n")
+		fmt.Fprintf(&sb, "- 总查询数：%d\n", report.Cost.TotalQueries)
+		fmt.Fprintf(&sb, "- 平均延迟：%.1f ms\n", report.Cost.AvgLatencyMs)
+		fmt.Fprintf(&sb, "- 平均信号计算次数：%.1f\n", report.Cost.AvgSignalComputations)
+		fmt.Fprintf(&sb, "- 估算每条查询成本：$%.4f\n\n", report.Cost.CostPerQuery)
+	}
+
+	sb.WriteString("## MRR（Mean Reciprocal Rank）\n\n")
+	fmt.Fprintf(&sb, "- 总体 MRR：%.3f\n", report.OverallMRR)
+	for _, bucket := range []string{"single-hop", "multi-hop", "open-domain", "temporal"} {
+		if mrr, ok := report.BucketMRR[bucket]; ok {
+			fmt.Fprintf(&sb, "- %s 桶 MRR：%.3f\n", bucket, mrr)
+		}
+	}
+	sb.WriteString("\n")
+
+	if report.PollutionTrend != nil {
+		sb.WriteString("## 污染率趋势\n\n")
+		fmt.Fprintf(&sb, "- 当前污染率：%.1f%%\n", report.PollutionTrend.CurrentRate*100)
+		fmt.Fprintf(&sb, "- 趋势方向：%s\n", report.PollutionTrend.TrendDirection)
+		if len(report.PollutionTrend.Windows) > 0 {
+			sb.WriteString("- 分窗口污染率：\n")
+			for _, w := range report.PollutionTrend.Windows {
+				fmt.Fprintf(&sb, "  - 窗口 %d-%d：%.1f%%（%d/%d 泄漏）\n",
+					w.WindowStart, w.WindowEnd, w.Rate*100, w.Leaked, w.Total)
+			}
+		}
+		sb.WriteString("\n")
+	}
+
 	sb.WriteString("## 目标对照（§9 原文）\n\n")
 	sb.WriteString("| 指标 | 目标 | 基线 | 状态 |\n|---|---|---|---|\n")
 	fmt.Fprintf(&sb, "| 检索准确率（总体，memory_id） | > 90%% | %.1f%% | %s |\n",

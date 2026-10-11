@@ -335,3 +335,163 @@ func CoreMemoryManager(ctx context.Context, backend StorageBackend, accessThresh
 	}
 	return marked, nil
 }
+
+// ------------------------------------------------------------------
+// ArchiveEngine（P4）：对 L2 中超过 1 年未访问的记忆，移至 L3。
+// ------------------------------------------------------------------
+
+// ArchiveEngine 检查 L2 中超过 1 年未访问的记忆，移至 L3。
+// 可配置未访问时长阈值（默认 1 年）。
+func ArchiveEngine(ctx context.Context, backend StorageBackend, idleThreshold time.Duration, tenant string) (int, error) {
+	sc, ok := backend.(LayerScanner)
+	if !ok {
+		return 0, fmt.Errorf("backend %s does not implement LayerScanner", backend.Name())
+	}
+	if idleThreshold <= 0 {
+		idleThreshold = 365 * 24 * time.Hour // 默认 1 年
+	}
+	now := time.Now().UTC()
+	moved := 0
+	ms, err := sc.ScanLayer(ctx, LayerL2, tenant, 1000)
+	if err != nil {
+		return moved, err
+	}
+	for _, m := range ms {
+		if m == nil {
+			continue
+		}
+		// 计算未访问时长：用 RecordedAt 或 OccurredAt
+		lastAccess := m.RecordedAt
+		if m.OccurredAt != nil && !m.OccurredAt.IsZero() {
+			lastAccess = *m.OccurredAt
+		}
+		if now.Sub(lastAccess) > idleThreshold {
+			if err := sc.UpdateLayer(ctx, m.MemoryID, LayerL3); err != nil {
+				log.Printf("[archive] move %s to L3 failed: %v", m.MemoryID, err)
+				continue
+			}
+			moved++
+		}
+	}
+	return moved, nil
+}
+
+// ------------------------------------------------------------------
+// CompressionEngine（P4）：对 L1 中相似记忆做合并，生成 procedure。
+// ------------------------------------------------------------------
+
+// CompressionEngine 对 L1 中相似记忆（向量距离 < 阈值）做合并，生成 procedure。
+// 合并后的 procedure 包含原记忆的 fact 列表，便于后续检索。
+// 注意：原记忆不删除，只标记 is_historical=true。
+func CompressionEngine(ctx context.Context, backend StorageBackend, embedder func(string) ([]float32, error), similarityThreshold float32, tenant string) (int, error) {
+	sc, ok := backend.(LayerScanner)
+	if !ok {
+		return 0, fmt.Errorf("backend %s does not implement LayerScanner", backend.Name())
+	}
+	if similarityThreshold <= 0 {
+		similarityThreshold = 0.9 // 默认 90% 相似度
+	}
+	compressed := 0
+	ms, err := sc.ScanLayer(ctx, LayerL1, tenant, 1000)
+	if err != nil {
+		return compressed, err
+	}
+	if len(ms) < 2 {
+		return compressed, nil
+	}
+
+	// 计算向量相似度，找出相似记忆对
+	pairs := make(map[string][]string) // memoryID -> 相似 memoryIDs
+	for i, m1 := range ms {
+		if m1 == nil || embedder == nil {
+			continue
+		}
+		v1, err1 := embedder(m1.Fact)
+		if err1 != nil {
+			continue
+		}
+		for j, m2 := range ms {
+			if i >= j || m2 == nil {
+				continue
+			}
+			v2, err2 := embedder(m2.Fact)
+			if err2 != nil {
+				continue
+			}
+			sim := cosine(v1, v2)
+			if sim >= similarityThreshold {
+				pairs[m1.MemoryID] = append(pairs[m1.MemoryID], m2.MemoryID)
+				pairs[m2.MemoryID] = append(pairs[m2.MemoryID], m1.MemoryID)
+			}
+		}
+	}
+
+	// 对相似记忆对做合并
+	merged := map[string]bool{}
+	for m1ID, similarIDs := range pairs {
+		if merged[m1ID] {
+			continue
+		}
+		// 找到 m1 和所有相似记忆
+		var toMerge []*Memory
+		var m1 *Memory
+		for _, m := range ms {
+			if m.MemoryID == m1ID {
+				m1 = m
+				toMerge = append(toMerge, m)
+				break
+			}
+		}
+		for _, sid := range similarIDs {
+			if merged[sid] || sid == m1ID {
+				continue
+			}
+			for _, m := range ms {
+				if m.MemoryID == sid {
+					toMerge = append(toMerge, m)
+					merged[sid] = true
+					break
+				}
+			}
+		}
+		if len(toMerge) < 2 {
+			continue
+		}
+		// 生成 procedure 记忆
+		var facts []string
+		for _, m := range toMerge {
+			facts = append(facts, m.Fact)
+			// 标记原记忆为 is_historical
+			m.IsHistorical = true
+			m.SupersededBy = &m1ID
+			_ = backend.Upsert(ctx, m)
+		}
+		proc := &Memory{
+			MemoryID:       newMemoryID(),
+			IdempotencyKey: newMemoryID(),
+			TenantID:       tenant,
+			UserID:         m1.UserID,
+			AgentID:        m1.AgentID,
+			ProjectID:      m1.ProjectID,
+			Visibility:     m1.Visibility,
+			Permission:     m1.Permission,
+			PermissionLevel: m1.PermissionLevel,
+			MemoryKind:     KindProcedure,
+			Fact:           "合并记忆: " + facts[0],
+			ReferenceFrame: m1.ReferenceFrame,
+			RecordedAt:     time.Now().UTC(),
+			Confidence:     0.8,
+			Source:         "compression_engine",
+			Version:        1,
+			Layer:          LayerL1,
+			IsCore:         false,
+		}
+		if err := backend.Upsert(ctx, proc); err != nil {
+			log.Printf("[compress] create procedure failed: %v", err)
+			continue
+		}
+		compressed++
+		merged[m1ID] = true
+	}
+	return compressed, nil
+}

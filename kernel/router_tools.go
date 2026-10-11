@@ -123,6 +123,10 @@ func (s *APIServer) handleToolSave(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
 		return
 	}
+	// 审计日志
+	GetAuditLogger().Log("save", saved.MemoryID, saved.TenantID, saved.UserID, actor, "memory saved")
+	// 指标：记录层容量
+	GetMetricsCollector().SetLayerCount(saved.Layer, 1)
 	writeJSON(w, http.StatusCreated, map[string]any{"status": "created", "memory": saved})
 }
 
@@ -189,6 +193,10 @@ func (s *APIServer) handleToolUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// 审计日志
+	GetAuditLogger().Log("update", nm.MemoryID, nm.TenantID, nm.UserID, viewer, "memory updated")
+	// 指标：记录生命周期操作
+	GetMetricsCollector().RecordLifecycleStep("update")
 	writeJSON(w, http.StatusOK, map[string]any{"status": "updated", "superseded": old.MemoryID, "memory": nm})
 }
 
@@ -246,6 +254,10 @@ func (s *APIServer) handleToolFeedback(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// 审计日志
+	GetAuditLogger().Log("feedback", m.MemoryID, m.TenantID, m.UserID, viewer, "feedback: "+string(req.Status))
+	// 指标：记录反馈统计
+	GetMetricsCollector().RecordFeedback(req.Status == FbAdopted, req.Status == FbRejected)
 	writeJSON(w, http.StatusOK, map[string]any{"status": "recorded", "feedback": rec, "memory": m})
 }
 
@@ -291,6 +303,10 @@ func (s *APIServer) handleToolForget(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// 审计日志
+	GetAuditLogger().Log("forget", m.MemoryID, m.TenantID, m.UserID, viewer, req.Reason)
+	// 指标：记录生命周期操作
+	GetMetricsCollector().RecordLifecycleStep("forget")
 	// 审计日志（features.audit 在四档恒为 true，§7.2）
 	log.Printf("[audit] forget memory_id=%s tenant=%s viewer=%s reason=%q at=%s",
 		m.MemoryID, req.TenantID, viewer, req.Reason, time.Now().UTC().Format(time.RFC3339))

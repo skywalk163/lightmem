@@ -72,6 +72,7 @@ func (s *APIServer) Handler() http.Handler {
 	// P4 审计 + 监控（§3.10/§5.3）
 	mux.HandleFunc("GET /metrics", s.handleMetrics)
 	mux.HandleFunc("GET /audit/{memory_id}", s.handleAudit)
+	mux.HandleFunc("GET /audit", s.handleAuditList)
 	return mux
 }
 
@@ -312,30 +313,57 @@ func (s *APIServer) handleLifecycleRun(w http.ResponseWriter, r *http.Request) {
 
 // handleMetrics 返回 Prometheus 格式指标（P4 监控）。
 func (s *APIServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	// 支持两种格式：JSON（默认）和 Prometheus 文本格式（?format=prometheus）
+	format := r.URL.Query().Get("format")
+
+	if format == "prometheus" {
+		// Prometheus 文本格式
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		metrics := GetMetricsCollector()
+		_, _ = w.Write([]byte(metrics.PrometheusText()))
+		return
+	}
+
+	// JSON 格式
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
+
 	// 统计各层条数
-	counts := make(map[string]int)
+	counts := make(map[string]int64)
 	for _, layer := range []MemoryLayer{LayerL0, LayerL1, LayerL2, LayerL3} {
 		if sc, ok := s.backend.(LayerScanner); ok {
 			ms, _ := sc.ScanLayer(ctx, layer, "", 10000)
-			counts[string(layer)] = len(ms)
+			counts[string(layer)] = int64(len(ms))
 		}
 	}
+
 	// 统计污染率（被拒绝的记忆数 / 总记忆数）
-	total := 0
+	total := int64(0)
 	for _, c := range counts {
 		total += c
 	}
-	pollutionRate := 0.0
-	if total > 0 {
-		pollutionRate = float64(len(s.rejectedIDs)) / float64(total)
+
+	// 获取指标快照
+	metrics := GetMetricsCollector()
+	snap := metrics.Snapshot()
+
+	// 合并层容量
+	for layer, count := range counts {
+		snap.LayerCounts[layer] = count
 	}
+	snap.TotalMemories = total
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"lims_layer_counts":   counts,
-		"lims_total_memories": total,
-		"lims_rejected_count": len(s.rejectedIDs),
-		"lims_pollution_rate": pollutionRate,
+		"lims_recall_latency_ms":    snap.RecallLatencyMS,
+		"lims_hit_rate":             snap.HitRate,
+		"lims_pollution_rate":       snap.PollutionRate,
+		"lims_layer_counts":         snap.LayerCounts,
+		"lims_total_memories":       snap.TotalMemories,
+		"lims_total_queries":        snap.TotalQueries,
+		"lims_signal_latencies_ms":  snap.SignalLatencies,
+		"lims_feedback_stats":       snap.FeedbackStats,
+		"lims_lifecycle_stats":      snap.LifecycleStats,
 	})
 }
 
@@ -346,6 +374,11 @@ func (s *APIServer) handleAudit(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "memory_id required"})
 		return
 	}
+
+	// 从审计日志获取
+	audit := GetAuditLogger()
+	entries := audit.GetEntries(memoryID)
+
 	// 检查是否在 rejectedIDs 中
 	rejected := false
 	for _, rid := range s.rejectedIDs {
@@ -354,15 +387,48 @@ func (s *APIServer) handleAudit(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"memory_id": memoryID,
-		"rejected":  rejected,
-		"rejected_at": func() string {
-			if rejected {
-				return time.Now().UTC().Format(time.RFC3339)
+		"memory_id":   memoryID,
+		"rejected":    rejected,
+		"audit_log":   entries,
+		"audit_count": len(entries),
+	})
+}
+
+// handleAuditList 返回审计日志列表（P4 审计）。
+func (s *APIServer) handleAuditList(w http.ResponseWriter, r *http.Request) {
+	audit := GetAuditLogger()
+
+	// 支持 limit 参数
+	limit := 100
+	if l := r.URL.Query().Get("limit"); l != "" {
+		// 简单解析
+		if n := 0; len(l) > 0 {
+			for _, r := range l {
+				if r < '0' || r > '9' {
+					break
+				}
+				n = n*10 + int(r-'0')
 			}
-			return ""
-		}(),
+			if n > 0 && n < 1000 {
+				limit = n
+			}
+		}
+	}
+
+	// 支持 tenant 过滤
+	tenantID := r.URL.Query().Get("tenant_id")
+	var entries []AuditEntry
+	if tenantID != "" {
+		entries = audit.GetEntriesByTenant(tenantID)
+	} else {
+		entries = audit.GetRecentEntries(limit)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"audit_log":   entries,
+		"audit_count": len(entries),
 	})
 }
 

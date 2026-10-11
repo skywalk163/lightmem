@@ -123,7 +123,7 @@ type IdempotencyLookup interface {
 	FindByIdempotencyKey(ctx context.Context, tenant, user, key string) (*Memory, error)
 }
 
-// DefaultWritePolicies 返回任务书 §4.3 要求的 5 个内置策略。
+// DefaultWritePolicies 返回任务书 §4.3 要求的 6 个内置策略。
 func DefaultWritePolicies() []WritePolicy {
 	return []WritePolicy{
 		&GoalConstraintsPolicy{},
@@ -131,6 +131,7 @@ func DefaultWritePolicies() []WritePolicy {
 		&RedactionPolicy{},
 		&PoisoningGuardPolicy{},
 		&IdempotencyPolicy{},
+		&FeedbackPolicy{},
 	}
 }
 
@@ -270,4 +271,58 @@ func (p *IdempotencyPolicy) Validate(_ context.Context, m *Memory, meta WriteMet
 		return ErrIdempotentNoop
 	}
 	return nil
+}
+
+// ------------------------------------------------------------------
+// 内置策略 6：FeedbackPolicy（§3.11 反馈闭环）
+// ------------------------------------------------------------------
+
+// FeedbackPolicy 反馈闭环：拦截 feedback_records，验证并执行回写规则。
+// 规则：
+//   - rejected：confidence 降权（已降 0.1），标记 correction-candidate
+//   - adopted：confidence 升权（+0.05），提升后续排序
+//   - edited：记录版本历史，标记 superseded_by
+type FeedbackPolicy struct{}
+
+func (p *FeedbackPolicy) Name() string { return "feedback_loop" }
+
+// minConfidence 置信度下限，防止降权后为负。
+const minConfidence = 0.0
+
+func (p *FeedbackPolicy) Validate(_ context.Context, m *Memory, _ WriteMeta) error {
+	if m == nil || len(m.FeedbackRecords) == 0 {
+		return nil
+	}
+	// 遍历所有反馈记录，执行回写规则
+	for _, fb := range m.FeedbackRecords {
+		switch fb.Status {
+		case FbRejected:
+			// rejected：降权，但不低于下限
+			m.Confidence = clamp01(m.Confidence - 0.1)
+			if m.Confidence < minConfidence {
+				m.Confidence = minConfidence
+			}
+		case FbAdopted:
+			// adopted：升权，但不超过 1.0
+			m.Confidence = clamp01(m.Confidence + 0.05)
+		case FbEdited:
+			// edited：记录版本历史，标记 superseded_by（由 update 端点处理）
+			// 此处仅确保 confidence 不因编辑而降低
+			if m.Confidence < 0.5 {
+				m.Confidence = 0.5
+			}
+		}
+	}
+	return nil
+}
+
+// clamp01 将值限制在 [0, 1] 区间。
+func clamp01(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
 }
