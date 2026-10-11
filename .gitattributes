@@ -1,0 +1,19 @@
+# 换行统一：仓库内存 LF。
+# 本机是 Windows 且 core.autocrlf=true，若不强制，检出后的 *.sh 会变成 CRLF，
+# 传到 192.168.0.88 用 `sh` 执行时会报 `\r: not found`。源码与脚本一律锁 LF。
+* text=auto
+*.sh    text eol=lf
+*.go    text eol=lf
+*.mod   text eol=lf
+*.sum   text eol=lf
+*.sql   text eol=lf
+*.json  text eol=lf
+*.jsonl text eol=lf
+*.md    text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+
+# 二进制（勿做行尾/编码转换）
+*.docx  binary
+*.tgz   binary
+*.png   binary

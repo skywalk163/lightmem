@@ -1,0 +1,244 @@
+# ============================================================
+# 光明记忆（LIMS）规模档位配置
+# 档位：Enterprise（企业集合体）
+# 对应主文档版本：lightmem.md v2.0（§2.6 可缩放模式）
+# 目标用户：多租户 / 多团队企业（>500 人）
+# 用户量级：>500 人 | 记忆量级：千万级
+# 部署形态：集合体 Cluster / Federated（§5.5）
+# ============================================================
+
+# 档位标识
+profile: enterprise
+
+# ---------- 存储后端 ----------
+# 可选：sqlite | pgvector | qdrant | pgvector+shard
+storage_backend: pgvector+shard
+
+storage:
+  pg:
+    version: "18"
+    # 分片（§5.4：PG 分片 / TiDB / CockroachDB）
+    sharding:
+      strategy: tenant_affinity
+      shards:
+        - id: shard-0
+          host: 10.30.0.10
+        - id: shard-1
+          host: 10.30.0.11
+        - id: shard-2
+          host: 10.30.0.12
+      # 一致性哈希 + 租户亲和
+      routing: consistent_hash
+    pool_size: 200
+    vector:
+      index_type: hnsw
+      m: 24
+      ef_construction: 256
+      ef_search: 192
+  # Qdrant：企业级启用（向量与元数据分离）
+  qdrant:
+    enabled: true
+    # 集群模式（多节点）
+    cluster:
+      - host: 10.30.1.10
+      - host: 10.30.1.11
+      - host: 10.30.1.12
+    port: 6333
+    payload_filter: true
+    # 多租户集合隔离（per-tenant collection）
+    tenant_isolation: true
+  # TiDB（元数据扩展，可选，HTAP 弹性）
+  tidb:
+    enabled: false
+    pd_host: 10.30.2.10
+    tidb_host: 10.30.2.20
+  # ZFS dataset（分片节点与归档节点）
+  zfs:
+    enabled: true
+    pool: tank
+    datasets:
+      - name: lims/pg
+        mountpoint: /var/db/pgdata
+        recordsize: "8k"
+        compression: lz4
+      - name: lims/pg_wal
+        mountpoint: /var/db/pg_wal
+        recordsize: "64k"
+        compression: lz4
+        sync: always
+      - name: lims/pg_vector
+        mountpoint: /var/db/pg_vector
+        recordsize: "128k"
+        compression: lz4
+      - name: lims/qdrant
+        mountpoint: /var/db/qdrant
+        recordsize: "128k"
+      - name: lims/redis
+        mountpoint: /var/db/redis
+        recordsize: "8k"
+      - name: lims/minio
+        mountpoint: /data
+        recordsize: "1M"
+      - name: lims/archive
+        mountpoint: /var/db/archive
+        recordsize: "128k"
+        encryption: "on"
+      - name: lims/logs
+        mountpoint: /var/log/lims
+        recordsize: "1M"
+      - name: lims/secret
+        mountpoint: /var/db/secret
+        encryption: "on"
+        keylocation: file:///etc/lims/keys/secret.key
+  # 归档：MinIO（企业多节点）
+  archive:
+    backend: minio
+    endpoint: http://10.30.3.40:9000
+    bucket: lims-archive
+    versioning: true
+    # 多 AZ / 多站点复制
+    replication:
+      - site: primary
+        endpoint: http://10.30.3.40:9000
+      - site: backup
+        endpoint: http://10.30.4.40:9000
+  # 向量维度
+  embedding:
+    model: text-embedding-3-large
+    dimensions: 3072
+    device: gpu
+    # 租户级可插拔（§6）
+    per_tenant: true
+
+# ---------- 缓存 ----------
+cache: redis-cluster
+redis:
+  cluster:
+    # 集群模式
+    - host: 10.30.5.10
+      port: 6379
+    - host: 10.30.5.11
+      port: 6379
+    - host: 10.30.5.12
+      port: 6379
+  ttl_seconds: 3600
+  core_memory_ttl: 86400
+
+# ---------- 消息队列 ----------
+mq: kafka
+kafka:
+  # Kafka 集群
+  brokers:
+    - host: 10.30.6.10
+      port: 9092
+    - host: 10.30.6.11
+      port: 9092
+    - host: 10.30.6.12
+      port: 9092
+  topics:
+    - lifecycle
+    - audit
+    - revocation
+    - consolidation
+    - migration
+
+# ---------- 网络 ----------
+network:
+  # 对外暴露（多网关）
+  bind: 203.0.113.20
+  api_port: 443
+  # 分区子网
+  subnets:
+    data: 10.30.0.0/24       # PG 分片
+    vector: 10.30.1.0/24      # Qdrant
+    meta: 10.30.2.0/24        # TiDB
+    object: 10.30.3.0/24      # MinIO
+    backup: 10.30.4.0/24      # 备份站点
+    cache: 10.30.5.0/24       # Redis 集群
+    mq: 10.30.6.0/24          # Kafka
+    service: 10.30.7.0/24     # Router/Extractor
+  # 节点角色（§5.5）
+  roles:
+    coordinator:
+      - host: 10.30.7.1
+        # 持有路由与全局拓扑
+    worker:
+      - host: 10.30.7.10
+      - host: 10.30.7.11
+      - host: 10.30.7.12
+    archive:
+      - host: 10.30.7.20
+        # ZFS send/receive 归档
+    gateway:
+      - host: 10.30.7.30
+        # 对外 API + TLS
+  # pf 防火墙 + IPsec
+  pf:
+    enabled: true
+    exposed_ports: [443]
+    management_ssh: true
+    # 节点间 IPsec 全互联
+    ipsec_all_peers: true
+  # TLS 终结
+  tls:
+    provider: internal_ca
+    domain: memory.example.com
+
+# ---------- 安全组件 ----------
+security:
+  jail: true
+  # 全量 ZFS 加密（机密 + 归档）
+  zfs_encryption: true
+  # 强制访问控制（企业全启用）
+  mac: true
+  mac_policy: mac_lomac
+  acl: true
+  # 节点间 IPsec
+  ipsec: true
+  pkg_audit: true
+  process_accounting: true
+  minimal_privilege: true
+  tls: internal_ca
+  # 外部 KMS（如 HashiCorp Vault / 硬件 KMS）
+  key_management: external_kms
+  kms_endpoint: https://kms.internal.example.com
+  # 灾备
+  dr_site:
+    enabled: true
+    zfs_send_interval: "6h"
+    rpo_minutes: 360
+
+# ---------- 功能开关 ----------
+# 注意：poison_guard / audit / delete_rights 在所有档位必须为 true
+features:
+  poison_guard: true
+  audit: true
+  delete_rights: true
+  core_memory: true
+  consolidation: true
+  multi_signal_retrieval: true
+  feedback_loop: true
+  goal_memory: true
+  external_connectors: true
+  multi_tenant: true
+  # 跨租户联邦共享（§5.5 Federated）
+  federated: true
+  shared_visibility: true
+  write_policy_plugins: true
+  human_correction: true
+  # 跨节点 rank 融合（Coordinator 聚合）
+  cross_node_rank_merge: true
+
+# ---------- 扩容参数 ----------
+scaling:
+  mode: cluster
+  nodes: 6
+  nodes_detail:
+    coordinator: 1
+    worker: 3
+    archive: 1
+    gateway: 1
+  # 水平扩展能力
+  horizontal: true
+  # 自动分区重平衡
+  rebalance: true

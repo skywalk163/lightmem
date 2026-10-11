@@ -1,0 +1,182 @@
+# ============================================================
+# 光明记忆（LIMS）规模档位配置
+# 档位：Family（家庭实验室）
+# 对应主文档版本：lightmem.md v2.0（§2.6 可缩放模式）
+# 目标用户：家庭实验室（FreeBSD 主服务器）
+# 用户量级：1–5 人 | 记忆量级：十万级 | 部署形态：单机 FreeBSD + jail
+# 参考拓扑：与 `manuals/p1-freebsd-zfs-setup.md` 第 1 节一致
+# ============================================================
+
+# 档位标识
+profile: family
+
+# ---------- 存储后端 ----------
+# 可选：sqlite | pgvector | qdrant | pgvector+shard
+storage_backend: pgvector
+
+storage:
+  pg:
+    # PostgreSQL 18 + pgvector
+    version: "18"
+    host: 10.0.10.10
+    port: 5432
+    user: postgres
+    database: lims
+    # 元数据 + 向量同库（§4.2 一致性骨架）
+    # 连接池
+    pool_size: 10
+    # pgvector HNSW 索引参数
+    vector:
+      index_type: hnsw
+      m: 16
+      ef_construction: 128
+      # 搜索时 ef_search
+      ef_search: 64
+  # ZFS dataset 规划（§5.6）—— 与 P1 手册第 3 节一致
+  zfs:
+    enabled: true
+    pool: tank
+    datasets:
+      - name: lims/pg
+        mountpoint: /var/db/pgdata
+        recordsize: "8k"
+        compression: lz4
+      - name: lims/pg_wal
+        mountpoint: /var/db/pg_wal
+        recordsize: "64k"
+        compression: lz4
+        sync: always          # WAL 强一致性
+        logbias: throughput
+      - name: lims/pg_vector
+        mountpoint: /var/db/pg_vector
+        recordsize: "128k"
+        compression: lz4
+      - name: lims/redis
+        mountpoint: /var/db/redis
+        recordsize: "8k"
+        compression: lz4
+      - name: lims/minio
+        mountpoint: /data
+        recordsize: "128k"
+        compression: lz4
+      - name: lims/archive
+        mountpoint: /var/db/archive
+        recordsize: "128k"
+        compression: lz4
+      - name: lims/logs
+        mountpoint: /var/log/lims
+        recordsize: "1M"
+        compression: lz4
+      - name: lims/secret
+        mountpoint: /var/db/secret
+        encryption: "on"      # 机密记忆静态加密
+        keylocation: file:///root/lims.key
+  # 归档：MinIO（L2/L3）
+  archive:
+    backend: minio
+    endpoint: http://10.0.10.40:9000
+    bucket: lims-archive
+  # 向量维度
+  embedding:
+    model: BGE-large-zh
+    dimensions: 1024
+    device: cpu
+
+# ---------- 缓存 ----------
+# 可选：none | redis | redis-cluster
+cache: redis
+redis:
+  host: 10.0.10.20
+  port: 6379
+  # L0 工作记忆 TTL
+  ttl_seconds: 3600
+  # 核心记忆块缓存
+  core_memory_ttl: 86400
+
+# ---------- 消息队列 ----------
+# 可选：none | redis | rabbitmq | kafka
+mq: rabbitmq
+rabbitmq:
+  host: 10.0.10.30
+  port: 5672
+  vhost: /lims
+  # 生命周期异步任务队列
+  queues:
+    - lifecycle
+    - audit
+    - revocation
+
+# ---------- 网络 ----------
+network:
+  # 网关节点 IP（家庭实验室 192.168.1.5）
+  bind: 192.168.1.5
+  api_port: 8443
+  # jail vnet 内网段
+  vnet_subnet: 10.0.10.0/24
+  # 各组件 jail IP（与 P1 手册第 5 节一致）
+  components:
+    lims-pg: 10.0.10.10
+    lims-redis: 10.0.10.20
+    lims-rabbit: 10.0.10.30
+    lims-minio: 10.0.10.40
+    lims-router: 10.0.10.50
+  # pf 防火墙：仅暴露 443/8443，内网放行
+  pf:
+    enabled: true
+    exposed_ports: [443, 8443]
+    management_ssh: true
+
+# ---------- 安全组件 ----------
+security:
+  # 进程隔离：Family 起启用 jail
+  jail: true
+  # ZFS 加密：机密 dataset 启用
+  zfs_encryption: true
+  # 强制访问控制：可选，Family 建议仅机密数据启用
+  mac: false
+  # 文件 ACL：启用
+  acl: true
+  # 网络 IPsec：单机形态无需
+  ipsec: false
+  # 漏洞审计：必开
+  pkg_audit: true
+  # 系统审计：必开
+  process_accounting: true
+  # 最小权限：保持
+  minimal_privilege: true
+  # TLS 终结：家庭实验室可用自签或 Let's Encrypt（内网用自签）
+  tls: self_signed
+  # 密钥管理：ZFS key + jail 隔离
+  key_management: local_keyring_with_jail
+
+# ---------- 功能开关 ----------
+# 注意：poison_guard / audit / delete_rights 在所有档位必须为 true
+features:
+  # 投毒防护（§7.5）—— 不可裁剪
+  poison_guard: true
+  # 审计（§7.2）—— 不可裁剪
+  audit: true
+  # 删除权级联（§7.3）—— 不可裁剪
+  delete_rights: true
+  # 核心记忆块（§3.7）：家庭多人场景价值高
+  core_memory: true
+  # 后台整合（§3.13）：家庭场景开启（多 Agent 共享经验沉淀）
+  consolidation: true
+  # 多信号检索（§3.4）：PG+pgvector 支持语义+关键词+实体
+  multi_signal_retrieval: true
+  # 反馈闭环（§3.11）：开启
+  feedback_loop: true
+  # 目标记忆（§3.8）：开启
+  goal_memory: true
+  # 外部连接器（§3.12）：家庭实验室可开数据库/文档连接器
+  external_connectors: true
+  # 跨 Agent 共享（§7.1 visibility）
+  shared_visibility: true
+
+# ---------- 扩容参数 ----------
+scaling:
+  mode: standalone
+  # 单机全栈（PG/Redis/RabbitMQ/MinIO/Router 各 jail）
+  nodes: 1
+  # 预留：后续可升 SMB 主备
+  upgrade_path: smb

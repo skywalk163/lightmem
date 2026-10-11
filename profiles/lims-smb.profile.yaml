@@ -1,0 +1,207 @@
+# ============================================================
+# 光明记忆（LIMS）规模档位配置
+# 档位：SMB（中小型企业）
+# 对应主文档版本：lightmem.md v2.0（§2.6 可缩放模式）
+# 目标用户：中小团队 / 业务线（10–500 人）
+# 用户量级：≤500 人 | 记忆量级：百万级
+# 部署形态：单节点或双节点主备（§5.5）
+# ============================================================
+
+# 档位标识
+profile: smb
+
+# ---------- 存储后端 ----------
+# 可选：sqlite | pgvector | qdrant | pgvector+shard
+storage_backend: pgvector
+
+storage:
+  pg:
+    version: "18"
+    # 主库（主备节点）
+    primary:
+      host: 10.0.20.10
+      port: 5432
+    replica:
+      host: 10.0.20.11
+      port: 5432
+      # 流复制
+      replication: streaming
+      sync_mode: async   # SMB 可用 async，Enterprise 用 sync
+    database: lims
+    pool_size: 50
+    vector:
+      index_type: hnsw
+      m: 16
+      ef_construction: 200
+      ef_search: 128
+  # Qdrant：按 §6 迁移阈值触发（单租户向量行数 > 500 万，或 P95 超 200ms 的 60%）
+  qdrant:
+    enabled: false
+    # 迁移阈值契约
+    trigger:
+      max_rows_per_tenant: 5000000
+      p95_latency_ms: 200
+    host: 10.0.20.70
+    port: 6333
+    # Qdrant 侧 payload 过滤 + pre-filter
+    payload_filter: true
+  # ZFS dataset（主库所在机器）
+  zfs:
+    enabled: true
+    pool: tank
+    datasets:
+      - name: lims/pg
+        mountpoint: /var/db/pgdata
+        recordsize: "8k"
+        compression: lz4
+      - name: lims/pg_wal
+        mountpoint: /var/db/pg_wal
+        recordsize: "64k"
+        compression: lz4
+        sync: always
+      - name: lims/pg_vector
+        mountpoint: /var/db/pg_vector
+        recordsize: "128k"
+        compression: lz4
+      - name: lims/qdrant
+        mountpoint: /var/db/qdrant
+        recordsize: "128k"
+        compression: lz4
+        # 迁移触发后启用
+        enabled: false
+      - name: lims/redis
+        mountpoint: /var/db/redis
+        recordsize: "8k"
+      - name: lims/minio
+        mountpoint: /data
+        recordsize: "128k"
+      - name: lims/archive
+        mountpoint: /var/db/archive
+        recordsize: "128k"
+        # 冷归档加密
+        encryption: "on"
+      - name: lims/logs
+        mountpoint: /var/log/lims
+        recordsize: "1M"
+      - name: lims/secret
+        mountpoint: /var/db/secret
+        encryption: "on"
+        keylocation: file:///etc/lims/keys/secret.key
+  # 归档：MinIO（主备）
+  archive:
+    backend: minio
+    endpoint: http://10.0.20.40:9000
+    bucket: lims-archive
+    # 版本化保留（§7.3 合规）
+    versioning: true
+  # 向量维度
+  embedding:
+    model: text-embedding-3
+    dimensions: 3072
+    device: gpu   # SMB 推荐 GPU
+
+# ---------- 缓存 ----------
+cache: redis
+redis:
+  host: 10.0.20.20
+  port: 6379
+  # 集群（SMB 起建议 Redis Sentinel 或 cluster）
+  cluster_mode: sentinel
+  sentinel_hosts:
+    - 10.0.20.20:26379
+    - 10.0.20.21:26379
+    - 10.0.20.22:26379
+  ttl_seconds: 3600
+  core_memory_ttl: 86400
+
+# ---------- 消息队列 ----------
+mq: rabbitmq
+rabbitmq:
+  host: 10.0.20.30
+  port: 5672
+  vhost: /lims
+  # 高可用队列
+  ha_mode: all
+  queues:
+    - lifecycle
+    - audit
+    - revocation
+    - consolidation
+
+# ---------- 网络 ----------
+network:
+  # 对外暴露（网关节点）
+  bind: 203.0.113.10
+  api_port: 443
+  vnet_subnet: 10.0.20.0/24
+  # 主备节点
+  roles:
+    primary:
+      - host: 10.0.20.10
+    replica:
+      - host: 10.0.20.11
+  components:
+    lims-pg: 10.0.20.10
+    lims-redis: 10.0.20.20
+    lims-qdrant: 10.0.20.70
+    lims-minio: 10.0.20.40
+    lims-rabbit: 10.0.20.50
+    lims-router: 10.0.20.60
+  # pf 防火墙
+  pf:
+    enabled: true
+    exposed_ports: [443]
+    management_ssh: true
+    # 节点间 IPsec
+    ipsec_peers:
+      - 10.0.20.11
+  # 反代 + TLS 终结
+  tls:
+    provider: lets_encrypt
+    domain: memory.example.com
+
+# ---------- 安全组件 ----------
+security:
+  jail: true
+  # 机密数据 ZFS 加密
+  zfs_encryption: true
+  # SMB 起启用 MAC
+  mac: true
+  mac_policy: mac_lomac
+  acl: true
+  # 节点间 IPsec
+  ipsec: true
+  pkg_audit: true
+  process_accounting: true
+  minimal_privilege: true
+  tls: lets_encrypt
+  # 外部 KMS 可选（如 Vault / 硬件 KMS）
+  key_management: external_kms
+
+# ---------- 功能开关 ----------
+# 注意：poison_guard / audit / delete_rights 在所有档位必须为 true
+features:
+  poison_guard: true
+  audit: true
+  delete_rights: true
+  core_memory: true
+  consolidation: true
+  multi_signal_retrieval: true
+  feedback_loop: true
+  goal_memory: true
+  external_connectors: true
+  # 多租户硬过滤（§3.2）—— SMB 起必须
+  multi_tenant: true
+  # 跨 Agent / 跨租户共享
+  shared_visibility: true
+  # 写策略插件（§3.15）：SMB 起启用
+  write_policy_plugins: true
+  # 人工校正入口（§3.3）
+  human_correction: true
+
+# ---------- 扩容参数 ----------
+scaling:
+  mode: active_standby   # 主备
+  nodes: 2
+  # 预留：可升 Enterprise 集合体
+  upgrade_path: enterprise

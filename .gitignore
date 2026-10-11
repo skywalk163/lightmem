@@ -1,0 +1,21 @@
+# Go 构建产物
+/lightmem-kernel
+kernel/lightmem-kernel
+kernel/kernel/
+*.exe
+
+# 评测/调试临时产物（根目录下的 tmp_*）
+/tmp_*.json
+/tmp_*.sh
+
+# 交付打包产物
+*.tgz
+
+# 工作区临时目录（.dumate/inbox 下的任务书与报告需要入库，不忽略）
+/.dumate/tmp/
+
+# CodeArts 文档工具生成的 sidecar 标记文件（内容是 {"type": "artifact"}，无入库价值）
+*.artifact.json
+
+# macOS/编辑器
+.DS_Store

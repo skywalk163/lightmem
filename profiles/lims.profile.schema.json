@@ -1,0 +1,973 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://lightmem.local/schema/lims.profile.v1.json",
+  "title": "LIMS 规模档位 Profile Schema",
+  "description": "光明记忆（LIMS）lims.profile.yaml 的配置 Schema，字段名与 lightmem.md §2.6 一致。所有档位（Solo/Family/SMB/Enterprise）共用本 Schema，通过 storage_backend / cache / mq / security / features / scaling 组合区分规模。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "profile",
+    "storage_backend",
+    "storage",
+    "cache",
+    "mq",
+    "network",
+    "security",
+    "features",
+    "scaling"
+  ],
+  "properties": {
+    "profile": {
+      "type": "string",
+      "enum": [
+        "solo",
+        "family",
+        "smb",
+        "enterprise"
+      ],
+      "description": "规模档位标识。solo=个人 / family=家庭实验室 / smb=中小型企业 / enterprise=企业集合体。"
+    },
+    "storage_backend": {
+      "type": "string",
+      "enum": [
+        "sqlite",
+        "pgvector",
+        "qdrant",
+        "pgvector+shard"
+      ],
+      "description": "主存储后端：sqlite（Solo）/ pgvector（Family, SMB 默认）/ qdrant（迁移后）/ pgvector+shard（Enterprise 分片）。"
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "存储详细参数。字段是否必填取决于 storage_backend 值。",
+      "properties": {
+        "sqlite": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "SQLite 后端（Solo）。",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "SQLite 数据库文件路径。"
+            },
+            "vector_extension": {
+              "type": "string",
+              "enum": [
+                "sqlite-vec",
+                "faiss"
+              ],
+              "description": "SQLite 向量扩展后端。"
+            },
+            "wal_mode": {
+              "type": "boolean",
+              "default": true
+            },
+            "fk_enabled": {
+              "type": "boolean",
+              "default": true
+            }
+          },
+          "required": [
+            "path"
+          ]
+        },
+        "pg": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "PostgreSQL + pgvector 后端。",
+          "properties": {
+            "version": {
+              "type": "string",
+              "enum": [
+                "17",
+                "18"
+              ],
+              "description": "PostgreSQL 版本（统一 18）。"
+            },
+            "primary": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "host": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "host"
+              ]
+            },
+            "replica": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "host": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "integer"
+                },
+                "replication": {
+                  "type": "string",
+                  "enum": [
+                    "streaming",
+                    "logical"
+                  ]
+                },
+                "sync_mode": {
+                  "type": "string",
+                  "enum": [
+                    "async",
+                    "sync"
+                  ]
+                }
+              }
+            },
+            "host": {
+              "type": "string",
+              "description": "单实例主机（未分片时用）。"
+            },
+            "port": {
+              "type": "integer",
+              "default": 5432
+            },
+            "database": {
+              "type": "string"
+            },
+            "pool_size": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "sharding": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "分片配置（Enterprise）。",
+              "properties": {
+                "strategy": {
+                  "type": "string",
+                  "enum": [
+                    "tenant_affinity",
+                    "consistent_hash",
+                    "range"
+                  ]
+                },
+                "shards": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "host": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "host"
+                    ]
+                  }
+                },
+                "routing": {
+                  "type": "string",
+                  "enum": [
+                    "consistent_hash",
+                    "range"
+                  ]
+                }
+              }
+            },
+            "vector": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "index_type": {
+                  "type": "string",
+                  "enum": [
+                    "hnsw",
+                    "ivfflat"
+                  ]
+                },
+                "m": {
+                  "type": "integer"
+                },
+                "ef_construction": {
+                  "type": "integer"
+                },
+                "ef_search": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "qdrant": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Qdrant 独立向量库（SMB 迁移后 / Enterprise 默认）。",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "trigger": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "max_rows_per_tenant": {
+                  "type": "integer"
+                },
+                "p95_latency_ms": {
+                  "type": "integer"
+                }
+              }
+            },
+            "host": {
+              "type": "string"
+            },
+            "port": {
+              "type": "integer",
+              "default": 6333
+            },
+            "cluster": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "host": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "payload_filter": {
+              "type": "boolean",
+              "default": true
+            },
+            "tenant_isolation": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        },
+        "tidb": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "TiDB HTAP（Enterprise 可选）。",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "pd_host": {
+              "type": "string"
+            },
+            "tidb_host": {
+              "type": "string"
+            }
+          }
+        },
+        "zfs": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "ZFS dataset 规划（Family 起适用）。",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "pool": {
+              "type": "string"
+            },
+            "datasets": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "mountpoint": {
+                    "type": "string"
+                  },
+                  "recordsize": {
+                    "type": "string",
+                    "enum": [
+                      "8k",
+                      "16k",
+                      "32k",
+                      "64k",
+                      "128k",
+                      "1M"
+                    ]
+                  },
+                  "compression": {
+                    "type": "string",
+                    "enum": [
+                      "lz4",
+                      "zstd",
+                      "off"
+                    ]
+                  },
+                  "sync": {
+                    "type": "string",
+                    "enum": [
+                      "standard",
+                      "always"
+                    ]
+                  },
+                  "logbias": {
+                    "type": "string",
+                    "enum": [
+                      "latency",
+                      "throughput"
+                    ]
+                  },
+                  "encryption": {
+                    "type": "string",
+                    "enum": [
+                      "on",
+                      "off"
+                    ]
+                  },
+                  "keylocation": {
+                    "type": "string"
+                  },
+                  "enabled": {
+                    "type": "boolean",
+                    "default": true
+                  }
+                },
+                "required": [
+                  "name",
+                  "mountpoint"
+                ]
+              }
+            }
+          }
+        },
+        "archive": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "L2/L3 冷归档后端。",
+          "properties": {
+            "backend": {
+              "type": "string",
+              "enum": [
+                "minio",
+                "s3",
+                "local"
+              ]
+            },
+            "endpoint": {
+              "type": "string"
+            },
+            "bucket": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "versioning": {
+              "type": "boolean",
+              "default": false
+            },
+            "replication": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "site": {
+                    "type": "string"
+                  },
+                  "endpoint": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "embedding": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "model": {
+              "type": "string"
+            },
+            "dimensions": {
+              "type": "integer"
+            },
+            "device": {
+              "type": "string",
+              "enum": [
+                "cpu",
+                "gpu"
+              ]
+            },
+            "per_tenant": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        }
+      }
+    },
+    "cache": {
+      "type": "string",
+      "enum": [
+        "none",
+        "redis",
+        "redis-cluster"
+      ],
+      "description": "缓存组件：none（Solo）/ redis（Family, SMB）/ redis-cluster（Enterprise）。"
+    },
+    "redis": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer",
+          "default": 6379
+        },
+        "cluster": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string"
+              },
+              "port": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        "cluster_mode": {
+          "type": "string",
+          "enum": [
+            "sentinel",
+            "cluster"
+          ]
+        },
+        "sentinel_hosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ttl_seconds": {
+          "type": "integer"
+        },
+        "core_memory_ttl": {
+          "type": "integer"
+        }
+      }
+    },
+    "mq": {
+      "type": "string",
+      "enum": [
+        "none",
+        "redis",
+        "rabbitmq",
+        "kafka"
+      ],
+      "description": "消息队列：none（Solo）/ rabbitmq（Family, SMB）/ kafka（Enterprise）。"
+    },
+    "rabbitmq": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer",
+          "default": 5672
+        },
+        "vhost": {
+          "type": "string"
+        },
+        "ha_mode": {
+          "type": "string"
+        },
+        "queues": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "kafka": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "brokers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string"
+              },
+              "port": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        "topics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "网络与部署拓扑参数。",
+      "properties": {
+        "bind": {
+          "type": "string",
+          "description": "网关对外绑定 IP。"
+        },
+        "api_port": {
+          "type": "integer",
+          "default": 443
+        },
+        "vnet_subnet": {
+          "type": "string",
+          "description": "jail vnet 内网段 CIDR。"
+        },
+        "components": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "各组件 jail 的 IP 映射。"
+        },
+        "subnets": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Enterprise 分区子网（data/vector/meta/object/cache/mq/service）。"
+        },
+        "roles": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "host": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "description": "集合体节点角色：coordinator/worker/archive/gateway（Enterprise）。"
+        },
+        "pf": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "exposed_ports": {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              }
+            },
+            "management_ssh": {
+              "type": "boolean",
+              "default": true
+            },
+            "ipsec_peers": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "ipsec_all_peers": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        },
+        "tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "provider": {
+              "type": "string",
+              "enum": [
+                "self_signed",
+                "lets_encrypt",
+                "internal_ca"
+              ]
+            },
+            "domain": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "security": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "OS 层安全组件开关（与 §5.7 对应）。",
+      "properties": {
+        "jail": {
+          "type": "boolean",
+          "default": false,
+          "description": "进程隔离（jail+vnet）。"
+        },
+        "zfs_encryption": {
+          "type": "boolean",
+          "default": false,
+          "description": "机密 dataset 静态加密。"
+        },
+        "mac": {
+          "type": "boolean",
+          "default": false,
+          "description": "强制访问控制。"
+        },
+        "mac_policy": {
+          "type": "string",
+          "enum": [
+            "mac_lomac",
+            "mac_mls",
+            "mac_bsdextended"
+          ]
+        },
+        "acl": {
+          "type": "boolean",
+          "default": false,
+          "description": "文件系统 ACL。"
+        },
+        "ipsec": {
+          "type": "boolean",
+          "default": false,
+          "description": "节点间 IPsec。"
+        },
+        "pkg_audit": {
+          "type": "boolean",
+          "default": true,
+          "description": "第三方包漏洞审计。"
+        },
+        "process_accounting": {
+          "type": "boolean",
+          "default": true,
+          "description": "系统级审计。"
+        },
+        "minimal_privilege": {
+          "type": "boolean",
+          "default": true,
+          "description": "最小权限。"
+        },
+        "tls": {
+          "type": "string",
+          "enum": [
+            "self_signed",
+            "lets_encrypt",
+            "internal_ca",
+            "none"
+          ]
+        },
+        "key_management": {
+          "type": "string",
+          "enum": [
+            "local_keyring",
+            "local_keyring_with_jail",
+            "external_kms"
+          ]
+        },
+        "kms_endpoint": {
+          "type": "string",
+          "description": "外部 KMS 地址（Enterprise）。"
+        },
+        "dr_site": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "zfs_send_interval": {
+              "type": "string"
+            },
+            "rpo_minutes": {
+              "type": "integer"
+            }
+          }
+        }
+      }
+    },
+    "features": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "功能开关。poison_guard / audit / delete_rights 在所有档位必须为 true（§2.6 边界声明）。",
+      "properties": {
+        "poison_guard": {
+          "type": "boolean",
+          "const": true,
+          "description": "投毒防护（§7.5）—— 不可裁剪。"
+        },
+        "audit": {
+          "type": "boolean",
+          "const": true,
+          "description": "审计（§7.2）—— 不可裁剪。"
+        },
+        "delete_rights": {
+          "type": "boolean",
+          "const": true,
+          "description": "删除权级联（§7.3）—— 不可裁剪。"
+        },
+        "core_memory": {
+          "type": "boolean",
+          "default": true
+        },
+        "consolidation": {
+          "type": "boolean",
+          "default": true
+        },
+        "multi_signal_retrieval": {
+          "type": "boolean",
+          "default": true
+        },
+        "feedback_loop": {
+          "type": "boolean",
+          "default": true
+        },
+        "goal_memory": {
+          "type": "boolean",
+          "default": true
+        },
+        "external_connectors": {
+          "type": "boolean",
+          "default": false
+        },
+        "shared_visibility": {
+          "type": "boolean",
+          "default": false
+        },
+        "multi_tenant": {
+          "type": "boolean",
+          "default": false
+        },
+        "write_policy_plugins": {
+          "type": "boolean",
+          "default": false
+        },
+        "human_correction": {
+          "type": "boolean",
+          "default": false
+        },
+        "federated": {
+          "type": "boolean",
+          "default": false
+        },
+        "cross_node_rank_merge": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "scaling": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "部署形态与扩容参数。",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "standalone",
+            "active_standby",
+            "cluster"
+          ]
+        },
+        "nodes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "总节点数（standalone=1）。"
+        },
+        "nodes_detail": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "description": "各角色节点数（Enterprise：coordinator/worker/archive/gateway）。"
+        },
+        "horizontal": {
+          "type": "boolean",
+          "default": false
+        },
+        "rebalance": {
+          "type": "boolean",
+          "default": false
+        },
+        "upgrade_path": {
+          "type": "string",
+          "enum": [
+            "solo",
+            "family",
+            "smb",
+            "enterprise"
+          ]
+        }
+      },
+      "required": [
+        "mode",
+        "nodes"
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "storage_backend": {
+            "const": "sqlite"
+          }
+        },
+        "required": [
+          "storage_backend"
+        ]
+      },
+      "then": {
+        "properties": {
+          "storage": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "pg"
+                  ]
+                },
+                {
+                  "required": [
+                    "qdrant"
+                  ]
+                },
+                {
+                  "required": [
+                    "tidb"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "storage_backend": {
+            "const": "pgvector"
+          }
+        },
+        "required": [
+          "storage_backend"
+        ]
+      },
+      "then": {
+        "properties": {
+          "storage": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "sqlite"
+                  ]
+                },
+                {
+                  "required": [
+                    "tidb"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "storage_backend": {
+            "const": "pgvector+shard"
+          }
+        },
+        "required": [
+          "storage_backend"
+        ]
+      },
+      "then": {
+        "properties": {
+          "storage": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "sqlite"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "storage_backend": {
+            "const": "qdrant"
+          }
+        },
+        "required": [
+          "storage_backend"
+        ]
+      },
+      "then": {
+        "properties": {
+          "storage": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "sqlite"
+                  ]
+                },
+                {
+                  "required": [
+                    "tidb"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  ]
+}

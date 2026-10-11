@@ -1,0 +1,104 @@
+# ============================================================
+# 光明记忆（LIMS）规模档位配置
+# 档位：Solo（个人）
+# 对应主文档版本：lightmem.md v2.0（§2.6 可缩放模式）
+# 目标用户：单个开发者 / 爱好者
+# 用户量级：1 人 | 记忆量级：万级 | 部署形态：单机自包含
+# ============================================================
+
+# 档位标识
+profile: solo
+
+# ---------- 存储后端 ----------
+# 可选：sqlite | pgvector | qdrant | pgvector+shard
+storage_backend: sqlite
+
+storage:
+  sqlite:
+    # 数据库文件路径
+    path: ./data/lims.sqlite
+    # SQLite 向量扩展（需安装 sqlite-vec 或 faiss 后端）
+    vector_extension: sqlite-vec
+    # WAL 模式：单用户低并发建议开启，崩溃恢复更稳
+    wal_mode: true
+    # 外键与 schema 校验
+    fk_enabled: true
+  # L3 归档：个人场景用本地目录即可
+  archive:
+    path: ./data/archive/
+  # 向量维度（与 Embedding 模型对齐）
+  embedding:
+    model: BGE-small-zh
+    dimensions: 512
+    # 个人场景可用 CPU 推理；如 GPU 可用则开启
+    device: cpu
+
+# ---------- 缓存 ----------
+# 可选：none | redis | redis-cluster
+cache: none
+
+# ---------- 消息队列 ----------
+# 可选：none | redis | rabbitmq | kafka
+mq: none
+
+# ---------- 网络 ----------
+network:
+  # 单机模式，仅本机访问
+  bind: 127.0.0.1
+  api_port: 7443
+  # 无需 pf 防火墙规则（仅本机）
+  pf:
+    enabled: false
+
+# ---------- 安全组件 ----------
+# Solo 仅保留"必须"的 OS 层加固，其余按需
+security:
+  # 进程隔离：单机可不启用 jail
+  jail: false
+  # ZFS 加密：个人场景可关（用文件级加密或系统磁盘加密）
+  zfs_encryption: false
+  # 强制访问控制：单用户无需
+  mac: false
+  # 文件 ACL：按需
+  acl: false
+  # 网络 IPsec：单机无需
+  ipsec: false
+  # 漏洞审计：保持 true（成本极低）
+  pkg_audit: true
+  # 系统审计：保持 true
+  process_accounting: true
+  # 最小权限：建议保持
+  minimal_privilege: true
+  # TLS 终结：单机可用自签或本地证书
+  tls: self_signed
+  # 密钥管理：本地 keyring + 文件权限
+  key_management: local_keyring
+
+# ---------- 功能开关 ----------
+# 注意：poison_guard / audit / delete_rights 在所有档位必须为 true
+features:
+  # 投毒防护（§7.5）—— 不可裁剪
+  poison_guard: true
+  # 审计（§7.2）—— 不可裁剪
+  audit: true
+  # 删除权级联（§7.3）—— 不可裁剪
+  delete_rights: true
+  # 核心记忆块（§3.7）：个人场景开启价值高
+  core_memory: true
+  # 后台整合（§3.13）：个人场景可关（数据量小）
+  consolidation: false
+  # 多信号检索（§3.4）：SQLite 只保留语义+关键词，实体信号关闭
+  multi_signal_retrieval: false
+  # 反馈闭环（§3.11）：建议开启
+  feedback_loop: true
+  # 目标记忆（§3.8）：个人场景开启
+  goal_memory: true
+  # 外部连接器（§3.12）：个人场景可选
+  external_connectors: false
+
+# ---------- 扩容参数 ----------
+# Solo 无扩容，预留字段便于后续升档
+scaling:
+  mode: standalone
+  # 单机自包含，无节点角色
+  nodes: 1
