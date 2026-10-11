@@ -150,6 +150,8 @@ type Memory struct {
 	VersionHistory  []int            `json:"version_history,omitempty"`
 	ExternalRef     *string          `json:"external_ref,omitempty"`
 	GoalDetail      *GoalDetail      `json:"goal_detail,omitempty"`
+	// IsCore 核心记忆块（P4）：高频访问记忆常驻上下文，优先返回。
+	IsCore          bool             `json:"is_core,omitempty"`
 }
 
 // QueryResult 单条检索结果（§4.4 响应）

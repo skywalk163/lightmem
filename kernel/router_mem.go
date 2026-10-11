@@ -132,6 +132,16 @@ type RouterResult struct {
 	FusionScores any             `json:"fusion_scores"` // A1 阶段为 null，交 A2
 	Fused        []FusedResult   `json:"fused,omitempty"`
 	Mode         string          `json:"mode,omitempty"`
+	// Trace 检索 trace：top-3 候选的 8 路信号打分，便于调试和审计。
+	Trace        []TraceEntry    `json:"trace,omitempty"`
+}
+
+// TraceEntry 单条候选的 trace 条目。
+type TraceEntry struct {
+	MemoryID string            `json:"memory_id"`
+	Fact     string            `json:"fact"`
+	Score    float64           `json:"score"`
+	Signals  map[string]float64 `json:"signals"`
 }
 
 // ------------------------------------------------------------------
@@ -155,20 +165,31 @@ func (s *APIServer) Route(ctx context.Context, rc RouterContext) (RouterResult, 
 	return res, nil
 }
 
-// RecallAndFuse 执行 A1+A2：跨层召回后做多信号 rank 融合。
-func (s *APIServer) RecallAndFuse(ctx context.Context, rc RouterContext) (RouterResult, error) {
-	res, err := s.Route(ctx, rc)
-	if err != nil {
-		return res, err
-	}
-	var flat []RecalledCandidate
-	for _, l := range res.Recalled {
-		for _, c := range l.Candidates {
-			if c != nil && c.Memory != nil {
-				flat = append(flat, *c)
+	// RecallAndFuse 执行 A1+A2：跨层召回后做多信号 rank 融合。
+	// FeedbackLoop：过滤用户拒绝的记忆（rejectedIDs）。
+	func (s *APIServer) RecallAndFuse(ctx context.Context, rc RouterContext) (RouterResult, error) {
+		res, err := s.Route(ctx, rc)
+		if err != nil {
+			return res, err
+		}
+		var flat []RecalledCandidate
+		for _, l := range res.Recalled {
+			for _, c := range l.Candidates {
+				if c != nil && c.Memory != nil {
+					// 过滤已拒绝的记忆
+					rejected := false
+					for _, rid := range s.rejectedIDs {
+						if c.Memory.MemoryID == rid {
+							rejected = true
+							break
+						}
+					}
+					if !rejected {
+						flat = append(flat, *c)
+					}
+				}
 			}
 		}
-	}
 	rf := s.fusion
 	if rf == nil {
 		rf = DefaultRankFusion()
@@ -182,6 +203,15 @@ func (s *APIServer) RecallAndFuse(ctx context.Context, rc RouterContext) (Router
 	rf.QueryFrame = rc.frame()
 	fused := rf.Fuse(ctx, rc.Text, flat)
 	res.Fused = fused
+	// retrieval_trace：填充 top-3 候选的 trace。
+	for i := 0; i < len(fused) && i < 3; i++ {
+		res.Trace = append(res.Trace, TraceEntry{
+			MemoryID: fused[i].MemoryID,
+			Fact:     fused[i].Fact,
+			Score:    fused[i].Score,
+			Signals:  fused[i].SignalScores,
+		})
+	}
 	res.FusionScores = nil
 	if len(fused) == 0 {
 		res.Mode = "empty"

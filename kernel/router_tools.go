@@ -239,6 +239,8 @@ func (s *APIServer) handleToolFeedback(w http.ResponseWriter, r *http.Request) {
 	if req.Status == FbRejected {
 		m.Confidence = clamp01(m.Confidence - 0.1)
 		log.Printf("[feedback] correction-candidate memory_id=%s rejected by %s", m.MemoryID, rec.Operator)
+		// FeedbackLoop：记录到 rejectedIDs，后续检索时过滤。
+		s.rejectedIDs = append(s.rejectedIDs, m.MemoryID)
 	}
 	if err := s.backend.Upsert(ctx, m); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})

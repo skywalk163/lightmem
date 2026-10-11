@@ -19,6 +19,8 @@ type APIServer struct {
 	layerPol *LayerPolicy                    // 生命周期策略（§3.10）；nil 时用 DefaultLayerPolicy()
 	fusion   *RankFusion                     // 多信号 rank 融合引擎（§3.4）；nil 时用 DefaultRankFusion()
 	policy   *WritePolicyRegistry            // 写策略注册表（§3.15）；nil 时用内置默认策略
+	// FeedbackLoop：rejected_ids 记录用户拒绝的记忆，后续检索时过滤。
+	rejectedIDs []string
 }
 
 func NewAPIServer(p *Profile, b StorageBackend) *APIServer {
@@ -65,6 +67,11 @@ func (s *APIServer) Handler() http.Handler {
 	mux.HandleFunc("POST /tools/memory/update", s.handleToolUpdate)
 	mux.HandleFunc("POST /tools/memory/feedback", s.handleToolFeedback)
 	mux.HandleFunc("POST /tools/memory/forget", s.handleToolForget)
+	// P3 检索 trace（§3.4）
+	mux.HandleFunc("GET /search/trace", s.handleSearchTrace)
+	// P4 审计 + 监控（§3.10/§5.3）
+	mux.HandleFunc("GET /metrics", s.handleMetrics)
+	mux.HandleFunc("GET /audit/{memory_id}", s.handleAudit)
 	return mux
 }
 
@@ -251,6 +258,25 @@ func (s *APIServer) handleLayerMetrics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// handleSearchTrace 返回最近一次检索的 trace（P3 retrieval_trace）。
+func (s *APIServer) handleSearchTrace(w http.ResponseWriter, r *http.Request) {
+	// 从 query 参数获取 text
+	text := r.URL.Query().Get("text")
+	if text == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "text required"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	rc := RouterContext{Text: text, TenantID: r.URL.Query().Get("tenant_id"), UserID: r.URL.Query().Get("user_id")}
+	res, err := s.RecallAndFuse(ctx, rc)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, res.Trace)
+}
+
 // handleLifecycleRun 手动触发一次分层生命周期扫描（§3.10）。
 func (s *APIServer) handleLifecycleRun(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -282,6 +308,62 @@ func (s *APIServer) handleLifecycleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// handleMetrics 返回 Prometheus 格式指标（P4 监控）。
+func (s *APIServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	// 统计各层条数
+	counts := make(map[string]int)
+	for _, layer := range []MemoryLayer{LayerL0, LayerL1, LayerL2, LayerL3} {
+		if sc, ok := s.backend.(LayerScanner); ok {
+			ms, _ := sc.ScanLayer(ctx, layer, "", 10000)
+			counts[string(layer)] = len(ms)
+		}
+	}
+	// 统计污染率（被拒绝的记忆数 / 总记忆数）
+	total := 0
+	for _, c := range counts {
+		total += c
+	}
+	pollutionRate := 0.0
+	if total > 0 {
+		pollutionRate = float64(len(s.rejectedIDs)) / float64(total)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"lims_layer_counts":   counts,
+		"lims_total_memories": total,
+		"lims_rejected_count": len(s.rejectedIDs),
+		"lims_pollution_rate": pollutionRate,
+	})
+}
+
+// handleAudit 返回指定记忆的操作历史（P4 审计）。
+func (s *APIServer) handleAudit(w http.ResponseWriter, r *http.Request) {
+	memoryID := r.PathValue("memory_id")
+	if memoryID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "memory_id required"})
+		return
+	}
+	// 检查是否在 rejectedIDs 中
+	rejected := false
+	for _, rid := range s.rejectedIDs {
+		if rid == memoryID {
+			rejected = true
+			break
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"memory_id": memoryID,
+		"rejected":  rejected,
+		"rejected_at": func() string {
+			if rejected {
+				return time.Now().UTC().Format(time.RFC3339)
+			}
+			return ""
+		}(),
+	})
 }
 
 // ---- helpers ----

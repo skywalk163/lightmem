@@ -299,6 +299,16 @@ func (rf *RankFusion) Fuse(ctx context.Context, query string, cands []RecalledCa
 		return []FusedResult{top1}
 	}
 
+	// VoteFusion：对 top-3 候选做加权平均，提升多版本投票的鲁棒性。
+	// 权重 = 各信号归一化分 × 名次衰减（top1:1.0, top2:0.5, top3:0.3）。
+	if len(ranked) >= 3 {
+		w1, w2, w3 := ranked[0].Score, ranked[1].Score, ranked[2].Score
+		total := w1 + w2 + w3
+		if total > 0 {
+			ranked[0].Score = (w1*w1 + w2*w2*0.5 + w3*w3*0.3) / total
+		}
+	}
+
 	if ratio < rf.ProximityRatio {
 		// 接近融合：融合 top1+top2（及与之接近的同分项）。
 		picked := []FusedResult{top1, top2}

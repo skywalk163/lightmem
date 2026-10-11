@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"time"
 )
 
@@ -237,4 +238,100 @@ func LifecycleScannerByValue(ctx context.Context, backend StorageBackend, promot
 		}
 	}
 	return result, nil
+}
+
+// ------------------------------------------------------------------
+// BudgetManager（P4）：按层容量上限触发遗忘/降级。
+// 只增不改：不删除，只改 layer 字段。
+// ------------------------------------------------------------------
+
+// BudgetManager 检查每层条数，超过上限时删除最低价值记忆。
+// 注意：这里"删除"指移至 L3（归档），不物理删除。
+func BudgetManager(ctx context.Context, backend StorageBackend, limits map[MemoryLayer]int, tenant string) (int, error) {
+	sc, ok := backend.(LayerScanner)
+	if !ok {
+		return 0, fmt.Errorf("backend %s does not implement LayerScanner", backend.Name())
+	}
+	deleted := 0
+	for layer, limit := range limits {
+		ms, err := sc.ScanLayer(ctx, layer, tenant, 10000)
+		if err != nil {
+			return deleted, err
+		}
+		if len(ms) <= limit {
+			continue
+		}
+		// 按固有价值分升序删除，优先删除价值最低的记忆
+		sort.Slice(ms, func(i, j int) bool {
+			return IntrinsicValue(ms[i], DefaultPromotionPolicy()) < IntrinsicValue(ms[j], DefaultPromotionPolicy())
+		})
+		for _, m := range ms[:len(ms)-limit] {
+			if err := sc.UpdateLayer(ctx, m.MemoryID, LayerL3); err != nil {
+				log.Printf("[budget] move %s to L3 failed: %v", m.MemoryID, err)
+				continue
+			}
+			deleted++
+		}
+	}
+	return deleted, nil
+}
+
+// ------------------------------------------------------------------
+// ForgettingEngine（P4）：低价值记忆自动移至 L3。
+// ------------------------------------------------------------------
+
+// ForgettingEngine 检查固有价值分 < 阈值时，移至 L3。
+func ForgettingEngine(ctx context.Context, backend StorageBackend, threshold float64, tenant string) (int, error) {
+	sc, ok := backend.(LayerScanner)
+	if !ok {
+		return 0, fmt.Errorf("backend %s does not implement LayerScanner", backend.Name())
+	}
+	moved := 0
+	for _, layer := range []MemoryLayer{LayerL0, LayerL1, LayerL2} {
+		ms, err := sc.ScanLayer(ctx, layer, tenant, 1000)
+		if err != nil {
+			return moved, err
+		}
+		for _, m := range ms {
+			if IntrinsicValue(m, DefaultPromotionPolicy()) < threshold {
+				if err := sc.UpdateLayer(ctx, m.MemoryID, LayerL3); err != nil {
+					log.Printf("[forget] move %s to L3 failed: %v", m.MemoryID, err)
+					continue
+				}
+				moved++
+			}
+		}
+	}
+	return moved, nil
+}
+
+// ------------------------------------------------------------------
+// CoreMemoryManager（P4）：高频访问记忆标记为 is_core=true。
+// ------------------------------------------------------------------
+
+// CoreMemoryManager 标记 access_count > 阈值的记忆为 is_core=true。
+// 注意：is_core 字段在 model.go 中已存在（只增不改）。
+func CoreMemoryManager(ctx context.Context, backend StorageBackend, accessThreshold int64, tenant string) (int, error) {
+	sc, ok := backend.(LayerScanner)
+	if !ok {
+		return 0, fmt.Errorf("backend %s does not implement LayerScanner", backend.Name())
+	}
+	marked := 0
+	for _, layer := range []MemoryLayer{LayerL0, LayerL1} {
+		ms, err := sc.ScanLayer(ctx, layer, tenant, 1000)
+		if err != nil {
+			return marked, err
+		}
+		for _, m := range ms {
+			if m.AccessCount >= accessThreshold && !m.IsCore {
+				m.IsCore = true
+				if err := backend.Upsert(ctx, m); err != nil {
+					log.Printf("[core] mark %s as core failed: %v", m.MemoryID, err)
+					continue
+				}
+				marked++
+			}
+		}
+	}
+	return marked, nil
 }
