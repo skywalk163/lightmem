@@ -1,5 +1,6 @@
-// GoalMemory 与权限三元组（P6）
+// GoalMemory 与权限三元组（P6 完整实现）
 // 真源：lightmem.md §3.8 goal、§7.1 权限
+// 光明语言：用状态机表达目标生命周期
 package kernel
 
 import (
@@ -17,6 +18,40 @@ type GoalManager struct {
 
 func NewGoalManager(backend StorageBackend) *GoalManager {
 	return &GoalManager{backend: backend}
+}
+
+// GoalState 目标状态（光明语言：状态机）
+type GoalState string
+
+const (
+	GoalActive    GoalState = "active"
+	GoalPaused    GoalState = "paused"
+	GoalCompleted GoalState = "completed"
+	GoalExpired   GoalState = "expired"
+	GoalArchived  GoalState = "archived"
+)
+
+// GoalTransition 状态转移规则（光明语言：声明式）
+var GoalTransitions = map[GoalState][]GoalState{
+	GoalActive:    {GoalPaused, GoalCompleted, GoalExpired},
+	GoalPaused:    {GoalActive, GoalCompleted, GoalExpired},
+	GoalCompleted: {},
+	GoalExpired:   {GoalArchived},
+	GoalArchived:  {},
+}
+
+// CanTransition 检查状态转移是否合法
+func CanTransition(from, to GoalState) bool {
+	allowed, ok := GoalTransitions[from]
+	if !ok {
+		return false
+	}
+	for _, s := range allowed {
+		if s == to {
+			return true
+		}
+	}
+	return false
 }
 
 // CreateGoal 创建目标记忆
@@ -37,7 +72,7 @@ func (m *GoalManager) CreateGoal(ctx context.Context, goal, deadline string, kpi
 			Goal:        goal,
 			KPI:         kpi,
 			Constraints: constraints,
-			Status:      "active",
+			Status:      string(GoalActive),
 			Progress:    0,
 			Deadline:    deadline,
 		},
@@ -49,7 +84,7 @@ func (m *GoalManager) CreateGoal(ctx context.Context, goal, deadline string, kpi
 	return m2, nil
 }
 
-// UpdateGoalProgress 更新目标进度
+// UpdateGoalProgress 更新目标进度（状态机驱动）
 func (m *GoalManager) UpdateGoalProgress(ctx context.Context, memoryID string, progress float64, actor string) error {
 	existing, err := m.backend.Get(ctx, memoryID, actor, "default")
 	if err != nil {
@@ -58,15 +93,55 @@ func (m *GoalManager) UpdateGoalProgress(ctx context.Context, memoryID string, p
 	if existing.MemoryKind != KindGoal || existing.GoalDetail == nil {
 		return fmt.Errorf("not a goal memory")
 	}
-	existing.GoalDetail.Progress = progress
+
+	oldState := GoalState(existing.GoalDetail.Status)
+	newState := oldState
+
+	// 光明语言：状态机规则
 	if progress >= 1.0 {
-		existing.GoalDetail.Status = "completed"
+		newState = GoalCompleted
+	} else if progress < 0 {
+		newState = GoalActive
 	}
+
+	// 检查状态转移合法性
+	if oldState != newState && !CanTransition(oldState, newState) {
+		return fmt.Errorf("invalid state transition: %s -> %s", oldState, newState)
+	}
+
+	existing.GoalDetail.Progress = progress
+	existing.GoalDetail.Status = string(newState)
 	existing.RecordedAt = time.Now().UTC()
+
 	if err := m.backend.Upsert(ctx, existing); err != nil {
 		return err
 	}
-	GetAuditLogger().Log("goal_progress", memoryID, existing.TenantID, existing.UserID, actor, fmt.Sprintf("progress=%.1f", progress))
+	GetAuditLogger().Log("goal_progress", memoryID, existing.TenantID, existing.UserID, actor, fmt.Sprintf("progress=%.1f state=%s->%s", progress, oldState, newState))
+	return nil
+}
+
+// SetGoalState 设置目标状态
+func (m *GoalManager) SetGoalState(ctx context.Context, memoryID string, state GoalState, actor string) error {
+	existing, err := m.backend.Get(ctx, memoryID, actor, "default")
+	if err != nil {
+		return err
+	}
+	if existing.MemoryKind != KindGoal || existing.GoalDetail == nil {
+		return fmt.Errorf("not a goal memory")
+	}
+
+	oldState := GoalState(existing.GoalDetail.Status)
+	if !CanTransition(oldState, state) {
+		return fmt.Errorf("invalid state transition: %s -> %s", oldState, state)
+	}
+
+	existing.GoalDetail.Status = string(state)
+	existing.RecordedAt = time.Now().UTC()
+
+	if err := m.backend.Upsert(ctx, existing); err != nil {
+		return err
+	}
+	GetAuditLogger().Log("goal_state", memoryID, existing.TenantID, existing.UserID, actor, fmt.Sprintf("%s->%s", oldState, state))
 	return nil
 }
 
@@ -147,7 +222,7 @@ func ShareMemory(ctx context.Context, backend StorageBackend, memoryID, fromUser
 	return nil
 }
 
-// SessionCompressor 会话压缩（P6）
+// SessionCompressor 会话压缩（P6 完整实现）
 func SessionCompressor(ctx context.Context, backend StorageBackend, tenant, user string, maxMemories int) (int, error) {
 	if maxMemories <= 0 {
 		maxMemories = 50
@@ -179,4 +254,76 @@ func SessionCompressor(ctx context.Context, backend StorageBackend, tenant, user
 		}
 	}
 	return compressed, nil
+}
+
+// BatchImport 批量导入（P6）
+func BatchImport(ctx context.Context, backend StorageBackend, tenant, user string, memories []*Memory) (int, error) {
+	imported := 0
+	for _, m := range memories {
+		if m == nil {
+			continue
+		}
+		if m.MemoryID == "" {
+			m.MemoryID = newMemoryID()
+		}
+		if m.IdempotencyKey == "" {
+			m.IdempotencyKey = m.MemoryID
+		}
+		if m.TenantID == "" {
+			m.TenantID = tenant
+		}
+		if m.UserID == "" {
+			m.UserID = user
+		}
+		if m.RecordedAt.IsZero() {
+			m.RecordedAt = time.Now().UTC()
+		}
+		if m.Layer == "" {
+			m.Layer = ClassifyLayer(m)
+		}
+		if _, err := backend.Upsert(ctx, m); err != nil {
+			log.Printf("[import] %s: %v", m.MemoryID, err)
+			continue
+		}
+		imported++
+	}
+	GetAuditLogger().Log("batch_import", "", tenant, user, "system", fmt.Sprintf("imported=%d", imported))
+	return imported, nil
+}
+
+// BatchExport 批量导出（P6）
+func BatchExport(ctx context.Context, backend StorageBackend, tenant, user string, kinds []MemoryKind) ([]*Memory, error) {
+	sc, ok := backend.(LayerScanner)
+	if !ok {
+		return nil, fmt.Errorf("backend does not implement LayerScanner")
+	}
+	var all []*Memory
+	for _, layer := range []MemoryLayer{LayerL0, LayerL1, LayerL2, LayerL3} {
+		ms, err := sc.ScanLayer(ctx, layer, tenant, 10000)
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range ms {
+			if m == nil {
+				continue
+			}
+			if m.UserID != user && user != "" {
+				continue
+			}
+			if len(kinds) > 0 {
+				ok := false
+				for _, k := range kinds {
+					if m.MemoryKind == k {
+						ok = true
+						break
+					}
+				}
+				if !ok {
+					continue
+				}
+			}
+			all = append(all, m)
+		}
+	}
+	return all, nil
 }

@@ -1,5 +1,6 @@
-// 外部连接器（P5）
+// 外部连接器（P5 完整实现）
 // 真源：lightmem.md §5.4 存储后端可插拔、§4.6 外部连接器
+// 光明语言：用结构化配置表达同步策略
 package kernel
 
 import (
@@ -8,6 +9,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -48,7 +51,7 @@ func (r *ConnectorRegistry) All() []Connector {
 	return out
 }
 
-// DBConnector 数据库连接器
+// DBConnector 数据库连接器（完整实现）
 type DBConnector struct {
 	name   string
 	db     *sql.DB
@@ -64,10 +67,16 @@ type DBConfig struct {
 	ContentCol string `json:"content_col"`
 	UpdatedCol string `json:"updated_col"`
 	PollSec    int    `json:"poll_sec"`
+	TenantID   string `json:"tenant_id"`
+	UserID     string `json:"user_id"`
 }
 
 func NewDBConnector(name string, backend StorageBackend) *DBConnector {
-	return &DBConnector{name: name, backend: backend, cfg: &DBConfig{PollSec: 30}}
+	return &DBConnector{
+		name:    name,
+		backend: backend,
+		cfg:     &DBConfig{PollSec: 30, TenantID: "connector", UserID: "system"},
+	}
 }
 
 func (c *DBConnector) Name() string { return c.name }
@@ -86,6 +95,7 @@ func (c *DBConnector) Close() error {
 	return nil
 }
 
+// Sync 增量同步（WAL/时间戳）
 func (c *DBConnector) Sync(ctx context.Context, cfg json.RawMessage) error {
 	if err := json.Unmarshal(cfg, c.cfg); err != nil {
 		return err
@@ -106,13 +116,14 @@ func (c *DBConnector) Sync(ctx context.Context, cfg json.RawMessage) error {
 			return ctx.Err()
 		case <-ticker.C:
 			rows, err := c.db.QueryContext(ctx,
-				fmt.Sprintf("SELECT %s, %s, %s FROM %s WHERE %s > $1",
-					c.cfg.KeyCol, c.cfg.ContentCol, c.cfg.UpdatedCol, c.cfg.Table, c.cfg.UpdatedCol),
+				fmt.Sprintf("SELECT %s, %s, %s FROM %s WHERE %s > $1 ORDER BY %s ASC",
+					c.cfg.KeyCol, c.cfg.ContentCol, c.cfg.UpdatedCol, c.cfg.Table, c.cfg.UpdatedCol, c.cfg.UpdatedCol),
 				lastSync)
 			if err != nil {
 				log.Printf("[connector] %s query: %v", c.name, err)
 				continue
 			}
+			count := 0
 			for rows.Next() {
 				var key, content string
 				var updated time.Time
@@ -122,8 +133,8 @@ func (c *DBConnector) Sync(ctx context.Context, cfg json.RawMessage) error {
 				m := &Memory{
 					MemoryID:       newMemoryID(),
 					IdempotencyKey: c.name + ":" + key,
-					TenantID:       "connector",
-					UserID:         "system",
+					TenantID:       c.cfg.TenantID,
+					UserID:         c.cfg.UserID,
 					MemoryKind:     KindFact,
 					Fact:           content,
 					Source:         c.name,
@@ -134,10 +145,123 @@ func (c *DBConnector) Sync(ctx context.Context, cfg json.RawMessage) error {
 				}
 				if _, err := c.backend.Upsert(ctx, m); err != nil {
 					log.Printf("[connector] %s upsert %s: %v", c.name, key, err)
+					continue
 				}
 				lastSync = updated
+				count++
 			}
 			rows.Close()
+			if count > 0 {
+				log.Printf("[connector] %s synced %d rows", c.name, count)
+			}
+		}
+	}
+}
+
+// DocConnector 文档连接器（P5 完整实现）
+type DocConnector struct {
+	name    string
+	cfg     *DocConfig
+	backend StorageBackend
+}
+
+type DocConfig struct {
+	Path        string   `json:"path"`
+	Extensions  []string `json:"extensions"`
+	PollSec     int      `json:"poll_sec"`
+	TenantID    string   `json:"tenant_id"`
+	UserID      string   `json:"user_id"`
+}
+
+func NewDocConnector(name string, backend StorageBackend) *DocConnector {
+	return &DocConnector{
+		name:    name,
+		backend: backend,
+		cfg:     &DocConfig{PollSec: 60, TenantID: "connector", UserID: "system"},
+	}
+}
+
+func (c *DocConnector) Name() string { return c.name }
+
+func (c *DocConnector) Health(ctx context.Context) error {
+	if c.cfg.Path == "" {
+		return fmt.Errorf("path not configured")
+	}
+	_, err := os.Stat(c.cfg.Path)
+	return err
+}
+
+func (c *DocConnector) Close() error { return nil }
+
+func (c *DocConnector) Sync(ctx context.Context, cfg json.RawMessage) error {
+	if err := json.Unmarshal(cfg, c.cfg); err != nil {
+		return err
+	}
+	ticker := time.NewTicker(time.Duration(c.cfg.PollSec) * time.Second)
+	defer ticker.Stop()
+	seen := map[string]time.Time{}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			files, err := filepath.Glob(filepath.Join(c.cfg.Path, "*"))
+			if err != nil {
+				log.Printf("[doc] %s glob: %v", c.name, err)
+				continue
+			}
+			count := 0
+			for _, f := range files {
+				ext := filepath.Ext(f)
+				if len(ext) > 0 {
+					ext = ext[1:]
+				}
+				extOk := false
+				for _, e := range c.cfg.Extensions {
+					if e == ext {
+						extOk = true
+						break
+					}
+				}
+				if !extOk {
+					continue
+				}
+				info, err := os.Stat(f)
+				if err != nil {
+					continue
+				}
+				mod := info.ModTime()
+				if seen[f].After(mod) || seen[f] == mod {
+					continue
+				}
+				data, err := os.ReadFile(f)
+				if err != nil {
+					continue
+				}
+				m := &Memory{
+					MemoryID:       newMemoryID(),
+					IdempotencyKey: c.name + ":" + filepath.Base(f),
+					TenantID:       c.cfg.TenantID,
+					UserID:         c.cfg.UserID,
+					MemoryKind:     KindFact,
+					Fact:           string(data),
+					Source:         c.name,
+					RecordedAt:     time.Now().UTC(),
+					Confidence:     0.6,
+					Version:        1,
+					Layer:          LayerL1,
+				}
+				if _, err := c.backend.Upsert(ctx, m); err != nil {
+					log.Printf("[doc] %s upsert %s: %v", c.name, f, err)
+					continue
+				}
+				seen[f] = mod
+				count++
+			}
+			if count > 0 {
+				log.Printf("[doc] %s synced %d files", c.name, count)
+			}
 		}
 	}
 }
@@ -147,4 +271,17 @@ type RefSource struct {
 	Connector string `json:"connector"`
 	Key       string `json:"key"`
 	URL       string `json:"url,omitempty"`
+}
+
+// ResolveRef 解析引用式记忆
+func ResolveRef(ctx context.Context, backend StorageBackend, ref *RefSource) (*Memory, error) {
+	if ref == nil {
+		return nil, fmt.Errorf("nil ref")
+	}
+	// 按 idempotency_key 查找
+	lk, ok := backend.(IdempotencyLookup)
+	if !ok {
+		return nil, fmt.Errorf("backend does not support idempotency lookup")
+	}
+	return lk.FindByIdempotencyKey(ctx, "", "", ref.Connector+":"+ref.Key)
 }
