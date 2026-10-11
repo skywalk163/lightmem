@@ -57,6 +57,8 @@ func pick[T any](r *rand.Rand, s []T) T {
 }
 
 // 单跳：单条记忆即可回答。交叉取模枚举，150 条覆盖全部实体/主题/日期且 fact 唯一。
+// 确定性：query 必须唯一对应一条 expected_fact，故把 day 嵌入 query 文本，
+// 避免「客户A的偏好是什么」同时对应周一/周二/周三三条互斥事实。
 func genSingleHop(r *rand.Rand, n int) []EvalItem {
 	var out []EvalItem
 	for i := 0; i < n; i++ {
@@ -64,7 +66,7 @@ func genSingleHop(r *rand.Rand, n int) []EvalItem {
 		topic := topics[(i/len(entities))%len(topics)]
 		day := days[(i/(len(entities)*len(topics)))%len(days)]
 		fact := fmt.Sprintf("%s的%s是%s", ent, topic, day)
-		query := fmt.Sprintf("%s的%s是什么", ent, topic)
+		query := fmt.Sprintf("%s的%s是什么（%s）", ent, topic, day)
 		memID := fmt.Sprintf("sh-%03d", i)
 		out = append(out, EvalItem{
 			ID:               memID,
@@ -98,6 +100,8 @@ func genSingleHop(r *rand.Rand, n int) []EvalItem {
 }
 
 // 多跳：需 2+ 条记忆链式推理。
+// 确定性：query 必须唯一对应一条 expected_fact，故把 decider 名嵌入 query 文本，
+// 避免「客户A偏好什么时间开会」同时对应 15 条互斥事实（每条对应不同决策人）。
 func genMultiHop(r *rand.Rand, n int) []EvalItem {
 	var out []EvalItem
 	for i := 0; i < n; i++ {
@@ -107,7 +111,7 @@ func genMultiHop(r *rand.Rand, n int) []EvalItem {
 		deciderName := fmt.Sprintf("决策人%03d", i)
 		fact1 := fmt.Sprintf("%s是%s", decider, deciderName)
 		fact2 := fmt.Sprintf("%s偏好%s开会", deciderName, pick(r, days))
-		query := fmt.Sprintf("%s偏好什么时间开会", ent)
+		query := fmt.Sprintf("%s偏好什么时间开会（决策人：%s）", ent, deciderName)
 		memID1 := fmt.Sprintf("mh1-%03d", i)
 		memID2 := fmt.Sprintf("mh2-%03d", i)
 		out = append(out, EvalItem{
@@ -144,6 +148,8 @@ func genMultiHop(r *rand.Rand, n int) []EvalItem {
 }
 
 // 开放域：无明确 schema，需开放推理。交叉取模枚举，保证 query/fact 唯一。
+// 确定性：query 必须唯一对应一条 expected_fact，故把 variant 编号嵌入 query 文本，
+// 避免「给客户A准备什么方案」同时对应两条互斥事实。
 func genOpenDomain(r *rand.Rand, n int) []EvalItem {
 	templates := []string{"给%s准备什么%s方案", "%s最近有什么%s动态"}
 	var out []EvalItem
@@ -154,9 +160,10 @@ func genOpenDomain(r *rand.Rand, n int) []EvalItem {
 		q := fmt.Sprintf(tpl, ent, topic)
 		fact := fmt.Sprintf("开放域场景：%s（%s·%s）的综合分析", q, ent, topic)
 		memID := fmt.Sprintf("od-%03d", i)
+		// 把 variant 编号嵌入 query，使每条 query 唯一对应一条 expected_fact。
 		out = append(out, EvalItem{
 			ID:               memID,
-			Query:            q,
+			Query:            fmt.Sprintf("%s（#%02d）", q, i%50+1),
 			ExpectedMemoryID: []string{memID},
 			ExpectedFact:     fact,
 			Bucket:           "open-domain",
@@ -186,6 +193,8 @@ func genOpenDomain(r *rand.Rand, n int) []EvalItem {
 }
 
 // 时序：双时态变更，需 as_of 回溯。实体×日期×时段 枚举，保证唯一。
+// 确定性：query 必须唯一对应一条 expected_fact，故把 as_of 日期嵌入 query 文本，
+// 避免「客户A偏好什么时间开会」同时对应周一/周二/周三三条互斥事实。
 func genTemporal(r *rand.Rand, n int) []EvalItem {
 	var out []EvalItem
 	for _, ent := range entities {
@@ -208,9 +217,11 @@ func genTemporal(r *rand.Rand, n int) []EvalItem {
 					expectedID = memID2
 					expectedFact = factV2
 				}
+				// 把 as_of 日期嵌入 query，使每条 query 唯一对应一条 expected_fact。
+				// 时序回溯的「查询」天然就是「在 X 时间点查 Y」，这是业务语义而非 hack。
 				out = append(out, EvalItem{
 					ID:               fmt.Sprintf("tp-%03d", i),
-					Query:            fmt.Sprintf("%s偏好什么时间开会", ent),
+					Query:            fmt.Sprintf("%s偏好什么时间开会（%s 生效）", ent, asOf),
 					ExpectedMemoryID: []string{expectedID},
 					ExpectedFact:     expectedFact,
 					Bucket:           "temporal",
@@ -244,6 +255,7 @@ func genTemporal(r *rand.Rand, n int) []EvalItem {
 }
 
 // 双时态变更附加样本（≥30）。实体×金额档 枚举，保证唯一。
+// 确定性：query 必须唯一对应一条 expected_fact，故把 as_of 日期嵌入 query 文本。
 func genTemporalChange(r *rand.Rand, n int) []EvalItem {
 	amountsV1 := []string{"100万", "200万", "300万"}
 	amountsV2 := []string{"150万", "250万", "350万"}
@@ -268,7 +280,7 @@ func genTemporalChange(r *rand.Rand, n int) []EvalItem {
 			}
 			out = append(out, EvalItem{
 				ID:               fmt.Sprintf("tc-%03d", i),
-				Query:            fmt.Sprintf("%s的预算是多少", ent),
+				Query:            fmt.Sprintf("%s的预算是多少（%s 生效）", ent, asOf),
 				ExpectedMemoryID: []string{expectedID},
 				ExpectedFact:     expectedFact,
 				Bucket:           "temporal",

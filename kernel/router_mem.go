@@ -173,7 +173,11 @@ func (s *APIServer) RecallAndFuse(ctx context.Context, rc RouterContext) (Router
 	if rf == nil {
 		rf = DefaultRankFusion()
 	}
-	rf.Now = time.Now().UTC()
+	// 确定性：仅当注入方未显式设置 Now 时才用当前时刻。
+	// 评测集跑批时由 run_kpi.go 固定 Now，避免逐条 freshness 抖动。
+	if rf.Now.IsZero() {
+		rf.Now = time.Now().UTC()
+	}
 	rf.AsOf = rc.AsOf
 	rf.QueryFrame = rc.frame()
 	fused := rf.Fuse(ctx, rc.Text, flat)

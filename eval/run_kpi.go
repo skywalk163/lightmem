@@ -25,6 +25,13 @@ import (
 const (
 	tenant = "eval-tenant"
 	user   = "eval-user"
+
+	// kpiRecallTopK 评测召回窗口（§9 评测口径）。
+	// RecallLayers 的扫描窗口为 maxScan = TopK*40（下限 200）：默认 TopK=5 → 只扫 200 条。
+	// 而本评测集单租户 L1 有约 530 条记忆，超出窗口的记忆「根本没被看到」，
+	// 会把准确率变成「窗口抽签」而非检索能力。此处显式放大窗口以覆盖全库。
+	// 注意：仅调整评测口径，不改 kernel 默认值（§2.3 defaultRecallTopK）。
+	kpiRecallTopK = 200 // maxScan = 8000，覆盖当前评测集全量
 )
 
 type EvalItem struct {
@@ -116,7 +123,12 @@ func main() {
 		log.Fatalf("new backend: %v", err)
 	}
 	srv := kernel.NewAPIServer(prof, b)
-	srv.SetRankFusion(kernel.DefaultRankFusion())
+	rf := kernel.DefaultRankFusion()
+	// 确定性：固定 Now 为评测启动时刻，避免逐条查询 freshness 抖动。
+	// 若不固定，每条查询的 Now 差数秒，freshness 信号在 30 天半衰期下虽差异极小，
+	// 但经 RRF 排名叠加后仍可导致 top-1 顺序漂移（见收口报告 §4.4 根因 5）。
+	rf.Now = time.Now().UTC()
+	srv.SetRankFusion(rf)
 
 	// 3) 逐条写入记忆 + 跑查询。
 	var details []KPIDetail
@@ -152,6 +164,7 @@ func main() {
 			TenantID:    item.Tenant,
 			UserID:      item.User,
 			MemoryKinds: nil,
+			TopK:        kpiRecallTopK,
 		}
 		if item.AsOf != "" {
 			asOf := item.AsOf
@@ -264,6 +277,8 @@ func main() {
 	sb.WriteString("# KPI 基线报告\n\n")
 	fmt.Fprintf(&sb, "- 生成时间：%s\n", report.GeneratedAt.Format(time.RFC3339))
 	fmt.Fprintf(&sb, "- 评测集总数：%d\n", report.TotalItems)
+	fmt.Fprintf(&sb, "- 召回窗口 top-k：%d（maxScan=%d，覆盖全库；见 kpiRecallTopK 注释）\n",
+		kpiRecallTopK, kpiRecallTopK*40)
 	fmt.Fprintf(&sb, "- 检索准确率（总体，按 memory_id）：%.1f%%\n", report.OverallAccuracy*100)
 	fmt.Fprintf(&sb, "- 检索准确率（总体，按 fact 文本）：%.1f%%\n", report.OverallAccuracyByFact*100)
 	sb.WriteString("- 分桶准确率（按 memory_id）：\n")

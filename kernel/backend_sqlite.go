@@ -120,7 +120,13 @@ func (b *sqliteBackend) Query(ctx context.Context, q QueryParams) ([]QueryResult
 		score += m.Confidence * 0.2
 		res = append(res, b.toResult(m, score))
 	}
-	sort.Slice(res, func(i, j int) bool { return res[i].Score > res[j].Score })
+	// 次级键：分数相同时按 memory_id 升序。map 遍历无序，缺次级键会让同分项顺序随机。
+	sort.Slice(res, func(i, j int) bool {
+		if res[i].Score != res[j].Score {
+			return res[i].Score > res[j].Score
+		}
+		return res[i].MemoryID < res[j].MemoryID
+	})
 	if q.TopK > 0 && len(res) > q.TopK {
 		res = res[:q.TopK]
 	}
@@ -155,6 +161,9 @@ func (b *sqliteBackend) Close() error { return nil }
 // 只增不改：不改动既有 Upsert/Get/Query 语义。
 
 // ScanLayer 返回指定层（layer 为空 = 全部层）的记忆，限制 max 条。
+// 确定性：先筛出全量匹配项，再按 (recorded_at, memory_id) 升序排序后截断 max；
+// 不可在 map 遍历中提前 break —— 那样「取到哪 max 条」由 map 随机序决定，
+// 同一层不同次扫描会返回不同子集，导致上层检索结果不可复现。
 func (b *sqliteBackend) ScanLayer(ctx context.Context, layer MemoryLayer, tenant string, max int) ([]*Memory, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -164,7 +173,7 @@ func (b *sqliteBackend) ScanLayer(ctx context.Context, layer MemoryLayer, tenant
 	}
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	out := make([]*Memory, 0, max)
+	out := make([]*Memory, 0, len(b.data))
 	for _, m := range b.data {
 		if tenant != "" && m.TenantID != tenant {
 			continue
@@ -173,11 +182,16 @@ func (b *sqliteBackend) ScanLayer(ctx context.Context, layer MemoryLayer, tenant
 			continue
 		}
 		out = append(out, m)
-		if len(out) >= max {
-			break
-		}
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].RecordedAt.Before(out[j].RecordedAt) })
+	sort.SliceStable(out, func(i, j int) bool {
+		if !out[i].RecordedAt.Equal(out[j].RecordedAt) {
+			return out[i].RecordedAt.Before(out[j].RecordedAt)
+		}
+		return out[i].MemoryID < out[j].MemoryID
+	})
+	if len(out) > max {
+		out = out[:max]
+	}
 	return out, nil
 }
 
@@ -217,6 +231,7 @@ func (b *sqliteBackend) CountByLayer(ctx context.Context, layer MemoryLayer, ten
 }
 
 // ScanAll 跨租户全量扫描（整合 worker 用，§3.13）。
+// 确定性同 ScanLayer：先全量收集，再按 (recorded_at, memory_id) 升序截断。
 func (b *sqliteBackend) ScanAll(ctx context.Context, max int) ([]*Memory, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -229,15 +244,21 @@ func (b *sqliteBackend) ScanAll(ctx context.Context, max int) ([]*Memory, error)
 	out := make([]*Memory, 0, len(b.data))
 	for _, m := range b.data {
 		out = append(out, m)
-		if len(out) >= max {
-			break
-		}
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].RecordedAt.Before(out[j].RecordedAt) })
+	sort.SliceStable(out, func(i, j int) bool {
+		if !out[i].RecordedAt.Equal(out[j].RecordedAt) {
+			return out[i].RecordedAt.Before(out[j].RecordedAt)
+		}
+		return out[i].MemoryID < out[j].MemoryID
+	})
+	if len(out) > max {
+		out = out[:max]
+	}
 	return out, nil
 }
 
 // FindByIdempotencyKey 按 (tenant,user,idempotency_key) 查已存在记忆（§4.1）。
+// 确定性：命中多条时取 memory_id 最小者，避免返回结果随 map 遍历序变化。
 func (b *sqliteBackend) FindByIdempotencyKey(ctx context.Context, tenant, user, key string) (*Memory, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -247,12 +268,16 @@ func (b *sqliteBackend) FindByIdempotencyKey(ctx context.Context, tenant, user, 
 	}
 	b.mu.RLock()
 	defer b.mu.RUnlock()
+	var best *Memory
 	for _, m := range b.data {
-		if m.TenantID == tenant && m.UserID == user && m.IdempotencyKey == key {
-			return m, nil
+		if m.TenantID != tenant || m.UserID != user || m.IdempotencyKey != key {
+			continue
+		}
+		if best == nil || m.MemoryID < best.MemoryID {
+			best = m
 		}
 	}
-	return nil, nil
+	return best, nil
 }
 
 // ---- 可见性硬过滤（§3.2）----
