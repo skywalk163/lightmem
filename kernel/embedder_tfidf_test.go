@@ -53,14 +53,14 @@ func TestCharNgramEmbedderEmpty(t *testing.T) {
 	if v.Dim() == 0 {
 		t.Fatal("vocab empty after build")
 	}
-	got := v.Embed("")
+	got, _ := v.Embed("")
 	for i, x := range got {
 		if x != 0 {
 			t.Fatalf("empty text not zero at %d", i)
 		}
 	}
 	// 无 n-gram 命中的文本（单字符）
-	got2 := v.Embed("x")
+	got2, _ := v.Embed("x")
 	if len(got2) != v.Dim() {
 		t.Fatalf("dim mismatch: %d vs %d", len(got2), v.Dim())
 	}
@@ -81,8 +81,8 @@ func TestCharNgramVocabStable(t *testing.T) {
 	if a.Dim() != b.Dim() {
 		t.Fatalf("dim mismatch: %d vs %d", a.Dim(), b.Dim())
 	}
-	va := a.Embed("toy drive")
-	vb := b.Embed("toy drive")
+	va, _ := a.Embed("toy drive")
+	vb, _ := b.Embed("toy drive")
 	for i := range va {
 		if !nearlyEqual(float64(va[i]), float64(vb[i]), 1e-9) {
 			t.Fatalf("vocab unstable at %d", i)
@@ -177,8 +177,8 @@ func TestCharNgramVocabRoundTrip(t *testing.T) {
 	if v2.N != v.N {
 		t.Fatalf("N mismatch: %d vs %d", v2.N, v.N)
 	}
-	a := v.Embed("toy drive")
-	b := v2.Embed("toy drive")
+	a, _ := v.Embed("toy drive")
+	b, _ := v2.Embed("toy drive")
 	for i := range a {
 		if !nearlyEqual(float64(a[i]), float64(b[i]), 1e-6) {
 			t.Fatalf("round-trip mismatch at %d", i)

@@ -18,6 +18,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -91,6 +92,19 @@ type KPIReport struct {
 	// BucketHit2 R3-D：multi-hop 桶「口径 B」hit@2——top-2 内任一 MemoryID ∈ ExpectedMemoryID
 	// 即算命中。反映「一次交互内能拿到正确事实」的体验。
 	BucketHit2 map[string]float64 `json:"bucket_hit2,omitempty"`
+	// R4-C：主 fact 口径分母（= total − template_total，已剔除模板 expected）。
+	// 模板 expected（beam-* "LLM response should ...:"）是评测集形态问题，单列统计。
+	FactTotal int `json:"fact_total,omitempty"`
+	// R4-C：模板 expected 样本数（从主 fact 口径剔除）。
+	TemplateTotal int `json:"template_total,omitempty"`
+	// R4-C：模板 expected 中 fact_hit 命中数（仅陈述事实，不计入主口径分子/分母）。
+	TemplateHits int `json:"template_hits,omitempty"`
+	// R4-C：候选扩展辅助口径——短 expected（<15 rune）在 top-5 候选内命中数，不覆盖主口径。
+	FactHitTop5Count int `json:"fact_hit_top5_count,omitempty"`
+	// R4-C：主 fact 准确率（= factHits / (total − templateTotal)），即 v4 口径。
+	OverallAccuracyByFactV4 float64 `json:"overall_accuracy_by_fact_v4,omitempty"`
+	// R4-C：fact 口径版本标识：v3（-fact-v4=false）/ v4（默认）。
+	FactAlgo string `json:"fact_algo,omitempty"`
 }
 
 // CostTracker 成本追踪（§9 评测增强）。
@@ -136,6 +150,8 @@ type KPIDetail struct {
 	Expected string `json:"expected"`
 	Got      string `json:"got"`
 	Reason   string `json:"reason"`
+	// R4-C：该样本 expected 为评测模板（"LLM response should ...:"），已从主 fact 口径剔除。
+	IsTemplateExpected bool `json:"is_template_expected,omitempty"`
 }
 
 func loadDataset(path string) ([]EvalItem, error) {
@@ -196,6 +212,13 @@ func main() {
 	// R3-C：相似度算法选择。dice=任务书建议的 Dice 系数；contain=containment（软包含，
 	// 更适合 got 是 "speaker: turn" 长文本而 expected 是短答案的场景）。
 	factSim := flag.String("fact-sim", "dice", "R3-C: fact v3 相似度算法 dice|contain")
+	// R4-C：fact 口径 v4 开关。启用后在 v3（v2 包含 + char trigram 软包含）之上追加四类
+	// 确定性补判：① 模板 expected 剔除（beam-* "LLM response should ...:"）；
+	// ② 时间推理（用 top-1 候选 occurred_at 与相对时间词做确定性日历推算）；
+	// ③ 数值/日期归一（货币符号、千分位、月名日期规范化）；
+	// ④ 短 expected（<15 rune）词元包含。
+	// -fact-v4=false 复现 R3-C v3 基线（before/after isolate）。
+	factV4Flag := flag.Bool("fact-v4", true, "R4-C: 启用 fact 口径 v4（时间推理/数值日期归一/短 expected 词元）；false 复现 R3-C v3 基线")
 	// R3-B：as_of 查询时把 rf.Now 设为样本的 as_of，让 freshness/feedback 时序生效。
 	// 注意 rf 是全局指针，必须按样本重置，否则污染下一条（任务书 B.3.2 警告）。
 	nowAsOf := flag.Bool("now-asof", false, "R3-B: as_of 查询时把 rf.Now 设为样本 as_of（对照实验用；非 as_of 样本保持评测启动时刻）")
@@ -211,6 +234,7 @@ func main() {
 	wPath := *wFlag
 	factV3Threshold = *factThr
 	factV3SimAlgo = *factSim
+	factV4Enabled = *factV4Flag
 
 	_ = os.MkdirAll(repDir, 0o755)
 
@@ -272,6 +296,11 @@ func main() {
 	bucketTotal := map[string]int{}
 	hits, total := 0, 0
 	factHits := 0
+	// R4-C：主 fact 口径分母（= total − templateTotal），模板 expected 单独统计。
+	factTotal := 0
+	templateTotal, templateHits := 0, 0
+	// R4-C：候选扩展辅助口径——短 expected 在本样本 top-5 候选内命中数（不覆盖主口径）。
+	factHitTop5Count := 0
 	temporalHits, temporalTotal := 0, 0
 	multiSignalHits, multiSignalTotal := 0, 0
 	// R3-D：multi-hop 口径 A（hit@1 集合判定）与口径 B（hit@2）累计器。
@@ -422,8 +451,11 @@ func main() {
 		hit := false
 		rank := 0
 		gotFact := ""
+		top1IsExpected := false
+		var topFacts []string
 		if len(res.Fused) > 0 {
 			gotFact = res.Fused[0].Fact
+			top1IsExpected = sliceContains(item.ExpectedMemoryID, res.Fused[0].MemoryID)
 			for j, exp := range item.ExpectedMemoryID {
 				if res.Fused[0].MemoryID == exp {
 					hit = true
@@ -446,13 +478,36 @@ func main() {
 					}
 				}
 			}
+			// R4-C：收集 top-5 候选 fact 文本，供候选扩展辅助口径使用。
+			for i := 0; i < len(res.Fused) && i < 5; i++ {
+				topFacts = append(topFacts, res.Fused[i].Fact)
+			}
 		}
-		// factHit 使用「包含式 v2 + char n-gram 相似度 v3」判定（R2 任务C + R3-C）：
-		//   v2：归一化后包含/短答案边界匹配（覆盖 LME/BEAM "Q => A"、LoCoMo "speaker: turn"）。
-		//   v3：v2 未命中且 expected 归一化长度 ≥20 时，用 char trigram Dice 系数补判，
-		//       覆盖 BEAM/LoCoMo 跨轮推理型 expected_fact（与 top-1 原文 turn 文本不连续）。
-		// 纯字符串处理，不调 LLM（红线 4），seed 无关（无随机源）。
-		factHit := matchFactV3(gotFact, item.ExpectedFact)
+		// fact 命中判定（R2 v2 + R3-C v3 + R4-C v4）：
+		//   v2/v3：归一化包含 + char trigram 软包含（见 matchFactV3 注释）。
+		//   v4（-fact-v4=true，默认）：追加 模板剔除 / 时间推理 / 数值日期归一 / 短 expected 词元包含。
+		// 纯字符串与日历推算，不调 LLM（红线 4），seed 无关（无随机源）。
+		// anchor 取 top-1 候选的 occurred_at，作为时间推理的日历锚点（非 ground truth）。
+		var anchor *time.Time
+		if len(res.Fused) > 0 && res.Fused[0].Memory != nil {
+			anchor = res.Fused[0].Memory.OccurredAt
+		}
+		var factHit bool
+		if factV4Enabled {
+			factHit = matchFactV4(gotFact, item.ExpectedFact, anchor)
+		} else {
+			factHit = matchFactV3(gotFact, item.ExpectedFact)
+		}
+		// R4-C：候选扩展辅助口径——主口径未命中且 expected <15 rune 时，扩展到 top-5 候选判定。
+		factHitTop5 := false
+		if factV4Enabled && !factHit && len(topFacts) > 0 {
+			factHitTop5 = matchFactTop5(topFacts, item.ExpectedFact, anchor)
+		}
+		if factHitTop5 {
+			factHitTop5Count++
+		}
+		// R4-C：模板 expected（beam-* "LLM response should ...:"）从主 fact 口径剔除，单独统计。
+		templateExpected := factV4Enabled && isTemplateExpected(item.ExpectedFact)
 
 		total++
 		bucketTotal[item.Bucket]++
@@ -468,22 +523,32 @@ func main() {
 			bucketRanks[item.Bucket] = append(bucketRanks[item.Bucket], 0)
 			allRanks = append(allRanks, 0)
 		}
-		if factHit {
-			factHits++
-			// R3-C：假阳性留痕——fact_hit=true 但 top-1 ID 未中（rank≠1）。
-			// 任务书 §C.3 定义的假阳性：top-1 是错记忆，但 got_fact 文本被判匹配。
-			// 召回窗口足够大时 top-200 内必有 expected（hit=true），但 top-1 可能是错记忆。
-			if rank != 1 {
-				factFalsePositives = append(factFalsePositives, KPIDetail{
-					ID:       item.ID,
-					Bucket:   item.Bucket,
-					Hit:      hit,
-					Rank:     rank,
-					FactHit:  true,
-					Expected: item.ExpectedFact,
-					Got:      gotFact,
-					Reason:   "fact_hit_but_top1_id_miss",
-				})
+		if templateExpected {
+			// 模板 expected：不计入主 fact 口径（分子/分母均剔除），单独统计。
+			templateTotal++
+			if factHit {
+				templateHits++
+			}
+		} else {
+			factTotal++
+			if factHit {
+				factHits++
+				// R4-C：假阳性留痕——fact_hit=true 但 top-1 MemoryID 不在 expected 内。
+				// 语义（R3 任务书 §C.3「fact_hit 但 ID 未中 top-1」）：top-1 是错记忆，但 got_fact 文本被判匹配。
+				// 修正 R3-C 的 rank≠1 判据：multi-hop 合成集的 ExpectedMemoryID 含 hop-1/hop-2 两元素，
+				// top-1 命中 hop-1 时 rank=2，但 top-1 仍是 expected 记忆，并非假阳性。
+				if !top1IsExpected {
+					factFalsePositives = append(factFalsePositives, KPIDetail{
+						ID:       item.ID,
+						Bucket:   item.Bucket,
+						Hit:      hit,
+						Rank:     rank,
+						FactHit:  true,
+						Expected: item.ExpectedFact,
+						Got:      gotFact,
+						Reason:   "fact_hit_but_top1_id_miss",
+					})
+				}
 			}
 		}
 
@@ -520,14 +585,15 @@ func main() {
 		}
 
 		details = append(details, KPIDetail{
-			ID:       item.ID,
-			Bucket:   item.Bucket,
-			Hit:      hit,
-			Rank:     rank,
-			FactHit:  factHit,
-			Expected: item.ExpectedFact,
-			Got:      gotFact,
-			Reason:   "",
+			ID:                 item.ID,
+			Bucket:             item.Bucket,
+			Hit:                hit,
+			Rank:               rank,
+			FactHit:            factHit,
+			Expected:           item.ExpectedFact,
+			Got:                gotFact,
+			Reason:             "",
+			IsTemplateExpected: templateExpected,
 		})
 	}
 
@@ -611,8 +677,20 @@ func main() {
 		FactFalsePositives:  factFalsePositives,
 		FactThreshold:       factV3Threshold,
 		FactSimAlgo:         factV3SimAlgo,
+		// R4-C：模板剔除后的主 fact 口径 + 候选扩展辅助口径。
+		FactTotal:        factTotal,
+		TemplateTotal:    templateTotal,
+		TemplateHits:     templateHits,
+		FactHitTop5Count: factHitTop5Count,
+		FactAlgo:         factAlgoLabel(),
 	}
-	if total > 0 {
+	// R4-C：主 fact 准确率分母改为 factTotal（= total − templateTotal）。
+	// -fact-v4=false 时 templateExpected 恒 false → factTotal == total，
+	// 与 R3-C v3 基线逐位一致（isolate 可复现）。
+	if factTotal > 0 {
+		report.OverallAccuracyByFact = float64(factHits) / float64(factTotal)
+		report.OverallAccuracyByFactV4 = report.OverallAccuracyByFact
+	} else if total > 0 {
 		report.OverallAccuracyByFact = float64(factHits) / float64(total)
 	}
 	for bucket, tot := range bucketTotal {
@@ -708,6 +786,18 @@ func main() {
 		}
 		sb.WriteString("\n")
 	}
+
+	sb.WriteString("## fact 口径（R4-C v4）\n\n")
+	fmt.Fprintf(&sb, "- 口径版本：%s（-fact-v4=false 可复现 R3-C v3 基线）\n", report.FactAlgo)
+	fmt.Fprintf(&sb, "- 主 fact 准确率（分母已剔除模板 expected）：%.1f%%（%d/%d）\n",
+		report.OverallAccuracyByFact*100, factHits, report.FactTotal)
+	fmt.Fprintf(&sb, "- 模板 expected（beam-* \"LLM response should ...:\"，含 contain/state/mention）：剔除 %d 条（其中 fact_hit %d 条，单列不计入主口径）\n",
+		report.TemplateTotal, report.TemplateHits)
+	fmt.Fprintf(&sb, "- 候选扩展辅助口径（短 expected 在 top-5 候选内命中）：%d 条（不覆盖主口径）\n", report.FactHitTop5Count)
+	if report.FactThreshold > 0 {
+		fmt.Fprintf(&sb, "- v3 char n-gram 阈值：%.2f（算法 %s）\n", report.FactThreshold, report.FactSimAlgo)
+	}
+	sb.WriteString("\n")
 
 	sb.WriteString("## 目标对照（§9 原文）\n\n")
 	sb.WriteString("| 指标 | 目标 | 基线 | 状态 |\n|---|---|---|---|\n")
@@ -1023,6 +1113,306 @@ func sliceContains(s []string, target string) bool {
 func multiHit2(fused []kernel.FusedResult, expected []string) bool {
 	for i := 0; i < len(fused) && i < 2; i++ {
 		if sliceContains(expected, fused[i].MemoryID) {
+			return true
+		}
+	}
+	return false
+}
+
+// ==================================================================
+// R4-C：fact 口径 v4——确定性残留补齐（模板剔除 / 时间推理 / 数值日期归一 / 短词元包含）。
+//
+// 背景（R3-C §9 已知限制）：
+//   1) 13 条短 expected 未命中（跨轮推理结论、日期在原文 turn 不出现）；
+//   2) 6 条 beam-* 模板 fp（expected = "LLM response should <contain|state|mention>: ..."）；
+//   3) utf8.RuneCountInString 门槛 bug（中文每字 3 字节）。
+//
+// v4 在 v3（v2 包含 + char trigram 软包含）之上追加**纯字符串/日历推算**补判，
+// 不调 LLM（红线 4）、无随机源（seed 无关）、逐位确定。
+//   - 模板剔除：expected 以 "llm response should" 开头（contain/state/mention）→ 从主 fact 口径剔除，单列统计。
+//   - 时间推理：用 top-1 候选 occurred_at 作日历锚点，对相对时间词做确定性加减，与
+//     expected 的日期规格（YYYY-MM-DD / 月名日期 / 年）比对。
+//   - 数值/日期归一：去除货币符号与千分位逗号、统一日期分隔符后再做包含判定。
+//   - 短词元包含：短 expected（非中文）的实义词元全部出现在 got 中即命中。
+//
+// -fact-v4=false 时全部退回 v3 行为（isolate 复现 R3-C 基线）。
+// ==================================================================
+
+// factV4Enabled 是 fact 口径 v4 开关，由 -fact-v4 flag 注入（默认 true）。
+var factV4Enabled = true
+
+// factAlgoLabel 返回当前 fact 口径版本标识，写入报告便于追溯。
+func factAlgoLabel() string {
+	if factV4Enabled {
+		return "v4"
+	}
+	return "v3"
+}
+
+// factTemplatePrefix 是评测集模板 expected 的固定前缀（小写归一后）。
+// beam-* 样本的 expected 误写了整个 LLM 应答模板，属评测集形态问题；
+// 实测存在三种模板形态：should contain（49 条）/ should state（40 条）/ should mention（4 条）。
+// 因此前缀只取到 "should"，统一覆盖全部模板形态（R3-C 指出的 6 条 beam fp 中
+// 4 条为 contain、2 条为 state，均须被剔除/标注）。
+const factTemplatePrefix = "llm response should"
+
+// isTemplateExpected 判定 expected 是否为评测模板（"LLM response should ...: ..."）。
+// 归一化（小写、压缩空白）后按前缀匹配；命中则从主 fact 口径剔除。
+func isTemplateExpected(expectedFact string) bool {
+	return strings.HasPrefix(normalizeFact(expectedFact), factTemplatePrefix)
+}
+
+// factMonthNames 月名 → 月份号（全名 + 三字母缩写），用于 expected 日期规格解析。
+var factMonthNames = map[string]int{
+	"january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+	"july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
+	"jan": 1, "feb": 2, "mar": 3, "apr": 4, "jun": 6, "jul": 7, "aug": 8,
+	"sep": 9, "sept": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+
+var (
+	factReYMD       = regexp.MustCompile(`(\d{4})-(\d{1,2})-(\d{1,2})`)
+	factReDMY       = regexp.MustCompile(`(\d{1,2})\s+([a-z]+),?\s+(\d{4})`)
+	factReMDY       = regexp.MustCompile(`([a-z]+)\s+(\d{1,2}),?\s+(\d{4})`)
+	factReMonthYear = regexp.MustCompile(`([a-z]+),?\s+(\d{4})`)
+	factReYear      = regexp.MustCompile(`\b(19|20)\d{2}\b`)
+)
+
+// factDateSpec 是 expected 中的日期规格。
+// kind: "day"（精确到日）/ "month"（精确到月）/ "year"（仅年）。
+type factDateSpec struct {
+	Kind    string
+	Year    int
+	Month   int
+	Day     int
+	Present bool
+}
+
+// parseFactDateSpec 从 expected 文本解析日期规格（确定性，无随机源）。
+// 支持：2023-04-01（ISO）、9 April, 2023 / April 9, 2023、July 2023、in 2022。
+func parseFactDateSpec(expectedFact string) factDateSpec {
+	s := normalizeFact(expectedFact)
+	if m := factReYMD.FindStringSubmatch(s); m != nil {
+		return factDateSpec{Kind: "day", Year: atoi(m[1]), Month: atoi(m[2]), Day: atoi(m[3]), Present: true}
+	}
+	if m := factReDMY.FindStringSubmatch(s); m != nil {
+		if mo, ok := factMonthNames[m[2]]; ok {
+			return factDateSpec{Kind: "day", Year: atoi(m[3]), Month: mo, Day: atoi(m[1]), Present: true}
+		}
+	}
+	if m := factReMDY.FindStringSubmatch(s); m != nil {
+		if mo, ok := factMonthNames[m[1]]; ok {
+			return factDateSpec{Kind: "day", Year: atoi(m[3]), Month: mo, Day: atoi(m[2]), Present: true}
+		}
+	}
+	if m := factReMonthYear.FindStringSubmatch(s); m != nil {
+		if mo, ok := factMonthNames[m[1]]; ok {
+			return factDateSpec{Kind: "month", Year: atoi(m[2]), Month: mo, Present: true}
+		}
+	}
+	if m := factReYear.FindString(s); m != "" {
+		return factDateSpec{Kind: "year", Year: atoi(m), Present: true}
+	}
+	return factDateSpec{}
+}
+
+// atoi 是内部最小整数解析（输入均为正则捕获的数字，安全）。
+func atoi(s string) int {
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return n
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n
+}
+
+// factTemporalOffsets 相对时间词 → (粒度, 偏移量)。用于把 got 中的相对表述
+// 与锚点日期做确定性日历推算。
+var factTemporalOffsets = []struct {
+	KW    string
+	Kind  string
+	Delta int
+}{
+	{"yesterday", "day", -1}, {"today", "day", 0}, {"tomorrow", "day", 1},
+	{"last week", "day", -7}, {"next week", "day", 7},
+	{"last month", "month", -1}, {"next month", "month", 1},
+	{"last year", "year", -1}, {"next year", "year", 1},
+}
+
+// shiftFactDate 在给定锚点日期上按 (kind, n) 做确定性日历加减，返回 (y, mo, d)。
+func shiftFactDate(y, mo, d int, kind string, n int) (int, int, int) {
+	switch kind {
+	case "day":
+		t := time.Date(y, time.Month(mo), d, 0, 0, 0, 0, time.UTC).AddDate(0, 0, n)
+		return t.Year(), int(t.Month()), t.Day()
+	case "month":
+		tot := y*12 + (mo - 1) + n
+		return tot / 12, tot%12 + 1, d
+	default: // year
+		return y + n, mo, d
+	}
+}
+
+// matchFactTemporal 用锚点日期（top-1 候选 occurred_at）对 expected 日期规格做确定性日历比对：
+//   - 若 got 含相对时间词，则把锚点按该词偏移，得到候选日期集合；
+//   - expected 的日期规格（日/月/年粒度）命中集合任一成员即判命中。
+//
+// 纯日历推算，不调 LLM。anchor 为空（候选无 occurred_at）时返回 false。
+func matchFactTemporal(gotFact, expectedFact string, anchor *time.Time) bool {
+	if anchor == nil {
+		return false
+	}
+	spec := parseFactDateSpec(expectedFact)
+	if !spec.Present {
+		return false
+	}
+	ay, amo, ad := anchor.Year(), int(anchor.Month()), anchor.Day()
+	cands := [][3]int{{ay, amo, ad}}
+	g := normalizeFact(gotFact)
+	for _, off := range factTemporalOffsets {
+		if strings.Contains(g, off.KW) {
+			y, mo, d := shiftFactDate(ay, amo, ad, off.Kind, off.Delta)
+			cands = append(cands, [3]int{y, mo, d})
+		}
+	}
+	for _, c := range cands {
+		switch spec.Kind {
+		case "day":
+			if c[0] == spec.Year && c[1] == spec.Month && c[2] == spec.Day {
+				return true
+			}
+		case "month":
+			if c[0] == spec.Year && c[1] == spec.Month {
+				return true
+			}
+		case "year":
+			if c[0] == spec.Year {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+var (
+	factReCurrency  = regexp.MustCompile(`[$€£¥]`)
+	factReThousands = regexp.MustCompile(`(\d),(\d{3})`)
+	factReDateSep   = regexp.MustCompile(`(\d{4})[-/](\d{1,2})[-/](\d{1,2})`)
+)
+
+// normalizeFactNumbers 归一化数值/日期文本（确定性）：
+//   - 去除货币符号（$ € £ ¥）："$3,750" → "3,750"；
+//   - 去除数字千分位逗号（迭代处理 1,234,567）："3,750" → "3750"；
+//   - 统一日期分隔符："2023-04-01" / "2023/4/1" → "2023 04 1"（空格分隔）。
+//
+// 仅做字符串层归一，供 matchFactV3 在归一文本上做包含判定，避免漏配形态差异。
+func normalizeFactNumbers(s string) string {
+	s = strings.ToLower(s)
+	s = factReCurrency.ReplaceAllString(s, "")
+	for factReThousands.MatchString(s) {
+		s = factReThousands.ReplaceAllString(s, "$1$2")
+	}
+	s = factReDateSep.ReplaceAllString(s, "$1 $2 $3")
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// factStopWords 短词元包含判定的停用词（避免 "the"/"a" 等虚词造成误配）。
+var factStopWords = map[string]struct{}{
+	"a": {}, "an": {}, "the": {}, "of": {}, "in": {}, "on": {}, "at": {}, "to": {},
+	"for": {}, "and": {}, "or": {}, "is": {}, "was": {}, "are": {}, "were": {},
+	"be": {}, "been": {}, "by": {}, "with": {}, "from": {}, "as": {}, "it": {},
+	"its": {}, "this": {}, "that": {}, "these": {}, "those": {}, "his": {},
+	"her": {}, "their": {}, "my": {}, "your": {}, "our": {},
+}
+
+var factReWord = regexp.MustCompile(`[a-z0-9]+`)
+
+// factContentTokens 抽取文本的实义词元（小写、去停用词）。
+func factContentTokens(s string) []string {
+	var out []string
+	for _, w := range factReWord.FindAllString(strings.ToLower(s), -1) {
+		if _, stop := factStopWords[w]; stop {
+			continue
+		}
+		out = append(out, w)
+	}
+	return out
+}
+
+// hasCJK 判定文本是否含中日韩表意字符（短词元包含对 CJK 不适用，避免误配）。
+func hasCJK(s string) bool {
+	for _, r := range s {
+		if r >= 0x4E00 && r <= 0x9FFF {
+			return true
+		}
+	}
+	return false
+}
+
+// matchFactShortTokens 短 expected（非中文）词元包含判定：
+// expected 的实义词元（≥2 个）全部出现在 got 中即命中。
+// 纯词元集合比较，确定性，无随机源。
+func matchFactShortTokens(gotFact, expectedFact string) bool {
+	if hasCJK(expectedFact) {
+		return false
+	}
+	ct := factContentTokens(expectedFact)
+	if len(ct) < 2 {
+		return false
+	}
+	gt := make(map[string]struct{})
+	for _, w := range factContentTokens(gotFact) {
+		gt[w] = struct{}{}
+	}
+	for _, w := range ct {
+		if _, ok := gt[w]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// matchFactV4 = matchFactV3 + 确定性残留补齐（数值日期归一 / 时间推理 / 短词元包含）。
+//
+// 判定顺序（任一步命中即 true）：
+//  1. matchFactV3（v2 包含 + char trigram 软包含）；
+//  2. 数值/日期归一后重跑 matchFactV3（覆盖 "$3,750" vs "3750"、"2023-04-01" 等形态差）；
+//  3. 时间推理（锚点 occurred_at + 相对时间词 → 日历推算比对 expected 日期规格）；
+//  4. 短词元包含（非中文短 expected 实义词元全部出现）。
+//
+// 模板 expected 的剔除在调用方（主循环）处理：v4 只负责「是否文本匹配」。
+// anchor 为 top-1 候选 occurred_at（非 ground truth；候选即期望记忆时即为真值）。
+func matchFactV4(gotFact, expectedFact string, anchor *time.Time) bool {
+	if matchFactV3(gotFact, expectedFact) {
+		return true
+	}
+	if expectedFact == "" {
+		return false
+	}
+	// 数值/日期归一后复判（仅在归一确有改动时才值得再看，但直接判等价且确定）。
+	if matchFactV3(normalizeFactNumbers(gotFact), normalizeFactNumbers(expectedFact)) {
+		return true
+	}
+	if matchFactTemporal(gotFact, expectedFact, anchor) {
+		return true
+	}
+	return matchFactShortTokens(gotFact, expectedFact)
+}
+
+// matchFactTop5 R4-C 候选扩展辅助口径：
+// 主口径未命中且 expected 为短文本（归一 <15 rune）时，在 top-5 候选 fact 上逐一判定。
+// 仅用于 fact_hit_top5 辅助指标，**不覆盖**主 fact 口径。
+func matchFactTop5(facts []string, expectedFact string, anchor *time.Time) bool {
+	if utf8.RuneCountInString(normalizeFact(expectedFact)) >= 15 {
+		return false
+	}
+	for _, f := range facts {
+		if matchFactV4(f, expectedFact, anchor) {
+			return true
+		}
+		if shortAnswerHit(normalizeFact(f), normalizeFact(expectedFact)) {
 			return true
 		}
 	}

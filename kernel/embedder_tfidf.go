@@ -102,14 +102,17 @@ func (v *CharNgramVocab) BuildIDF(corpus []string) {
 
 // Embed 把文本向量化为固定维度 float32 向量（TF-IDF 加权 + L2 归一化）。
 // 空文本 / 空词表 / 无任何 n-gram 命中 → 全零向量（长度 = 词表大小，确定）。
-func (v *CharNgramVocab) Embed(text string) []float32 {
+//
+// R4-D：签名改为 ([]float32, error)，实现 Embedder 接口（永远返回 nil error，
+// 因为 char n-gram 向量化不可能失败）。行为逐位不变——向量数值与 R3-A 完全一致。
+func (v *CharNgramVocab) Embed(text string) ([]float32, error) {
 	vec := make([]float32, len(v.order))
 	if text == "" || len(v.order) == 0 || len(v.idf) == 0 {
-		return vec
+		return vec, nil
 	}
 	grams := charNGrams(text, v.Ngram)
 	if len(grams) == 0 {
-		return vec
+		return vec, nil
 	}
 	var sq float64
 	for i, g := range v.order {
@@ -131,18 +134,26 @@ func (v *CharNgramVocab) Embed(text string) []float32 {
 			vec[i] /= norm
 		}
 	}
-	return vec
+	return vec, nil
 }
 
-// EmbedFn 返回符合 SetEmbedder 签名的向量化闭包。
+// EmbedFn 返回符合 RankFusion.SetEmbedder 函数签名的向量化闭包（向后兼容 R3-A 调用）。
 func (v *CharNgramVocab) EmbedFn() func(string) ([]float32, error) {
 	return func(text string) ([]float32, error) {
-		return v.Embed(text), nil
+		return v.Embed(text)
 	}
 }
 
-// Dim 返回向量维度（词表大小）。
+// Dim 返回向量维度（词表大小）。实现 Embedder 接口。
 func (v *CharNgramVocab) Dim() int { return len(v.order) }
+
+// Name 返回实现名。实现 Embedder 接口。
+func (v *CharNgramVocab) Name() string {
+	if v.Ngram > 0 {
+		return "char-ngram-tfidf-trigram"
+	}
+	return "char-ngram-tfidf"
+}
 
 // SaveJSON 把词表序列化到路径（确定性：词表顺序写入 order）。
 func (v *CharNgramVocab) SaveJSON(path string) error {

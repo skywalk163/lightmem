@@ -65,7 +65,7 @@ type RankFusion struct {
 	AsOf           *string         // 显式回溯日期（YYYY-MM-DD），非空时返回历史版本
 	QueryFrame     *ReferenceFrame // 查询端参考系（供参考系匹配度信号使用）
 
-	embedder func(string) ([]float32, error) // 可选：真实语义向量化（nil 时用召回分近似）
+	embedder Embedder // 可选：真实语义向量化（nil 时用召回分近似；R4-D 起为接口类型）
 }
 
 // FusedResult 融合输出单条（§3.4 响应）。
@@ -142,7 +142,22 @@ func DefaultRankFusion() *RankFusion {
 }
 
 // SetEmbedder 注入真实语义向量化函数（可选）。
-func (rf *RankFusion) SetEmbedder(f func(string) ([]float32, error)) { rf.embedder = f }
+//
+// R4-D：签名保持函数形式（向后兼容 R3-A 以来的所有调用方，含 eval/run_kpi.go
+// 与未来可能的函数式注入），内部适配为 EmbedderFunc 存入接口字段。
+// 需要直接注入 Embedder 接口实现（如未来的 BGE 向量模型）时用 SetEmbedderImpl。
+func (rf *RankFusion) SetEmbedder(f func(string) ([]float32, error)) {
+	if f == nil {
+		rf.embedder = nil
+		return
+	}
+	rf.embedder = EmbedderFunc(f)
+}
+
+// SetEmbedderImpl 注入 Embedder 接口实现（R4-D 新增扩展点）。
+// 与 SetEmbedder 的区别：接受完整 Embedder（含 Dim()/Name()），供未来真实向量模型接入。
+// 两者互斥：后调用者覆盖前者；传 nil 清除已注入的向量化器。
+func (rf *RankFusion) SetEmbedderImpl(e Embedder) { rf.embedder = e }
 
 // DefaultWeightsJSON 返回默认权重的 JSON 表示（供落盘参考 / 校准加载）。
 func DefaultWeightsJSON() []byte {
@@ -329,8 +344,8 @@ func (rf *RankFusion) ConflictDetector(ctx context.Context, top1, top2 *FusedRes
 	}
 	// 向量距离检测：若 embedder 可用，计算事实的向量相似度
 	if rf.embedder != nil {
-		v1, err1 := rf.embedder(top1.Memory.Fact)
-		v2, err2 := rf.embedder(top2.Memory.Fact)
+		v1, err1 := rf.embedder.Embed(top1.Memory.Fact)
+		v2, err2 := rf.embedder.Embed(top2.Memory.Fact)
 		if err1 == nil && err2 == nil && len(v1) > 0 && len(v2) > 0 {
 			sim := cosine(v1, v2)
 			// 相似度高但事实不同 → 冲突
@@ -466,12 +481,12 @@ func (rf *RankFusion) ensureDefaults() {
 func (rf *RankFusion) signalSemantic(_ context.Context, query string, cands []RecalledCandidate) map[string]float64 {
 	out := make(map[string]float64, len(cands))
 	if rf.embedder != nil && query != "" {
-		if qv, err := rf.embedder(query); err == nil {
+		if qv, err := rf.embedder.Embed(query); err == nil {
 			for _, c := range cands {
 				if c.Memory == nil {
 					continue
 				}
-				if cv, err := rf.embedder(c.Memory.Fact); err == nil {
+				if cv, err := rf.embedder.Embed(c.Memory.Fact); err == nil {
 					out[c.Memory.MemoryID] = float64(cosine(qv, cv))
 				}
 			}
