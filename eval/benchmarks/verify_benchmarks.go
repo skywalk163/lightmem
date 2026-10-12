@@ -35,6 +35,8 @@ type EvalItem struct {
 	AsOf             string         `json:"as_of,omitempty"`
 	Memory           *kernel.Memory `json:"memory"`
 	Hop1Memory       *kernel.Memory `json:"hop1_memory,omitempty"`
+	// SecondVersion 时序样本的历史版本（R2 任务B）。
+	SecondVersion *kernel.Memory `json:"second_version,omitempty"`
 }
 
 func load(path string) ([]EvalItem, error) {
@@ -139,6 +141,26 @@ func main() {
 	pass = pass && r3
 	fmt.Printf("[3] 分桶覆盖: %s (%v)\n", ok(r3), bucketCount)
 
+	// 3b. temporal 样本 as_of + second_version 覆盖率（R2 任务B）。
+	// 目标：temporal 桶 as_of 有效样本 >= 90%，second_version >= 90%。
+	tempTotal, asOfOk, svOk := 0, 0, 0
+	for _, it := range all {
+		if !it.IsTemporal {
+			continue
+		}
+		tempTotal++
+		if it.AsOf != "" {
+			asOfOk++
+		}
+		if it.SecondVersion != nil {
+			svOk++
+		}
+	}
+	r3b := tempTotal == 0 || (asOfOk*10 >= tempTotal*9 && svOk*10 >= tempTotal*9)
+	pass = pass && r3b
+	fmt.Printf("[3b] temporal as_of/second_version 覆盖率: %s (temporal=%d, as_of=%d(%.1f%%), second_version=%d(%.1f%%))\n",
+		ok(r3b), tempTotal, asOfOk, pct(asOfOk, tempTotal), svOk, pct(svOk, tempTotal))
+
 	// 4. query 唯一性。
 	seen := map[string]int{}
 	dups := 0
@@ -159,6 +181,13 @@ func main() {
 		fmt.Println("RESULT: FAIL")
 		os.Exit(1)
 	}
+}
+
+func pct(n, d int) float64 {
+	if d == 0 {
+		return 0
+	}
+	return float64(n) / float64(d) * 100
 }
 
 func ok(b bool) string {

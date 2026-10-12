@@ -38,8 +38,12 @@ type RawQuestion struct {
 	ExpectedFact      string   // 主 expected fact（评测用）
 	Bucket            string   // single-hop | multi-hop | temporal | open-domain
 	IsTemporal        bool
-	AsOf              string // 时序用，可空
+	AsOf              string // 时序用，可空（date-only YYYY-MM-DD）
 	ExpectedMemoryIDs []string
+	// SecondVersion 时序样本的历史版本（R2 任务B 新增，仅 temporal 桶设置）。
+	// 该版本在 as_of 之前已过期（ValidUntil < as_of），as_of 查询时被 visibleAt 过滤，
+	// 从而让 as_of 过滤与双版本验证真正生效。非 temporal 样本保持 nil。
+	SecondVersion *kernel.Memory
 }
 
 // RawConversation 归一化对话：若干轮次 + 若干问题。

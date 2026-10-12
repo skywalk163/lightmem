@@ -38,6 +38,8 @@ type EvalItem struct {
 	AsOf             string         `json:"as_of,omitempty"`
 	Memory           *kernel.Memory `json:"memory"`
 	Hop1Memory       *kernel.Memory `json:"hop1_memory,omitempty"`
+	// SecondVersion 时序样本的历史版本（R2 任务B），as_of 过滤需双版本才可验证。
+	SecondVersion *kernel.Memory `json:"second_version,omitempty"`
 }
 
 // sourcePool 按来源归集已归一化的问题（含其记忆）。
@@ -128,6 +130,14 @@ func toItems(convs []bench.RawConversation) []EvalItem {
 					mm := m
 					item.Hop1Memory = &mm
 				}
+			}
+			// R2 任务B：透传 as_of 与 second_version（temporal 桶双版本验证）。
+			if q.AsOf != "" {
+				item.AsOf = q.AsOf
+			}
+			if q.SecondVersion != nil {
+				sv := *q.SecondVersion
+				item.SecondVersion = &sv
 			}
 			out = append(out, item)
 		}

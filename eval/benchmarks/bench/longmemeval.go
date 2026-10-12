@@ -35,20 +35,31 @@ func (LongMemEvalAdapter) Parse(path string) ([]RawConversation, error) {
 		bucket, isTemporal := lmeBucket(r.QuestionType)
 		memID := "lme-" + SanitizeID(r.QuestionID)
 		mem := newMemory(memID, "t-lme", "u-lme", r.Question+" => "+ans, "longmemeval", r.Question, r.QuestionDate)
+		q := RawQuestion{
+			ID:                memID,
+			Query:             r.Question,
+			Expected:          []string{ans},
+			ExpectedFact:      ans,
+			Bucket:            bucket,
+			IsTemporal:        isTemporal,
+			ExpectedMemoryIDs: []string{memID},
+		}
+		// R2 任务B：LME temporal 样本补 as_of（= question_date）与 SecondVersion。
+		// question_date 是「提问时刻」，作为 as_of 使查询只在此时点可见的记忆中检索。
+		if isTemporal {
+			if t, ok := parseDate(r.QuestionDate); ok && !t.IsZero() {
+				q.AsOf = dateOnly(t)
+				q.SecondVersion = makeSecondVersion(mem, q.AsOf)
+			}
+		}
 		out = append(out, RawConversation{
 			ID:     r.QuestionID,
 			Tenant: "t-lme",
 			User:   "u-lme",
 			Turns:  []RawTurn{{Speaker: "user", Text: mem.Fact, Ts: r.QuestionDate}},
-			Questions: []RawQuestion{{
-				ID:                memID,
-				Query:             r.Question,
-				Expected:          []string{ans},
-				ExpectedFact:      ans,
-				Bucket:            bucket,
-				IsTemporal:        isTemporal,
-				ExpectedMemoryIDs: []string{memID},
-			}},
+			Questions: []RawQuestion{
+				q,
+			},
 			MemoryByID: map[string]kernel.Memory{memID: mem},
 		})
 	}

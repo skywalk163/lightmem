@@ -75,10 +75,14 @@ func (LoCoMoAdapter) Parse(path string) ([]RawConversation, error) {
 			}
 			ans := RawToString(qa.Answer)
 			var expIDs []string
+			firstEvidence := ""
 			for _, ev := range qa.Evidence {
 				t, found := turnByDia[ev]
 				if !found {
 					continue
+				}
+				if firstEvidence == "" {
+					firstEvidence = ev
 				}
 				id := MemKey(c.SampleID, ev)
 				if _, exists := memByID[id]; !exists {
@@ -89,6 +93,20 @@ func (LoCoMoAdapter) Parse(path string) ([]RawConversation, error) {
 			if len(expIDs) == 0 {
 				continue
 			}
+			// R2 任务B：LoCoMo temporal(cat2) 样本补 as_of + SecondVersion。
+			// as_of = 证据 turn 日期（若可解析）+1 天（提问时刻在事实发生之后），
+			// SecondVersion 由首个证据记忆派生；无法解析日期则降级为不补。
+			var qAsOf string
+			var qSecond *kernel.Memory
+			if isTemporal && len(expIDs) > 0 {
+				if m0, ok := memByID[expIDs[0]]; ok {
+					if t, ok2 := asOfDate(dateByDia[firstEvidence]); ok2 && !t.IsZero() {
+						asOf := t.AddDate(0, 0, 1).UTC()
+						qAsOf = dateOnly(asOf)
+						qSecond = makeSecondVersion(m0, qAsOf)
+					}
+				}
+			}
 			qs = append(qs, RawQuestion{
 				ID:                expIDs[0],
 				Query:             qa.Question,
@@ -97,6 +115,8 @@ func (LoCoMoAdapter) Parse(path string) ([]RawConversation, error) {
 				Bucket:            bucket,
 				IsTemporal:        isTemporal,
 				ExpectedMemoryIDs: expIDs,
+				AsOf:              qAsOf,
+				SecondVersion:     qSecond,
 			})
 		}
 
