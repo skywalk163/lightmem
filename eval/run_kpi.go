@@ -374,13 +374,16 @@ func main() {
 			factHits++
 		}
 
-		if item.IsTemporal {
+		// R2 任务D：防御性加固——temporal / multi-hop 桶统计只对非对抗样本累计。
+		// 当前数据集下对抗样本已在上方 isAdversarial 分支 continue，此条件恒真，
+		// 仅防止未来数据源把 pollution/injection 标进 temporal/multi-hop 桶污染分母。
+		if item.IsTemporal && !isAdversarial {
 			temporalTotal++
 			if hit {
 				temporalHits++
 			}
 		}
-		if item.Bucket == "multi-hop" {
+		if item.Bucket == "multi-hop" && !isAdversarial {
 			multiSignalTotal++
 			if hit {
 				multiSignalHits++
