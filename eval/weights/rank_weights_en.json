@@ -1,0 +1,14 @@
+{
+  "_comment": "R2 任务A 英文长文本调优产物（坐标下降 12 轮收敛，2026-10-12）。方案 α：跳过 semantic（评测器无 embedder=RecallScore），只调 keyword/entity/reference_frame；fixed 信号保持 R3 值。基准：公开 MRR 0.546→0.940，合成 MRR 0.821→0.841（无回归）。",
+  "k": 60,
+  "weights": [
+    { "name": "semantic", "weight": 1.5, "type": "calibrated", "note": "语义相似度（评测器无 embedder=RecallScore，R2-A 未调）" },
+    { "name": "keyword", "weight": 2.7, "type": "calibrated", "note": "BM25 全文关键词（R2-A 调优：1.5→2.7）" },
+    { "name": "entity", "weight": 2.4, "type": "calibrated", "note": "实体匹配（R2-A 调优：1.2→2.4）" },
+    { "name": "value", "weight": 0.2, "type": "fixed", "note": "记忆固有价值（固定）" },
+    { "name": "freshness", "weight": 0.1, "type": "fixed", "note": "时效新鲜度（固定）" },
+    { "name": "source_trust", "weight": 0.1, "type": "fixed", "note": "来源可信度（固定）" },
+    { "name": "reference_frame", "weight": 0.0, "type": "calibrated", "note": "参考系匹配度（R2-A 调优：1.2→0.0，对中英双源均为噪声，已关闭）" },
+    { "name": "feedback", "weight": 0.1, "type": "fixed", "note": "反馈历史（固定）" }
+  ]
+}

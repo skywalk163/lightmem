@@ -114,6 +114,7 @@ type KPIDetail struct {
 	ID       string `json:"id"`
 	Bucket   string `json:"bucket"`
 	Hit      bool   `json:"hit"`
+	Rank     int    `json:"rank,omitempty"`
 	FactHit  bool   `json:"fact_hit"`
 	Expected string `json:"expected"`
 	Got      string `json:"got"`
@@ -160,11 +161,15 @@ func main() {
 	// 命令行参数（P7-D 公开基准对标复用同一评测链路）：
 	//   -dataset <path>  评测集 JSONL 路径，默认 <dsDir>/all.jsonl（既有合成 KPI 集）
 	//   -report  <name>  报告文件名前缀（不含扩展名），默认 kpi_baseline
+	//   -weights <path>  RankFusion 权重 JSON 路径；空则沿用 ../kernel/rank_fusion.default_weights.json
+	//                    （R2 任务A：支持英文长文本调优权重 rank_weights_en.json 切换）
 	dsFlag := flag.String("dataset", dsDir+"/all.jsonl", "评测集 JSONL 路径（默认合成 all.jsonl）")
 	repFlag := flag.String("report", "kpi_baseline", "报告文件名前缀")
+	wFlag := flag.String("weights", "", "RankFusion 权重 JSON 路径；空则用 ../kernel/rank_fusion.default_weights.json")
 	flag.Parse() // 必须先 Parse 再取值，否则取到的是默认值
 	dsPath := *dsFlag
 	repPrefix := *repFlag
+	wPath := *wFlag
 
 	_ = os.MkdirAll(repDir, 0o755)
 
@@ -187,10 +192,16 @@ func main() {
 	// 若不固定，每条查询的 Now 差数秒，freshness 信号在 30 天半衰期下虽差异极小，
 	// 但经 RRF 排名叠加后仍可导致 top-1 顺序漂移（见收口报告 §4.4 根因 5）。
 	rf.Now = time.Now().UTC()
-	// 权重校准：从 JSON 文件加载（支持 R1/R2/R3 多轮调参）
-	// 路径：从 eval/ 目录运行时，../kernel/ 指向 kernel 目录
-	if err := rf.LoadWeightsFromFile("../kernel/rank_fusion.default_weights.json"); err != nil {
-		log.Fatalf("load weights: %v", err)
+	// 权重加载（R2 任务A）：
+	//   - 未指定 -weights：沿用 ../kernel/rank_fusion.default_weights.json（R3 校准权重，
+	//     与 P7-D 报告 0.546 / 0.821 基线一致，保证回归可复现）。
+	//   - 指定 -weights：加载该 JSON（如 eval/weights/rank_weights_en.json）。
+	weightsPath := wPath
+	if weightsPath == "" {
+		weightsPath = "../kernel/rank_fusion.default_weights.json"
+	}
+	if err := rf.LoadWeightsFromFile(weightsPath); err != nil {
+		log.Fatalf("load weights %s: %v", weightsPath, err)
 	}
 	srv.SetRankFusion(rf)
 
@@ -340,7 +351,10 @@ func main() {
 				}
 			}
 		}
-		factHit := item.ExpectedFact != "" && gotFact == item.ExpectedFact
+		// factHit 使用「包含式」判定（R2 任务C）：公开基准 memory.fact 形态为
+		// "question => answer"（LME/BEAM）或 "speaker: turn"（LoCoMo），与纯答案
+		// expected_fact 精确相等必然 0%，属假阴性；改用归一化后包含判定。
+		factHit := matchFact(gotFact, item.ExpectedFact)
 
 		total++
 		bucketTotal[item.Bucket]++
@@ -377,6 +391,7 @@ func main() {
 			ID:       item.ID,
 			Bucket:   item.Bucket,
 			Hit:      hit,
+			Rank:     rank,
 			FactHit:  factHit,
 			Expected: item.ExpectedFact,
 			Got:      gotFact,
@@ -564,4 +579,71 @@ func check(actual, target float64) string {
 		return "✅ 达标"
 	}
 	return "❌ 未达标"
+}
+
+// ------------------------------------------------------------------
+// R2 任务C：fact 评测口径由「精确相等」改为「归一化后包含」。
+// 纯文本处理，不调 LLM，不改变 kernel 语义。
+// ------------------------------------------------------------------
+
+// matchFact 判定 gotFact 是否匹配 expectedFact（忽略大小写与空白）。
+// 处理公开基准 fact 形态差异：LME/BEAM 形如 "question => answer"、
+// LoCoMo 形如 "speaker: turn"，而 expected_fact 是纯答案。策略：
+//  1. 归一化后精确相等 → true
+//  2. 短 expected（归一化长度 < 4，如数字/单词）→ 仅在 "=>" 后的 answer 段
+//     做边界精确匹配，避免与 question 里的普通词误配（R2 实测 60/60 全部正确恢复）
+//  3. 长 expected → 归一化后双向包含，且长度比 ≥ 0.3（防极短误命中）
+//  4. 任一为空 → false
+//
+// ⚠️ 已知限制：BEAM/LoCoMo 的 expected 是跨多轮对话的推理答案，与 top-1 原文 turn
+// 在文本层面不连续，包含判定无法覆盖（实测 rank=1 仍有 16 条无法用文本匹配），
+// 属数据形态差异，非判定过松。验收时若公开基准 fact 准确率 > 95% 需进一步收窄。
+func matchFact(gotFact, expectedFact string) bool {
+	if expectedFact == "" {
+		return false
+	}
+	a := normalizeFact(gotFact)
+	b := normalizeFact(expectedFact)
+	if a == "" || b == "" {
+		return false
+	}
+	if a == b {
+		return true
+	}
+	// 短 expected：只在 "=>" answer 段做边界精确匹配（LME/BEAM 形态）。
+	if len(b) < 4 {
+		return shortAnswerHit(a, b)
+	}
+	// 长 expected：双向包含 + 长度比防护。
+	if len(a) < len(b)*3/10 {
+		return false
+	}
+	return strings.Contains(a, b) || strings.Contains(b, a)
+}
+
+// shortAnswerHit 短 expected（数字/单词）在 fact 的 answer 段内做边界匹配。
+// 形如 "How many ...? => 4" 时，answer 段为 "4"，精确相等即命中；
+// 若 answer 段为 "... about 4 items"，则要求 b 在 answer 段作为整词出现。
+func shortAnswerHit(fact, exp string) bool {
+	_, answer, ok := strings.Cut(fact, "=>")
+	if !ok {
+		answer = fact
+	}
+	answer = strings.TrimSpace(answer)
+	if answer == "" {
+		return false
+	}
+	if answer == exp {
+		return true
+	}
+	// 整词边界匹配：answer 以 exp 开头/结尾，或 answer 内出现 " exp "。
+	return strings.HasPrefix(answer, exp+" ") ||
+		strings.HasSuffix(answer, " "+exp) ||
+		strings.Contains(" "+answer+" ", " "+exp+" ")
+}
+
+// normalizeFact 归一化：小写、去除首尾空白、压缩连续空白。
+func normalizeFact(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	return strings.Join(strings.Fields(s), " ")
 }
