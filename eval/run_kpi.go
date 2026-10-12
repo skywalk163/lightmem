@@ -19,6 +19,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/lightmem/kernel"
 )
@@ -74,6 +75,14 @@ type KPIReport struct {
 	BucketMRR map[string]float64 `json:"bucket_mrr,omitempty"`
 	// OverallMRR 总体 MRR
 	OverallMRR float64 `json:"overall_mrr,omitempty"`
+	// FactFalsePositives R3-C：fact_hit=true 但 ID 未命中 top-1 的样本。
+	// 这是 char n-gram 相似度引入的假阳性监控口径——若合成集此类样本 >0.5%，
+	// 说明阈值过松，需调高。仅在非空时输出，避免报告膨胀。
+	FactFalsePositives []KPIDetail `json:"fact_false_positives,omitempty"`
+	// FactThreshold R3-C：本次运行使用的 matchFactV3 char n-gram 阈值。
+	FactThreshold float64 `json:"fact_threshold,omitempty"`
+	// FactSimAlgo R3-C：本次运行使用的相似度算法 dice|contain。
+	FactSimAlgo string `json:"fact_sim_algo,omitempty"`
 }
 
 // CostTracker 成本追踪（§9 评测增强）。
@@ -166,10 +175,18 @@ func main() {
 	dsFlag := flag.String("dataset", dsDir+"/all.jsonl", "评测集 JSONL 路径（默认合成 all.jsonl）")
 	repFlag := flag.String("report", "kpi_baseline", "报告文件名前缀")
 	wFlag := flag.String("weights", "", "RankFusion 权重 JSON 路径；空则用 ../kernel/rank_fusion.default_weights.json")
+	// R3-C：fact 口径 v3 的 char n-gram 相似度阈值。
+	// 0.55 为推荐起点；阈值敏感性分析在 0.4/0.5/0.55/0.6/0.7 五档下做。
+	factThr := flag.Float64("fact-threshold", 0.55, "R3-C: matchFactV3 char trigram 相似度阈值（仅当 R2 matchFact v2 未命中时生效）")
+	// R3-C：相似度算法选择。dice=任务书建议的 Dice 系数；contain=containment（软包含，
+	// 更适合 got 是 "speaker: turn" 长文本而 expected 是短答案的场景）。
+	factSim := flag.String("fact-sim", "dice", "R3-C: fact v3 相似度算法 dice|contain")
 	flag.Parse() // 必须先 Parse 再取值，否则取到的是默认值
 	dsPath := *dsFlag
 	repPrefix := *repFlag
 	wPath := *wFlag
+	factV3Threshold = *factThr
+	factV3SimAlgo = *factSim
 
 	_ = os.MkdirAll(repDir, 0o755)
 
@@ -222,6 +239,10 @@ func main() {
 	// MRR 追踪：每条查询的 reciprocal rank
 	bucketRanks := map[string][]int{}
 	allRanks := []int{}
+
+	// R3-C：假阳性收集——fact_hit=true 但 ID 未命中 top-1 的样本。
+	// 用于阈值敏感性分析与假阳性抽查。
+	var factFalsePositives []KPIDetail
 
 	// 污染窗口追踪
 	windowSize := 100
@@ -351,10 +372,12 @@ func main() {
 				}
 			}
 		}
-		// factHit 使用「包含式」判定（R2 任务C）：公开基准 memory.fact 形态为
-		// "question => answer"（LME/BEAM）或 "speaker: turn"（LoCoMo），与纯答案
-		// expected_fact 精确相等必然 0%，属假阴性；改用归一化后包含判定。
-		factHit := matchFact(gotFact, item.ExpectedFact)
+		// factHit 使用「包含式 v2 + char n-gram 相似度 v3」判定（R2 任务C + R3-C）：
+		//   v2：归一化后包含/短答案边界匹配（覆盖 LME/BEAM "Q => A"、LoCoMo "speaker: turn"）。
+		//   v3：v2 未命中且 expected 归一化长度 ≥20 时，用 char trigram Dice 系数补判，
+		//       覆盖 BEAM/LoCoMo 跨轮推理型 expected_fact（与 top-1 原文 turn 文本不连续）。
+		// 纯字符串处理，不调 LLM（红线 4），seed 无关（无随机源）。
+		factHit := matchFactV3(gotFact, item.ExpectedFact)
 
 		total++
 		bucketTotal[item.Bucket]++
@@ -372,6 +395,21 @@ func main() {
 		}
 		if factHit {
 			factHits++
+			// R3-C：假阳性留痕——fact_hit=true 但 top-1 ID 未中（rank≠1）。
+			// 任务书 §C.3 定义的假阳性：top-1 是错记忆，但 got_fact 文本被判匹配。
+			// 召回窗口足够大时 top-200 内必有 expected（hit=true），但 top-1 可能是错记忆。
+			if rank != 1 {
+				factFalsePositives = append(factFalsePositives, KPIDetail{
+					ID:       item.ID,
+					Bucket:   item.Bucket,
+					Hit:      hit,
+					Rank:     rank,
+					FactHit:  true,
+					Expected: item.ExpectedFact,
+					Got:      gotFact,
+					Reason:   "fact_hit_but_top1_id_miss",
+				})
+			}
 		}
 
 		// R2 任务D：防御性加固——temporal / multi-hop 桶统计只对非对抗样本累计。
@@ -479,6 +517,9 @@ func main() {
 		PollutionTrend:      pollutionTrend,
 		BucketMRR:           bucketMRR,
 		OverallMRR:          overallMRR,
+		FactFalsePositives:  factFalsePositives,
+		FactThreshold:       factV3Threshold,
+		FactSimAlgo:         factV3SimAlgo,
 	}
 	if total > 0 {
 		report.OverallAccuracyByFact = float64(factHits) / float64(total)
@@ -649,4 +690,123 @@ func shortAnswerHit(fact, exp string) bool {
 func normalizeFact(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	return strings.Join(strings.Fields(s), " ")
+}
+
+// ------------------------------------------------------------------
+// R3-C：fact 口径 v3——char n-gram（trigram）Dice 相似度补判。
+// 背景：R2 收口 §8.2 实测 rank=1 内仍有 21/583 条公开基准样本 fact 未命中，
+// 主要是 BEAM/LoCoMo 跨轮推理型 expected_fact（如 "Toy drive, Community food
+// drive, veterans, domestic violence"）与 top-1 原文 turn（如 "John: We held
+// some events ... went to a homeless shelter ..."）在文本层面不连续，任何
+// 字符串包含判定都无法覆盖。v3 用确定性 char trigram Dice 系数补判，不调 LLM。
+// ------------------------------------------------------------------
+
+// factV3Threshold 是 matchFactV3 的 char trigram 相似度阈值。
+// 由 -fact-threshold flag 注入（默认 0.55）；阈值敏感性分析在 0.4/0.5/0.55/0.6/0.7 五档下做。
+var factV3Threshold = 0.55
+
+// factV3SimAlgo 是 matchFactV3 使用的相似度算法：
+//
+//	"dice"       — Dice 系数 2|A∩B|/(|A|+|B|)（任务书建议；保守，长 got 下被稀释）
+//	"contain"    — containment |A∩B|/|B|（exp 的 n-gram 有多少出现在 got 里；软包含，更适合长 got/短 exp）
+var factV3SimAlgo = "dice"
+
+// charNGramSimilarity 计算两段归一化文本的 char n-gram Dice 系数：
+//
+//	2 * |A ∩ B| / (|A| + |B|)
+//
+// 纯字符串处理，不调 LLM，无随机源（确定性）。
+// 若任一方 n-gram 集合为空，返回 0.0。
+func charNGramSimilarity(a, b string, n int) float64 {
+	if n <= 0 {
+		n = 3
+	}
+	gramsA := make(map[string]struct{})
+	gramsB := make(map[string]struct{})
+	ra := []rune(a)
+	rb := []rune(b)
+	for i := 0; i+n <= len(ra); i++ {
+		gramsA[string(ra[i:i+n])] = struct{}{}
+	}
+	for i := 0; i+n <= len(rb); i++ {
+		gramsB[string(rb[i:i+n])] = struct{}{}
+	}
+	if len(gramsA) == 0 || len(gramsB) == 0 {
+		return 0.0
+	}
+	inter := 0
+	for g := range gramsA {
+		if _, ok := gramsB[g]; ok {
+			inter++
+		}
+	}
+	return 2.0 * float64(inter) / float64(len(gramsA)+len(gramsB))
+}
+
+// charNGramContainment 计算 containment（软包含）：exp 的 n-gram 有多少出现在 got 里。
+//
+//	|grams(exp) ∩ grams(got)| / |grams(exp)|
+//
+// 与 Dice 相比，containment 不惩罚 got 远长于 exp 的情况（LoCoMo "speaker: turn"
+// vs 短答案），更符合「expected_fact 是否被 got_fact 软覆盖」的语义。
+func charNGramContainment(exp, got string, n int) float64 {
+	if n <= 0 {
+		n = 3
+	}
+	gramsExp := make(map[string]struct{})
+	gramsGot := make(map[string]struct{})
+	re := []rune(exp)
+	rg := []rune(got)
+	for i := 0; i+n <= len(re); i++ {
+		gramsExp[string(re[i:i+n])] = struct{}{}
+	}
+	for i := 0; i+n <= len(rg); i++ {
+		gramsGot[string(rg[i:i+n])] = struct{}{}
+	}
+	if len(gramsExp) == 0 {
+		return 0.0
+	}
+	inter := 0
+	for g := range gramsExp {
+		if _, ok := gramsGot[g]; ok {
+			inter++
+		}
+	}
+	return float64(inter) / float64(len(gramsExp))
+}
+
+// factV3Score 按当前 factV3SimAlgo 计算相似度分数。
+func factV3Score(got, exp string) float64 {
+	if factV3SimAlgo == "contain" {
+		return charNGramContainment(exp, got, 3)
+	}
+	return charNGramSimilarity(got, exp, 3)
+}
+
+// matchFactV3 = matchFact(v2 包含式) + char trigram containment 补判。
+//
+// 判定顺序：
+//  1. 先跑 R2 的 matchFact（归一化包含/短答案边界匹配）；命中即 true。
+//  2. 未命中时，若 expected 归一化长度 < 15 字符，直接 false（短 expected 易误配，
+//     不进入相似度补判——短答案已由 v2 的 shortAnswerHit 覆盖；合成集实测此门槛
+//     把中文短模板 expected 的假阳性从 166 压到 1）。
+//  3. 否则计算 factV3Score(got, expected)；≥ factV3Threshold 则 true。
+//
+// 假阳性防护：阈值在报告中做敏感性分析；合成集 fact_hit 但 ID 未中 top-1 的样本
+// 由 KPIReport.FactFalsePositives 留痕，>0.5% 即视为阈值过松。
+func matchFactV3(gotFact, expectedFact string) bool {
+	if matchFact(gotFact, expectedFact) {
+		return true
+	}
+	b := normalizeFact(expectedFact)
+	// 注意：Go len(string) 返回字节数，中文每字 3 字节，必须用 RuneCountInString。
+	if utf8.RuneCountInString(b) < 15 {
+		return false
+	}
+	a := normalizeFact(gotFact)
+	if a == "" {
+		return false
+	}
+	sim := factV3Score(a, b)
+	return sim >= factV3Threshold
 }
