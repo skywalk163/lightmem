@@ -21,6 +21,9 @@ type APIServer struct {
 	policy   *WritePolicyRegistry            // 写策略注册表（§3.15）；nil 时用内置默认策略
 	// FeedbackLoop：rejected_ids 记录用户拒绝的记忆，后续检索时过滤。
 	rejectedIDs []string
+	// R4-A：multi-hop 二次 hop 证据重排配置。默认零值 = Enabled:false，
+	// 即 RecallAndFuse 逐位保持既有单跳行为（见 kernel/multihop.go）。
+	multiHop MultiHopConfig
 }
 
 func NewAPIServer(p *Profile, b StorageBackend) *APIServer {
@@ -355,15 +358,15 @@ func (s *APIServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	snap.TotalMemories = total
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"lims_recall_latency_ms":    snap.RecallLatencyMS,
-		"lims_hit_rate":             snap.HitRate,
-		"lims_pollution_rate":       snap.PollutionRate,
-		"lims_layer_counts":         snap.LayerCounts,
-		"lims_total_memories":       snap.TotalMemories,
-		"lims_total_queries":        snap.TotalQueries,
-		"lims_signal_latencies_ms":  snap.SignalLatencies,
-		"lims_feedback_stats":       snap.FeedbackStats,
-		"lims_lifecycle_stats":      snap.LifecycleStats,
+		"lims_recall_latency_ms":   snap.RecallLatencyMS,
+		"lims_hit_rate":            snap.HitRate,
+		"lims_pollution_rate":      snap.PollutionRate,
+		"lims_layer_counts":        snap.LayerCounts,
+		"lims_total_memories":      snap.TotalMemories,
+		"lims_total_queries":       snap.TotalQueries,
+		"lims_signal_latencies_ms": snap.SignalLatencies,
+		"lims_feedback_stats":      snap.FeedbackStats,
+		"lims_lifecycle_stats":     snap.LifecycleStats,
 	})
 }
 

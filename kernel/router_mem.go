@@ -133,37 +133,37 @@ type RouterResult struct {
 	Fused        []FusedResult   `json:"fused,omitempty"`
 	Mode         string          `json:"mode,omitempty"`
 	// Trace 检索 trace：完整检索链路，便于调试和审计。
-	Trace        *RetrievalTrace `json:"trace,omitempty"`
+	Trace *RetrievalTrace `json:"trace,omitempty"`
 }
 
 // TraceEntry 单条候选的 trace 条目（兼容旧版）。
 type TraceEntry struct {
-	MemoryID string            `json:"memory_id"`
-	Fact     string            `json:"fact"`
-	Score    float64           `json:"score"`
+	MemoryID string             `json:"memory_id"`
+	Fact     string             `json:"fact"`
+	Score    float64            `json:"score"`
 	Signals  map[string]float64 `json:"signals"`
 }
 
 // RetrievalTrace 完整检索 trace（§3.4）。
 // 记录每层召回的候选数、每信号的打分、融合后的排名。
 type RetrievalTrace struct {
-	Query       string                 `json:"query"`
-	Timestamp   string                 `json:"timestamp"`
-	Layers      []TraceLayer           `json:"layers"`
-	Signals     []TraceSignal          `json:"signals"`
-	Ranked      []TraceRankedCandidate `json:"ranked"`
-	Mode        string                 `json:"mode"`
-	TotalCands  int                    `json:"total_candidates"`
-	FilteredCands int                `json:"filtered_candidates"`
+	Query         string                 `json:"query"`
+	Timestamp     string                 `json:"timestamp"`
+	Layers        []TraceLayer           `json:"layers"`
+	Signals       []TraceSignal          `json:"signals"`
+	Ranked        []TraceRankedCandidate `json:"ranked"`
+	Mode          string                 `json:"mode"`
+	TotalCands    int                    `json:"total_candidates"`
+	FilteredCands int                    `json:"filtered_candidates"`
 }
 
 // TraceLayer 单层召回的 trace。
 type TraceLayer struct {
-	Layer     string         `json:"layer"`
-	Candidates []TraceCand   `json:"candidates"`
-	Count     int            `json:"count"`
-	Skipped   bool           `json:"skipped,omitempty"`
-	Note      string         `json:"note,omitempty"`
+	Layer      string      `json:"layer"`
+	Candidates []TraceCand `json:"candidates"`
+	Count      int         `json:"count"`
+	Skipped    bool        `json:"skipped,omitempty"`
+	Note       string      `json:"note,omitempty"`
 }
 
 // TraceCand 单条候选的 trace。
@@ -176,23 +176,23 @@ type TraceCand struct {
 
 // TraceSignal 单信号的 trace。
 type TraceSignal struct {
-	Name   string         `json:"name"`
-	Weight float64        `json:"weight"`
-	Type   string         `json:"type"`
+	Name   string             `json:"name"`
+	Weight float64            `json:"weight"`
+	Type   string             `json:"type"`
 	Scores map[string]float64 `json:"scores"`
 }
 
 // TraceRankedCandidate 融合后的排名候选。
 type TraceRankedCandidate struct {
-	MemoryID string            `json:"memory_id"`
-	Fact     string            `json:"fact"`
-	Score    float64           `json:"score"`
-	Rank     int               `json:"rank"`
-	Ranks    map[string]int    `json:"ranks,omitempty"`
-	SignalScores map[string]float64 `json:"signal_scores,omitempty"`
-	Layer    string            `json:"layer"`
-	LowConfidence bool         `json:"low_confidence,omitempty"`
-	RequiresConfirmation bool `json:"requires_confirmation,omitempty"`
+	MemoryID             string             `json:"memory_id"`
+	Fact                 string             `json:"fact"`
+	Score                float64            `json:"score"`
+	Rank                 int                `json:"rank"`
+	Ranks                map[string]int     `json:"ranks,omitempty"`
+	SignalScores         map[string]float64 `json:"signal_scores,omitempty"`
+	Layer                string             `json:"layer"`
+	LowConfidence        bool               `json:"low_confidence,omitempty"`
+	RequiresConfirmation bool               `json:"requires_confirmation,omitempty"`
 }
 
 // ------------------------------------------------------------------
@@ -216,134 +216,140 @@ func (s *APIServer) Route(ctx context.Context, rc RouterContext) (RouterResult, 
 	return res, nil
 }
 
-	// RecallAndFuse 执行 A1+A2：跨层召回后做多信号 rank 融合。
-	// FeedbackLoop：过滤用户拒绝的记忆（rejectedIDs）。
-	func (s *APIServer) RecallAndFuse(ctx context.Context, rc RouterContext) (RouterResult, error) {
-		res, err := s.Route(ctx, rc)
-		if err != nil {
-			return res, err
-		}
-		var flat []RecalledCandidate
-		for _, l := range res.Recalled {
-			for _, c := range l.Candidates {
-				if c != nil && c.Memory != nil {
-					// 过滤已拒绝的记忆
-					rejected := false
-					for _, rid := range s.rejectedIDs {
-						if c.Memory.MemoryID == rid {
-							rejected = true
-							break
-						}
-					}
-					if !rejected {
-						flat = append(flat, *c)
-					}
-				}
-			}
-		}
-		rf := s.fusion
-		if rf == nil {
-			rf = DefaultRankFusion()
-		}
-		// 确定性：仅当注入方未显式设置 Now 时才用当前时刻。
-		// 评测集跑批时由 run_kpi.go 固定 Now，避免逐条 freshness 抖动。
-		if rf.Now.IsZero() {
-			rf.Now = time.Now().UTC()
-		}
-		rf.AsOf = rc.AsOf
-		rf.QueryFrame = rc.frame()
-		fused := rf.Fuse(ctx, rc.Text, flat)
-		res.Fused = fused
-
-		// 指标：记录检索结果
-		metrics := GetMetricsCollector()
-		if len(fused) > 0 {
-			metrics.RecordHit()
-		} else {
-			metrics.RecordMiss()
-		}
-		// 记录层容量
-		for _, l := range res.Recalled {
-			metrics.SetLayerCount(MemoryLayer(l.Layer), int64(l.Count))
-		}
-
-		// 构建完整检索 trace
-		trace := &RetrievalTrace{
-			Query:        rc.Text,
-			Timestamp:    time.Now().UTC().Format(time.RFC3339),
-			Mode:         res.Mode,
-			TotalCands:   len(flat),
-			FilteredCands: len(flat),
-		}
-
-		// 填充各层召回信息
-		for _, l := range res.Recalled {
-			layer := TraceLayer{
-				Layer: l.Layer,
-				Count: l.Count,
-				Skipped: l.Skipped,
-				Note: l.Note,
-			}
-			for _, c := range l.Candidates {
-				if c != nil && c.Memory != nil {
-					layer.Candidates = append(layer.Candidates, TraceCand{
-						MemoryID: c.Memory.MemoryID,
-						Fact:     c.Memory.Fact,
-						Score:    c.RecallScore,
-						Layer:    string(c.Layer),
-					})
-				}
-			}
-			trace.Layers = append(trace.Layers, layer)
-		}
-
-		// 填充各信号打分
-		for _, sig := range rf.Signals {
-			signal := TraceSignal{
-				Name:   sig.Name,
-				Weight: sig.Weight,
-				Type:   sig.Type,
-				Scores: map[string]float64{},
-			}
-			// 重新计算该信号的打分
-			raw := sig.Fn(ctx, rc.Text, flat)
-			for id, score := range raw {
-				signal.Scores[id] = score
-			}
-			trace.Signals = append(trace.Signals, signal)
-		}
-
-		// 融合后的排名
-		for i, f := range fused {
-			ranked := TraceRankedCandidate{
-				MemoryID: f.MemoryID,
-				Fact:     f.Fact,
-				Score:    f.Score,
-				Rank:     i + 1,
-				Ranks:    f.Ranks,
-				SignalScores: f.SignalScores,
-				Layer:    string(f.Layer),
-				LowConfidence: f.LowConfidence,
-				RequiresConfirmation: f.RequiresConfirmation,
-			}
-			trace.Ranked = append(trace.Ranked, ranked)
-		}
-
-		res.Trace = trace
-
-		if len(fused) == 0 {
-			res.Mode = "empty"
-		} else if fused[0].RequiresConfirmation {
-			res.Mode = "conflict"
-		} else if fused[0].LowConfidence {
-			res.Mode = "low_confidence"
-		} else if len(fused) > 1 {
-			res.Mode = "fused"
-		} else {
-			res.Mode = "unique"
-		}
-		return res, nil
+// RecallAndFuse 执行 A1+A2：跨层召回后做多信号 rank 融合。
+// FeedbackLoop：过滤用户拒绝的记忆（rejectedIDs）。
+func (s *APIServer) RecallAndFuse(ctx context.Context, rc RouterContext) (RouterResult, error) {
+	res, err := s.Route(ctx, rc)
+	if err != nil {
+		return res, err
 	}
+	var flat []RecalledCandidate
+	for _, l := range res.Recalled {
+		for _, c := range l.Candidates {
+			if c != nil && c.Memory != nil {
+				// 过滤已拒绝的记忆
+				rejected := false
+				for _, rid := range s.rejectedIDs {
+					if c.Memory.MemoryID == rid {
+						rejected = true
+						break
+					}
+				}
+				if !rejected {
+					flat = append(flat, *c)
+				}
+			}
+		}
+	}
+	rf := s.fusion
+	if rf == nil {
+		rf = DefaultRankFusion()
+	}
+	// 确定性：仅当注入方未显式设置 Now 时才用当前时刻。
+	// 评测集跑批时由 run_kpi.go 固定 Now，避免逐条 freshness 抖动。
+	if rf.Now.IsZero() {
+		rf.Now = time.Now().UTC()
+	}
+	rf.AsOf = rc.AsOf
+	rf.QueryFrame = rc.frame()
+	fused := rf.Fuse(ctx, rc.Text, flat)
+	// R4-A：二次 hop 证据重排（hop 链式推理 + 上下文增强）。
+	// 仅当调用方显式开启（APIServer.SetMultiHopConfig / RecallAndFuseMultiHop）时生效；
+	// 默认 Enabled=false → 本行不改变任何行为，单跳路径逐位不变。
+	if s.multiHop.Enabled {
+		fused = MultiHopReRank(rc.Text, fused, s.multiHop)
+	}
+	res.Fused = fused
+
+	// 指标：记录检索结果
+	metrics := GetMetricsCollector()
+	if len(fused) > 0 {
+		metrics.RecordHit()
+	} else {
+		metrics.RecordMiss()
+	}
+	// 记录层容量
+	for _, l := range res.Recalled {
+		metrics.SetLayerCount(MemoryLayer(l.Layer), int64(l.Count))
+	}
+
+	// 构建完整检索 trace
+	trace := &RetrievalTrace{
+		Query:         rc.Text,
+		Timestamp:     time.Now().UTC().Format(time.RFC3339),
+		Mode:          res.Mode,
+		TotalCands:    len(flat),
+		FilteredCands: len(flat),
+	}
+
+	// 填充各层召回信息
+	for _, l := range res.Recalled {
+		layer := TraceLayer{
+			Layer:   l.Layer,
+			Count:   l.Count,
+			Skipped: l.Skipped,
+			Note:    l.Note,
+		}
+		for _, c := range l.Candidates {
+			if c != nil && c.Memory != nil {
+				layer.Candidates = append(layer.Candidates, TraceCand{
+					MemoryID: c.Memory.MemoryID,
+					Fact:     c.Memory.Fact,
+					Score:    c.RecallScore,
+					Layer:    string(c.Layer),
+				})
+			}
+		}
+		trace.Layers = append(trace.Layers, layer)
+	}
+
+	// 填充各信号打分
+	for _, sig := range rf.Signals {
+		signal := TraceSignal{
+			Name:   sig.Name,
+			Weight: sig.Weight,
+			Type:   sig.Type,
+			Scores: map[string]float64{},
+		}
+		// 重新计算该信号的打分
+		raw := sig.Fn(ctx, rc.Text, flat)
+		for id, score := range raw {
+			signal.Scores[id] = score
+		}
+		trace.Signals = append(trace.Signals, signal)
+	}
+
+	// 融合后的排名
+	for i, f := range fused {
+		ranked := TraceRankedCandidate{
+			MemoryID:             f.MemoryID,
+			Fact:                 f.Fact,
+			Score:                f.Score,
+			Rank:                 i + 1,
+			Ranks:                f.Ranks,
+			SignalScores:         f.SignalScores,
+			Layer:                string(f.Layer),
+			LowConfidence:        f.LowConfidence,
+			RequiresConfirmation: f.RequiresConfirmation,
+		}
+		trace.Ranked = append(trace.Ranked, ranked)
+	}
+
+	res.Trace = trace
+
+	if len(fused) == 0 {
+		res.Mode = "empty"
+	} else if fused[0].RequiresConfirmation {
+		res.Mode = "conflict"
+	} else if fused[0].LowConfidence {
+		res.Mode = "low_confidence"
+	} else if len(fused) > 1 {
+		res.Mode = "fused"
+	} else {
+		res.Mode = "unique"
+	}
+	return res, nil
+}
 
 // RecallLayers 四层并行召回（§2.2 + §2.3）。
 // 硬过滤先做：tenant/user/project/visibility（§3.2 安全硬过滤清单）。

@@ -40,10 +40,13 @@ func TestRegistryRegisterRemoveOrder(t *testing.T) {
 func TestDefaultWritePoliciesInstalled(t *testing.T) {
 	r := NewDefaultWritePolicyRegistry()
 	names := r.Names()
-	if len(names) != 5 {
-		t.Fatalf("want 5 builtin policies, got %d: %v", len(names), names)
+	// R4-A 顺带修正：FeedbackPolicy（feedback_loop，ce38cd5 引入）未被本用例纳入，
+	// 自 2026-10-11 起该用例恒红（与 R138-B 遗留的不可编译文件同族）。
+	// 只是把期望更新为实际的 6 条内置策略，不改任何策略行为。
+	if len(names) != 6 {
+		t.Fatalf("want 6 builtin policies, got %d: %v", len(names), names)
 	}
-	for _, want := range []string{"goal_constraints", "permission", "redaction", "poisoning_guard", "idempotency"} {
+	for _, want := range []string{"goal_constraints", "permission", "redaction", "poisoning_guard", "idempotency", "feedback_loop"} {
 		found := false
 		for _, n := range names {
 			if n == want {

@@ -249,6 +249,17 @@ func main() {
 	// R4-B：reference_frame 诊断打印——指定样本 id，打印查询端坐标与 top-5 候选
 	// 的 signalReferenceFrame 打分，用于复检参考系信号区分度（R3-A §8 风险）。
 	diagRef := flag.String("diag-ref", "", "R4-B: 诊断打印：指定 reference_frame 样本 id，打印查询端坐标与 top-5 候选的 reference_frame 信号分")
+	// R4-A：multi-hop 二次 hop 证据重排开关。
+	//   默认开启（kernel/multihop.go 内的 MultiHopReRank）；-no-multihop 关闭，
+	//   用于 isolate 复现 R3-D 基线（公开基准 multi-hop 口径 A 0.9455）。
+	noMultiHop := flag.Bool("no-multihop", false, "R4-A: 关闭 multi-hop 二次 hop 证据重排（isolate 复现 R3-D 基线）")
+	// R4-A：hop 链式推理深度。
+	//   <=1：只用 L1/L2 候选自身证据（默认；双源实测最优）；
+	//   >=2：追加 L3 上下文增强（邻接记忆补强，默认不启用，见交付报告 isolate 表）。
+	hopDepth := flag.Int("hop-depth", 1, "R4-A: hop 链式推理深度（>=2 启用上下文增强）")
+	// R4-A：multi-hop 诊断打印——指定样本 id（可逗号分隔多个），打印 hop 锚点、
+	// top-5 候选的 hop 证据（answers / cover / hop-2 推理链）与重排前后的 top-1。
+	diagMH := flag.String("diag-mh", "", "R4-A: 诊断打印：指定样本 id（逗号分隔多个），打印 hop 锚点与 top-5 候选的 hop 证据链")
 	flag.Parse() // 必须先 Parse 再取值，否则取到的是默认值
 	dsPath := *dsFlag
 	repPrefix := *repFlag
@@ -260,6 +271,13 @@ func main() {
 	//（把 R3-B 的默认关闭翻转为默认开启）。-now-asof=false 可显式关闭。
 	// -now-asof 默认值本身保持 false（R3-B 决策，避免隐式改变历史基线）。
 	nowAsOfOn := *nowAsOf || *nowAsOfDefault
+	// R4-A：-diag-mh 支持逗号分隔的多个样本 id（确定性：固定按 flag 顺序建集合）。
+	diagMHIDs := map[string]bool{}
+	for _, id := range strings.Split(*diagMH, ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			diagMHIDs[id] = true
+		}
+	}
 
 	_ = os.MkdirAll(repDir, 0o755)
 
@@ -314,6 +332,18 @@ func main() {
 		log.Printf("[R3-A] embedder injected: ngram=%d dim=%d docs=%d", v.Ngram, v.Dim(), v.N)
 	}
 	srv.SetRankFusion(rf)
+
+	// R4-A：装配 multi-hop 二次 hop 证据重排（kernel/multihop.go）。
+	//   默认开启（深度 1：L1 直接回答 + L2 锚点覆盖）；-no-multihop 关闭以 isolate 复现基线。
+	//   上下文增强（L3，Depth>=2）默认关闭：双源实测对 multi-hop hit@2 有回归。
+	mhCfg := kernel.DefaultMultiHopConfig()
+	mhCfg.Enabled = !*noMultiHop
+	mhCfg.Depth = *hopDepth
+	if *hopDepth >= 2 && mhCfg.ContextWindow <= 0 {
+		mhCfg.ContextWindow = 30 * 24 * time.Hour // 默认 30 天邻接窗（仅 Depth>=2 生效）
+	}
+	srv.SetMultiHopConfig(mhCfg)
+	log.Printf("[R4-A] multi-hop rerank: enabled=%v depth=%d ctx=%v", mhCfg.Enabled, mhCfg.Depth, mhCfg.ContextWindow)
 
 	// 3) 逐条写入记忆 + 跑查询。
 	var details []KPIDetail
@@ -472,6 +502,24 @@ func main() {
 					memRefFrameField(r.Memory, "project"),
 					memRefFrameField(r.Memory, "scene"))
 			}
+		}
+		// R4-A：multi-hop 诊断打印——hop 锚点 + top-5 候选的 hop 证据链。
+		if *diagMH != "" && diagMHIDs[strings.TrimSpace(item.ID)] {
+			anchors := kernel.HopAnchors(item.Query)
+			log.Printf("[R4-A diag-mh] id=%s bucket=%s anchors(%d)=%v",
+				item.ID, item.Bucket, len(anchors), anchors)
+			log.Printf("  query=%q", item.Query)
+			for i, r := range res.Fused {
+				if i >= 5 {
+					break
+				}
+				answers, cover := kernel.MultiHopRankKey(item.Query, r, anchors)
+				log.Printf("  #%d %-20s score=%.5f answers=%t cover=%.2f exp=%t reason=%q fact=%q",
+					i+1, r.MemoryID, r.Score, answers, cover,
+					sliceContains(item.ExpectedMemoryID, r.MemoryID), r.Reason,
+					trimForLog(r.Fact, 90))
+			}
+			log.Printf("  expected=%v", item.ExpectedMemoryID)
 		}
 		// R3-B：诊断打印——rf.Now 改变后该样本 top-5 各信号分，用于定位 freshness 排序漂移。
 		if *diagID != "" && item.ID == *diagID {
@@ -1230,6 +1278,17 @@ func matchFactV3(gotFact, expectedFact string) bool {
 
 // sliceContains 判断 s 中是否存在元素 target。
 // 用于口径 A：top-1 MemoryID 是否 ∈ ExpectedMemoryID。
+// trimForLog R4-A：把文本截断到 n 个 rune 并转义换行，避免诊断日志被长事实文本淹没。
+// 纯展示用途，不参与任何判定。
+func trimForLog(s string, n int) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	rs := []rune(s)
+	if len(rs) > n {
+		return string(rs[:n]) + "…"
+	}
+	return s
+}
+
 func sliceContains(s []string, target string) bool {
 	if target == "" {
 		return false
