@@ -54,9 +54,18 @@ type EvalItem struct {
 	// Hop1Memory 多跳样本的 hop-1 记忆（仅 multi-hop 桶使用）。
 	// 评测器需同时物化 hop-1 和 hop-2，否则 multi-hop 永远 0%。
 	Hop1Memory *kernel.Memory `json:"hop1_memory,omitempty"`
+	// R4-B：reference_frame 评测集需要同时物化 targetA/targetB/distractor 三条记忆，
+	// 否则同 entity+不同 fact 的对照无法被检索到。复用 hop1/hop2 字段承载「干扰记忆」。
+	Hop2Memory *kernel.Memory `json:"hop2_memory,omitempty"`
 	// SecondVersion 时序样本的另一版本（仅 temporal 桶使用）。
 	// 双时态回溯需同时物化两个版本，否则 as_of 过滤无法验证。
 	SecondVersion *kernel.Memory `json:"second_version,omitempty"`
+	// R4-B：查询端 reference_frame 坐标。由 reference_frame 评测集写入，
+	// 使 signalReferenceFrame 能拿到 QueryFrame 的实际坐标（此前 run_kpi.go 恒为 nil）。
+	Entity  string `json:"entity,omitempty"`
+	Project string `json:"project,omitempty"`
+	Scene   string `json:"scene,omitempty"`
+	Task    string `json:"task,omitempty"`
 }
 
 type KPIReport struct {
@@ -105,6 +114,11 @@ type KPIReport struct {
 	OverallAccuracyByFactV4 float64 `json:"overall_accuracy_by_fact_v4,omitempty"`
 	// R4-C：fact 口径版本标识：v3（-fact-v4=false）/ v4（默认）。
 	FactAlgo string `json:"fact_algo,omitempty"`
+	// R4-B：reference_frame 信号复检辅助口径。
+	//   expected_ref_top1 — 期望记忆的 signalReferenceFrame 分在候选集合中为最高的比例（信号区分度）
+	//   expected_top1_hit  — 期望记忆最终成为融合 top-1 的比例（命中率）
+	//   ref_top1_and_hit   — 期望记忆 ref 分最高且最终 top-1 命中的比例（信号→命中传导率）
+	RefFrameSignal map[string]float64 `json:"ref_frame_signal,omitempty"`
 }
 
 // CostTracker 成本追踪（§9 评测增强）。
@@ -228,6 +242,13 @@ func main() {
 	// R3-B：诊断打印——命中指定 sample id 时打印 top-5 候选的 signal_scores，用于定位
 	// rf.Now 改变对 freshness/feedback 排序的影响（B 路根因分析）。
 	diagID := flag.String("diag", "", "R3-B: 诊断打印：指定样本 id，打印其 top-5 候选各信号分与融合分")
+	// R4-B：`-now-asof` 默认开启（R3-B 决策默认 false，此处评估开启的影响）。
+	// 语义：把 -now-asof 的默认值改为 true，仅在未显式指定时生效（R4-B 任务书 B.2.3）。
+	// -now-asof=false 时回到 R3-B 默认关闭，可 isolate 复现。
+	nowAsOfDefault := flag.Bool("now-asof-default", false, "R4-B: 默认开启 -now-asof（as_of 查询时 rf.Now=样本 as_of）；false 时按 -now-asof 原样")
+	// R4-B：reference_frame 诊断打印——指定样本 id，打印查询端坐标与 top-5 候选
+	// 的 signalReferenceFrame 打分，用于复检参考系信号区分度（R3-A §8 风险）。
+	diagRef := flag.String("diag-ref", "", "R4-B: 诊断打印：指定 reference_frame 样本 id，打印查询端坐标与 top-5 候选的 reference_frame 信号分")
 	flag.Parse() // 必须先 Parse 再取值，否则取到的是默认值
 	dsPath := *dsFlag
 	repPrefix := *repFlag
@@ -235,6 +256,10 @@ func main() {
 	factV3Threshold = *factThr
 	factV3SimAlgo = *factSim
 	factV4Enabled = *factV4Flag
+	// R4-B：`-now-asof-default` 语义——当它为 true 时强制启用 -now-asof
+	//（把 R3-B 的默认关闭翻转为默认开启）。-now-asof=false 可显式关闭。
+	// -now-asof 默认值本身保持 false（R3-B 决策，避免隐式改变历史基线）。
+	nowAsOfOn := *nowAsOf || *nowAsOfDefault
 
 	_ = os.MkdirAll(repDir, 0o755)
 
@@ -307,6 +332,12 @@ func main() {
 	multiSetHits, multiSetTotal := 0, 0
 	multiHit2Hits := 0
 	pollutionTotal, pollutionHits := 0, 0
+	// R4-B：reference_frame 信号复检计数器。
+	//   refFrameTotal    — reference_frame 桶样本数
+	//   refFrameTop1     — 期望记忆的 signalReferenceFrame 分在候选集合中最高
+	//   refFrameTop1Hit  — 期望记忆最终成为融合 top-1（hit）
+	//   refFrameTop1AndHit — 期望记忆 ref 分最高且 top-1 命中
+	refFrameTotal, refFrameTop1, refFrameTop1Hit, refFrameTop1AndHit := 0, 0, 0, 0
 
 	// 成本追踪
 	cost := &CostTracker{}
@@ -368,6 +399,13 @@ func main() {
 				log.Printf("WARN: save hop1 %s: %v", item.Hop1Memory.MemoryID, err)
 			}
 		}
+		// R4-B：reference_frame 评测集用 Hop2Memory 承载第三条干扰记忆，
+		// 使同 entity+不同 fact 的三元对照都能被召回，signalReferenceFrame 才可评估。
+		if item.Hop2Memory != nil {
+			if _, err := srv.SaveMemory(ctx, item.Hop2Memory, user); err != nil && !isAdversarial {
+				log.Printf("WARN: save hop2 %s: %v", item.Hop2Memory.MemoryID, err)
+			}
+		}
 		// 时序样本：同时物化两个版本，使 as_of 过滤能正确验证。
 		if item.SecondVersion != nil {
 			if _, err := srv.SaveMemory(ctx, item.SecondVersion, user); err != nil && !isAdversarial {
@@ -381,7 +419,7 @@ func main() {
 		//   - -now-asof：as_of 查询时设为样本 as_of，让 freshness/feedback 时序生效。
 		// 必须在 RecallAndFuse 之前设置（该函数不会覆盖非零 Now，见 kernel/router_mem.go:250）。
 		rf.Now = baseNow
-		if *nowAsOf && item.AsOf != "" {
+		if nowAsOfOn && item.AsOf != "" {
 			if t, perr := time.Parse("2006-01-02", item.AsOf); perr == nil {
 				rf.Now = t.UTC()
 			} else {
@@ -394,6 +432,10 @@ func main() {
 			Text:        item.Query,
 			TenantID:    item.Tenant,
 			UserID:      item.User,
+			Entity:      item.Entity,
+			ProjectID:   item.Project,
+			Scene:       item.Scene,
+			Task:        item.Task,
 			MemoryKinds: nil,
 			TopK:        kpiRecallTopK,
 		}
@@ -412,6 +454,25 @@ func main() {
 			signalComps = 8 * 3 // 8 路信号 × top-3 候选，仅估算
 		}
 		cost.TotalSignalComputations += signalComps
+		// R4-B：reference_frame 诊断打印——打印查询端坐标与 top-5 候选的
+		// signalReferenceFrame 打分，复检参考系信号区分度（R3-A §8 风险）。
+		if *diagRef != "" && item.ID == *diagRef {
+			log.Printf("[R4-B diag-ref] id=%s bucket=%s", item.ID, item.Bucket)
+			log.Printf("  QueryFrame: entity=%q project=%q scene=%q task=%q",
+				item.Entity, item.Project, item.Scene, item.Task)
+			for i, r := range res.Fused {
+				if i >= 5 {
+					break
+				}
+				ss := r.SignalScores
+				rfv := sigFmt(ss, "reference_frame")
+				log.Printf("  #%d %-20s score=%.5f ref_frame=%v (memory.rf.entity=%q project=%q scene=%q)",
+					i+1, r.MemoryID, r.Score, rfv,
+					memRefFrameField(r.Memory, "entity"),
+					memRefFrameField(r.Memory, "project"),
+					memRefFrameField(r.Memory, "scene"))
+			}
+		}
 		// R3-B：诊断打印——rf.Now 改变后该样本 top-5 各信号分，用于定位 freshness 排序漂移。
 		if *diagID != "" && item.ID == *diagID {
 			log.Printf("[R3-B diag] id=%s bucket=%s as_of=%q rf.Now=%s",
@@ -584,6 +645,39 @@ func main() {
 			}
 		}
 
+		// R4-B：reference_frame 桶——复检 signalReferenceFrame 区分度。
+		// 期望记忆 ref 分是否最高（refFrameTop1），与实际 top-1 是否命中的对照。
+		// 遍历全部 Fused（融合序），找到期望记忆的 reference_frame 分，与候选最大值比较。
+		if item.Bucket == "reference_frame" && !isAdversarial && len(res.Fused) > 0 {
+			refFrameTotal++
+			expID := item.ExpectedMemoryID[0]
+			var expRef, maxRef float64 = -1, -1
+			for _, f := range res.Fused {
+				if v, ok := f.SignalScores["reference_frame"]; ok {
+					if f.MemoryID == expID {
+						expRef = v
+					}
+					if v > maxRef {
+						maxRef = v
+					}
+				}
+			}
+			if expRef < 0 {
+				expRef = 0 // 期望记忆不在 top-N（未召回），ref 分视为 0
+			}
+			// refFrameTop1：期望记忆 ref 分在候选集合中最高（信号区分度）。
+			// refFrameTop1AndHit：ref 分最高且 top-1 命中（用 top1IsExpected，非 hit——后者含 top-3）。
+			if expRef >= maxRef && expRef > 0 {
+				refFrameTop1++
+				if top1IsExpected {
+					refFrameTop1AndHit++
+				}
+			}
+			if top1IsExpected {
+				refFrameTop1Hit++
+			}
+		}
+
 		details = append(details, KPIDetail{
 			ID:                 item.ID,
 			Bucket:             item.Bucket,
@@ -714,6 +808,17 @@ func main() {
 			"multi-hop": float64(multiHit2Hits) / float64(multiSetTotal),
 		}
 	}
+	// R4-B：reference_frame 信号复检辅助口径——期望记忆的 signalReferenceFrame
+	// 打分是否最高（refTop1），与实际 top-1 是否命中的对照。
+	// 用于判断「reference_frame 信号本身是否有区分度」：若 refTop1=1.0 但 top-1 未命中，
+	// 说明信号分正确但权重被稀释（R3-A §8 结论）；若 refTop1 也低，说明信号实现无区分力。
+	if refFrameTotal > 0 {
+		report.RefFrameSignal = map[string]float64{
+			"expected_ref_top1": float64(refFrameTop1) / float64(refFrameTotal),
+			"expected_top1_hit": float64(refFrameTop1Hit) / float64(refFrameTotal),
+			"ref_top1_and_hit":  float64(refFrameTop1AndHit) / float64(refFrameTotal),
+		}
+	}
 	if pollutionTotal > 0 {
 		report.PollutionRate = 1 - float64(pollutionHits)/float64(pollutionTotal)
 	}
@@ -734,7 +839,7 @@ func main() {
 	fmt.Fprintf(&sb, "- 检索准确率（总体，按 memory_id）：%.1f%%\n", report.OverallAccuracy*100)
 	fmt.Fprintf(&sb, "- 检索准确率（总体，按 fact 文本）：%.1f%%\n", report.OverallAccuracyByFact*100)
 	sb.WriteString("- 分桶准确率（按 memory_id）：\n")
-	for _, bucket := range []string{"single-hop", "multi-hop", "open-domain", "temporal"} {
+	for _, bucket := range []string{"single-hop", "multi-hop", "open-domain", "temporal", "reference_frame"} {
 		if acc, ok := report.BucketAccuracy[bucket]; ok {
 			fmt.Fprintf(&sb, "  - %s: %.1f%%\n", bucket, acc*100)
 		}
@@ -754,7 +859,7 @@ func main() {
 
 	sb.WriteString("## MRR（Mean Reciprocal Rank）\n\n")
 	fmt.Fprintf(&sb, "- 总体 MRR：%.3f\n", report.OverallMRR)
-	for _, bucket := range []string{"single-hop", "multi-hop", "open-domain", "temporal"} {
+	for _, bucket := range []string{"single-hop", "multi-hop", "open-domain", "temporal", "reference_frame"} {
 		if mrr, ok := report.BucketMRR[bucket]; ok {
 			fmt.Fprintf(&sb, "- %s 桶 MRR：%.3f\n", bucket, mrr)
 		}
@@ -784,6 +889,16 @@ func main() {
 					w.WindowStart, w.WindowEnd, w.Rate*100, w.Leaked, w.Total)
 			}
 		}
+		sb.WriteString("\n")
+	}
+
+	// R4-B：reference_frame 信号复检摘要。
+	if report.RefFrameSignal != nil {
+		rfSig := report.RefFrameSignal
+		sb.WriteString("## reference_frame 信号复检（R4-B）\n\n")
+		fmt.Fprintf(&sb, "- 期望记忆 ref 分在候选集合中最高：%.1f%%（信号区分度）\n", rfSig["expected_ref_top1"]*100)
+		fmt.Fprintf(&sb, "- 期望记忆最终 top-1 命中率：%.1f%%\n", rfSig["expected_top1_hit"]*100)
+		fmt.Fprintf(&sb, "- ref 分最高且 top-1 命中：%.1f%%（信号→命中传导率）\n", rfSig["ref_top1_and_hit"]*100)
 		sb.WriteString("\n")
 	}
 
@@ -834,6 +949,26 @@ func sigFmt(m map[string]float64, name string) string {
 		return fmt.Sprintf("%.4f", v)
 	}
 	return "<nil>"
+}
+
+// memRefFrameField R4-B：从候选记忆的 ReferenceFrame 中取坐标字段，用于 diag-ref 打印。
+// 候选可能为 nil（防御），坐标缺失时返回 ""。
+func memRefFrameField(m *kernel.Memory, field string) string {
+	if m == nil {
+		return ""
+	}
+	switch field {
+	case "entity":
+		return m.ReferenceFrame.Entity
+	case "project":
+		return m.ReferenceFrame.Project
+	case "scene":
+		return m.ReferenceFrame.Scene
+	case "task":
+		return m.ReferenceFrame.Task
+	default:
+		return ""
+	}
 }
 
 // ------------------------------------------------------------------

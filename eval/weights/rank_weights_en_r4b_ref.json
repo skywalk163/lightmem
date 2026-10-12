@@ -1,0 +1,14 @@
+{
+  "_comment": "R4-B 信号复检对照：仅把 reference_frame 从 0.0 抬到 4.0（其余与 rank_weights_en_r2 一致）。用于验证 reference_frame 信号本身是否有区分度——若权重生效后 ref 桶 top-1 命中率显著上升，说明信号有效，R3-A §8 结论应修正为「信号有效但权重关闭」。",
+  "k": 60,
+  "weights": [
+    { "name": "semantic", "weight": 1.5, "type": "calibrated", "note": "R2-A 产物：语义（评测器无 embedder=RecallScore）" },
+    { "name": "keyword", "weight": 2.7, "type": "calibrated", "note": "R2-A 产物：BM25 全文关键词" },
+    { "name": "entity", "weight": 2.4, "type": "calibrated", "note": "R2-A 产物：实体匹配" },
+    { "name": "value", "weight": 0.2, "type": "fixed", "note": "记忆固有价值（固定）" },
+    { "name": "freshness", "weight": 0.1, "type": "fixed", "note": "时效新鲜度（固定）" },
+    { "name": "source_trust", "weight": 0.1, "type": "fixed", "note": "来源可信度（固定）" },
+    { "name": "reference_frame", "weight": 4.0, "type": "calibrated", "note": "R4-B 复检：抬升以验证信号区分度" },
+    { "name": "feedback", "weight": 0.1, "type": "fixed", "note": "反馈历史（固定）" }
+  ]
+}

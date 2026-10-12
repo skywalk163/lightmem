@@ -1,0 +1,14 @@
+{
+  "_comment": "R4-B 波动诊断 isolate：R2-A 权重（semantic=1.5 未真启、keyword=2.7、entity=2.4、reference_frame=0.0）。复现 R2 基线 0.841 用于诊断合成集 fact/top-1 −0.8pp 波动根因。",
+  "k": 60,
+  "weights": [
+    { "name": "semantic", "weight": 1.5, "type": "calibrated", "note": "R2-A 产物：语义（评测器无 embedder=RecallScore，未真启）" },
+    { "name": "keyword", "weight": 2.7, "type": "calibrated", "note": "R2-A 产物：BM25 全文关键词" },
+    { "name": "entity", "weight": 2.4, "type": "calibrated", "note": "R2-A 产物：实体匹配" },
+    { "name": "value", "weight": 0.2, "type": "fixed", "note": "记忆固有价值（固定）" },
+    { "name": "freshness", "weight": 0.1, "type": "fixed", "note": "时效新鲜度（固定）" },
+    { "name": "source_trust", "weight": 0.1, "type": "fixed", "note": "来源可信度（固定）" },
+    { "name": "reference_frame", "weight": 0.0, "type": "calibrated", "note": "R2-A 产物：参考系匹配度（已关闭）" },
+    { "name": "feedback", "weight": 0.1, "type": "fixed", "note": "反馈历史（固定）" }
+  ]
+}
