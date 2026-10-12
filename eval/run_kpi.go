@@ -13,6 +13,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -49,10 +50,10 @@ type EvalItem struct {
 	Memory           *kernel.Memory `json:"memory"`
 	// Hop1Memory 多跳样本的 hop-1 记忆（仅 multi-hop 桶使用）。
 	// 评测器需同时物化 hop-1 和 hop-2，否则 multi-hop 永远 0%。
-	Hop1Memory       *kernel.Memory `json:"hop1_memory,omitempty"`
+	Hop1Memory *kernel.Memory `json:"hop1_memory,omitempty"`
 	// SecondVersion 时序样本的另一版本（仅 temporal 桶使用）。
 	// 双时态回溯需同时物化两个版本，否则 as_of 过滤无法验证。
-	SecondVersion    *kernel.Memory `json:"second_version,omitempty"`
+	SecondVersion *kernel.Memory `json:"second_version,omitempty"`
 }
 
 type KPIReport struct {
@@ -66,13 +67,13 @@ type KPIReport struct {
 	PollutionRate         float64            `json:"pollution_rate"`
 	Details               []KPIDetail        `json:"details"`
 	// CostTracker 成本追踪：每条查询的 token 消耗、延迟、信号计算次数
-	Cost                  *CostTracker       `json:"cost,omitempty"`
+	Cost *CostTracker `json:"cost,omitempty"`
 	// PollutionTrend 污染率趋势：按时间窗口统计
-	PollutionTrend        *PollutionTrend    `json:"pollution_trend,omitempty"`
+	PollutionTrend *PollutionTrend `json:"pollution_trend,omitempty"`
 	// BucketMRR 分桶 MRR（Mean Reciprocal Rank）
-	BucketMRR             map[string]float64 `json:"bucket_mrr,omitempty"`
+	BucketMRR map[string]float64 `json:"bucket_mrr,omitempty"`
 	// OverallMRR 总体 MRR
-	OverallMRR            float64            `json:"overall_mrr,omitempty"`
+	OverallMRR float64 `json:"overall_mrr,omitempty"`
 }
 
 // CostTracker 成本追踪（§9 评测增强）。
@@ -104,9 +105,9 @@ type PollutionWindow struct {
 
 // BucketMRR 分桶 MRR 统计。
 type BucketMRR struct {
-	Total int         `json:"total"`
-	MRR   float64     `json:"mrr"`
-	Ranks []int       `json:"ranks,omitempty"`
+	Total int     `json:"total"`
+	MRR   float64 `json:"mrr"`
+	Ranks []int   `json:"ranks,omitempty"`
 }
 
 type KPIDetail struct {
@@ -155,10 +156,20 @@ func main() {
 	if _, statErr := os.Stat("eval"); statErr == nil {
 		dsDir, repDir = "eval/dataset", "eval/reports"
 	}
+
+	// 命令行参数（P7-D 公开基准对标复用同一评测链路）：
+	//   -dataset <path>  评测集 JSONL 路径，默认 <dsDir>/all.jsonl（既有合成 KPI 集）
+	//   -report  <name>  报告文件名前缀（不含扩展名），默认 kpi_baseline
+	dsFlag := flag.String("dataset", dsDir+"/all.jsonl", "评测集 JSONL 路径（默认合成 all.jsonl）")
+	repFlag := flag.String("report", "kpi_baseline", "报告文件名前缀")
+	flag.Parse() // 必须先 Parse 再取值，否则取到的是默认值
+	dsPath := *dsFlag
+	repPrefix := *repFlag
+
 	_ = os.MkdirAll(repDir, 0o755)
 
 	// 1) 加载评测集。
-	items, err := loadDataset(dsDir + "/all.jsonl")
+	items, err := loadDataset(dsPath)
 	if err != nil {
 		log.Fatalf("load dataset: %v", err)
 	}
@@ -274,9 +285,11 @@ func main() {
 		latency := time.Since(startTime).Milliseconds()
 		cost.TotalLatencyMs += latency
 		cost.TotalQueries++
-		// 信号计算次数：8 路信号 × 候选数
+		// 信号计算次数：8 路信号 × 候选数。
+		// 兼容旧版 kernel（res.Trace 为 []TraceEntry）与新版（*RetrievalTrace）：
+		// 统一按 top-3 候选 × 8 路信号估算。
 		if len(res.Fused) > 0 && res.Trace != nil {
-			signalComps = len(res.Trace.Signals) * len(res.Trace.Layers) * 5 // 估算
+			signalComps = 8 * 3 // 8 路信号 × top-3 候选，仅估算
 		}
 		cost.TotalSignalComputations += signalComps
 		if err != nil {
@@ -468,7 +481,7 @@ func main() {
 	}
 
 	// 5) 落盘 JSON 报告。
-	path := fmt.Sprintf("%s/kpi_baseline_%s.json", repDir, time.Now().UTC().Format("20060102-150405"))
+	path := fmt.Sprintf("%s/%s_%s.json", repDir, repPrefix, time.Now().UTC().Format("20060102-150405"))
 	raw, _ := json.MarshalIndent(report, "", "  ")
 	_ = os.WriteFile(path, raw, 0644)
 	log.Printf("report written to %s", path)
@@ -538,7 +551,7 @@ func main() {
 	sb.WriteString("\n> 说明：本基线在 SQLite 骨架后端 + 占位权重下产出，数字为**下限**，" +
 		"非调优后系统能力；权重可按本报告结论校准（§3.2 红线 4）。\n")
 	summary := sb.String()
-	summaryPath := fmt.Sprintf("%s/kpi_baseline_summary.md", repDir)
+	summaryPath := fmt.Sprintf("%s/%s_summary.md", repDir, repPrefix)
 	_ = os.WriteFile(summaryPath, []byte(summary), 0644)
 	log.Printf("summary written to %s", summaryPath)
 

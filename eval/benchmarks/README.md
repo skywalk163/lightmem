@@ -65,12 +65,15 @@ go run ./verify_benchmarks.go  # 4 项硬校验 + memory_id 复用提示（ALL P
 
 ## 5. 下游 P7-D 消费
 
+`run_kpi.go` 已支持 `-dataset` / `-report` 参数，复用同一 KPI 链路：
+
 ```sh
 cd /tmp/duan-light-merge/lightmem/eval
-go run ./run_kpi.go -dataset ./benchmarks/dataset/all.jsonl -report benchmarks_20261012.json
+go run ./run_kpi.go -dataset ./benchmarks/dataset/all.jsonl -report benchmarks
+# 产出 eval/reports/benchmarks_<timestamp>.json + benchmarks_summary.md
 ```
 
-预期与既有合成 KPI 93.0% 对比，形成「合成 + 公开」双源结论。
+实测（2026-10-12）：合成 KPI 93.0%（达标），公开基准 **34.3%**（暴露英文长对话 + 时间推理短板）。详见 `eval/reports/benchmarks_summary_p7d.md`。
 
 ## 6. 已知边界
 
