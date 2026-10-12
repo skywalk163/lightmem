@@ -84,6 +84,13 @@ type KPIReport struct {
 	FactThreshold float64 `json:"fact_threshold,omitempty"`
 	// FactSimAlgo R3-C：本次运行使用的相似度算法 dice|contain。
 	FactSimAlgo string `json:"fact_sim_algo,omitempty"`
+	// BucketMRRSet R3-D：multi-hop 桶「口径 A」MRR——top-1 MemoryID ∈ ExpectedMemoryID
+	// 即算 hit（不区分 hop 顺序），与公开基准（单元素 Expected）可比。
+	// 仅在 multi-hop 桶累计；不覆盖主 MRR 口径 BucketMRR（保留历史可比性）。
+	BucketMRRSet map[string]float64 `json:"bucket_mrr_set,omitempty"`
+	// BucketHit2 R3-D：multi-hop 桶「口径 B」hit@2——top-2 内任一 MemoryID ∈ ExpectedMemoryID
+	// 即算命中。反映「一次交互内能拿到正确事实」的体验。
+	BucketHit2 map[string]float64 `json:"bucket_hit2,omitempty"`
 }
 
 // CostTracker 成本追踪（§9 评测增强）。
@@ -249,6 +256,9 @@ func main() {
 	factHits := 0
 	temporalHits, temporalTotal := 0, 0
 	multiSignalHits, multiSignalTotal := 0, 0
+	// R3-D：multi-hop 口径 A（hit@1 集合判定）与口径 B（hit@2）累计器。
+	multiSetHits, multiSetTotal := 0, 0
+	multiHit2Hits := 0
 	pollutionTotal, pollutionHits := 0, 0
 
 	// 成本追踪
@@ -445,6 +455,22 @@ func main() {
 			if hit {
 				multiSignalHits++
 			}
+			// R3-D：口径 A（hit@1 集合判定）——top-1 MemoryID ∈ ExpectedMemoryID 即算 hit，
+			// 不区分 hop 顺序，与公开基准（单元素 ExpectedMemoryID）可比。
+			// 合成集 ExpectedMemoryID=[hop2ID,hop1ID] 时，主 MRR 口径对命中 hop-1 只计 0.5
+			// （结构性惩罚），口径 A 消除该惩罚，测「检索到目标事实集合」的真实能力。
+			multiSetTotal++
+			top1ID := ""
+			if len(res.Fused) > 0 {
+				top1ID = res.Fused[0].MemoryID
+			}
+			if sliceContains(item.ExpectedMemoryID, top1ID) {
+				multiSetHits++
+			}
+			// R3-D：口径 B（hit@2）——top-2 内任一 MemoryID ∈ ExpectedMemoryID 即算命中。
+			if multiHit2(res.Fused, item.ExpectedMemoryID) {
+				multiHit2Hits++
+			}
 		}
 
 		details = append(details, KPIDetail{
@@ -554,6 +580,16 @@ func main() {
 	if multiSignalTotal > 0 {
 		report.MultiSignalAccuracy = float64(multiSignalHits) / float64(multiSignalTotal)
 	}
+	// R3-D：multi-hop 口径 A（bucket_mrr_set）与口径 B（bucket_hit2）填充。
+	// 仅统计 multi-hop 桶；不覆盖主 MRR 口径（bucket_mrr），保留历史可比性。
+	if multiSetTotal > 0 {
+		report.BucketMRRSet = map[string]float64{
+			"multi-hop": float64(multiSetHits) / float64(multiSetTotal),
+		}
+		report.BucketHit2 = map[string]float64{
+			"multi-hop": float64(multiHit2Hits) / float64(multiSetTotal),
+		}
+	}
 	if pollutionTotal > 0 {
 		report.PollutionRate = 1 - float64(pollutionHits)/float64(pollutionTotal)
 	}
@@ -598,6 +634,18 @@ func main() {
 		if mrr, ok := report.BucketMRR[bucket]; ok {
 			fmt.Fprintf(&sb, "- %s 桶 MRR：%.3f\n", bucket, mrr)
 		}
+	}
+	// R3-D：multi-hop 桶双口径并列展示。
+	//   bucket_mrr        = 主 MRR 口径（rank 序，命中 hop-1 只计 0.5，历史可比）
+	//   bucket_mrr_set    = 口径 A（top-1 ∈ Expected 即 hit，与公开基准可比）
+	//   bucket_hit2       = 口径 B（top-2 内命中 expected 的比例）
+	if set, ok := report.BucketMRRSet["multi-hop"]; ok {
+		h2 := report.BucketHit2["multi-hop"]
+		main := report.BucketMRR["multi-hop"]
+		sb.WriteString("- multi-hop 桶三口径对比（R3-D）：\n")
+		fmt.Fprintf(&sb, "  - 主 MRR（口径 C，历史可比）：%.3f\n", main)
+		fmt.Fprintf(&sb, "  - 口径 A MRR（top-1 ∈ Expected 即 hit）：%.3f\n", set)
+		fmt.Fprintf(&sb, "  - 口径 B hit@2（top-2 内命中）：%.3f\n", h2)
 	}
 	sb.WriteString("\n")
 
@@ -894,4 +942,35 @@ func matchFactV3(gotFact, expectedFact string) bool {
 	}
 	sim := factV3Score(a, b)
 	return sim >= factV3Threshold
+}
+
+// ------------------------------------------------------------------
+// R3-D：multi-hop 桶补充指标辅助函数（口径 A 集合判定 + 口径 B hit@2）。
+// 纯 ID 字符串集合判断，不调 LLM，seed 无关（无随机源）。
+// ------------------------------------------------------------------
+
+// sliceContains 判断 s 中是否存在元素 target。
+// 用于口径 A：top-1 MemoryID 是否 ∈ ExpectedMemoryID。
+func sliceContains(s []string, target string) bool {
+	if target == "" {
+		return false
+	}
+	for _, v := range s {
+		if v == target {
+			return true
+		}
+	}
+	return false
+}
+
+// multiHit2 判断 top-2 候选（res.Fused 前 2 条）内是否命中任一 ExpectedMemoryID。
+// 用于口径 B（hit@2）：反映「一次交互内能拿到正确事实」的体验。
+// 与主 MRR 口径无关：主 MRR 只计 top-1 的 rank 惩罚，hit@2 只要 top-2 内命中即 true。
+func multiHit2(fused []kernel.FusedResult, expected []string) bool {
+	for i := 0; i < len(fused) && i < 2; i++ {
+		if sliceContains(expected, fused[i].MemoryID) {
+			return true
+		}
+	}
+	return false
 }
