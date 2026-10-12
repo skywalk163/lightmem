@@ -1,0 +1,121 @@
+2026/10/12 19:21:49 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:22:32 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:23:11 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:23:55 round=1 var=semantic delta=+0.1 newW=1.60 -> bench MRR=0.9603 top1=0.929
+2026/10/12 19:23:55 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:24:32   拒绝：合成 MRR=0.8311 < floor=0.8312
+2026/10/12 19:24:32 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:25:13 round=1 var=semantic delta=-0.1 newW=1.40 -> bench MRR=0.9553 top1=0.920
+2026/10/12 19:25:13 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:25:55 round=1 var=keyword delta=+0.1 newW=2.80 -> bench MRR=0.9593 top1=0.928
+2026/10/12 19:25:55 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:26:34   接受：bench MRR 0.9585 -> 0.9593，synth MRR=0.8321
+2026/10/12 19:26:34 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:27:18 round=1 var=entity delta=+0.1 newW=2.50 -> bench MRR=0.9615 top1=0.932
+2026/10/12 19:27:18 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:27:56   接受：bench MRR 0.9593 -> 0.9615，synth MRR=0.8349
+2026/10/12 19:27:56 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:28:41 round=1 var=reference_frame delta=+0.1 newW=0.10 -> bench MRR=0.9438 top1=0.897
+2026/10/12 19:28:41 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:29:30 round=2 var=semantic delta=+0.1 newW=1.60 -> bench MRR=0.9631 top1=0.935
+2026/10/12 19:29:30 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:30:17   接受：bench MRR 0.9615 -> 0.9631，synth MRR=0.8340
+2026/10/12 19:30:17 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:31:10 round=2 var=keyword delta=+0.1 newW=2.90 -> bench MRR=0.9636 top1=0.935
+2026/10/12 19:31:10 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:31:59   接受：bench MRR 0.9631 -> 0.9636，synth MRR=0.8349
+2026/10/12 19:31:59 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:32:51 round=2 var=entity delta=+0.1 newW=2.60 -> bench MRR=0.9642 top1=0.937
+2026/10/12 19:32:52 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:33:37   接受：bench MRR 0.9636 -> 0.9642，synth MRR=0.8349
+2026/10/12 19:33:37 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:34:28 round=2 var=reference_frame delta=+0.1 newW=0.10 -> bench MRR=0.9470 top1=0.903
+2026/10/12 19:34:28 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:35:20 round=3 var=semantic delta=+0.1 newW=1.70 -> bench MRR=0.9644 top1=0.937
+2026/10/12 19:35:20 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:36:06   接受：bench MRR 0.9642 -> 0.9644，synth MRR=0.8349
+2026/10/12 19:36:07 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:36:58 round=3 var=keyword delta=+0.1 newW=3.00 -> bench MRR=0.9667 top1=0.942
+2026/10/12 19:36:58 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:37:44   接受：bench MRR 0.9644 -> 0.9667，synth MRR=0.8358
+2026/10/12 19:37:44 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:38:35 round=3 var=entity delta=+0.1 newW=2.70 -> bench MRR=0.9672 top1=0.943
+2026/10/12 19:38:35 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:39:19   接受：bench MRR 0.9667 -> 0.9672，synth MRR=0.8358
+2026/10/12 19:39:20 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:40:04 round=3 var=reference_frame delta=+0.1 newW=0.10 -> bench MRR=0.9493 top1=0.908
+2026/10/12 19:40:04 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:40:47 round=4 var=semantic delta=+0.1 newW=1.80 -> bench MRR=0.9690 top1=0.946
+2026/10/12 19:40:47 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:41:26   接受：bench MRR 0.9672 -> 0.9690，synth MRR=0.8358
+2026/10/12 19:41:27 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:42:12 round=4 var=keyword delta=+0.1 newW=3.10 -> bench MRR=0.9693 top1=0.946
+2026/10/12 19:42:12 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:42:59   接受：bench MRR 0.9690 -> 0.9693，synth MRR=0.8358
+2026/10/12 19:42:59 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:43:50 round=4 var=entity delta=+0.1 newW=2.80 -> bench MRR=0.9701 top1=0.948
+2026/10/12 19:43:50 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:44:39   接受：bench MRR 0.9693 -> 0.9701，synth MRR=0.8377
+2026/10/12 19:44:40 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:45:45 round=4 var=reference_frame delta=+0.1 newW=0.10 -> bench MRR=0.9531 top1=0.915
+2026/10/12 19:45:45 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:46:48 round=5 var=semantic delta=+0.1 newW=1.90 -> bench MRR=0.9708 top1=0.949
+2026/10/12 19:46:48 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:47:47   接受：bench MRR 0.9701 -> 0.9708，synth MRR=0.8377
+2026/10/12 19:47:47 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:48:50 round=5 var=keyword delta=+0.1 newW=3.20 -> bench MRR=0.9724 top1=0.952
+2026/10/12 19:48:51 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:49:48   接受：bench MRR 0.9708 -> 0.9724，synth MRR=0.8377
+2026/10/12 19:49:48 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:50:51 round=5 var=entity delta=+0.1 newW=2.90 -> bench MRR=0.9731 top1=0.954
+2026/10/12 19:50:51 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:51:47   接受：bench MRR 0.9724 -> 0.9731，synth MRR=0.8377
+2026/10/12 19:51:48 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:52:50 round=5 var=reference_frame delta=+0.1 newW=0.10 -> bench MRR=0.9554 top1=0.920
+2026/10/12 19:52:50 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:53:51 round=6 var=semantic delta=+0.1 newW=2.00 -> bench MRR=0.9747 top1=0.957
+2026/10/12 19:53:51 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:54:49   接受：bench MRR 0.9731 -> 0.9747，synth MRR=0.8377
+2026/10/12 19:54:49 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:55:52 round=6 var=keyword delta=+0.1 newW=3.30 -> bench MRR=0.9747 top1=0.957
+2026/10/12 19:55:52 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:56:50 round=6 var=keyword delta=-0.1 newW=3.10 -> bench MRR=0.9739 top1=0.955
+2026/10/12 19:56:50 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:57:48 round=6 var=entity delta=+0.1 newW=3.00 -> bench MRR=0.9747 top1=0.957
+2026/10/12 19:57:48 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:58:46 round=6 var=entity delta=-0.1 newW=2.80 -> bench MRR=0.9731 top1=0.954
+2026/10/12 19:58:46 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 19:59:32 round=6 var=reference_frame delta=+0.1 newW=0.10 -> bench MRR=0.9572 top1=0.923
+2026/10/12 19:59:32 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 20:00:16 round=7 var=semantic delta=+0.1 newW=2.10 -> bench MRR=0.9747 top1=0.957
+2026/10/12 20:00:16 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 20:01:00 round=7 var=semantic delta=-0.1 newW=1.90 -> bench MRR=0.9731 top1=0.954
+2026/10/12 20:01:00 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 20:01:42 round=7 var=keyword delta=+0.1 newW=3.30 -> bench MRR=0.9747 top1=0.957
+2026/10/12 20:01:43 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 20:02:24 round=7 var=keyword delta=-0.1 newW=3.10 -> bench MRR=0.9739 top1=0.955
+2026/10/12 20:02:24 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 20:03:05 round=7 var=entity delta=+0.1 newW=3.00 -> bench MRR=0.9747 top1=0.957
+2026/10/12 20:03:05 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 20:03:48 round=7 var=entity delta=-0.1 newW=2.80 -> bench MRR=0.9731 top1=0.954
+2026/10/12 20:03:48 [R3-A] embedder injected: ngram=3 dim=6817 docs=5414
+2026/10/12 20:04:32 round=7 var=reference_frame delta=+0.1 newW=0.10 -> bench MRR=0.9572 top1=0.923
+2026/10/12 20:04:32 round=7: 无改进，提前停止
+round=0 baseline: bench_mrr=0.9585 top1=0.926 synth_mrr=0.8321 weights=map[entity:2.4 feedback:0.1 freshness:0.1 keyword:2.7 reference_frame:0 semantic:1.5 source_trust:0.1 value:0.2]
+round=1 var=keyword newW=2.80: bench_mrr=0.9593 top1=0.928 synth_mrr=0.8321 fact=89.7%
+round=1 var=entity newW=2.50: bench_mrr=0.9615 top1=0.932 synth_mrr=0.8349 fact=90.0%
+round=2 var=semantic newW=1.60: bench_mrr=0.9631 top1=0.935 synth_mrr=0.8340 fact=90.3%
+round=2 var=keyword newW=2.90: bench_mrr=0.9636 top1=0.935 synth_mrr=0.8349 fact=90.3%
+round=2 var=entity newW=2.60: bench_mrr=0.9642 top1=0.937 synth_mrr=0.8349 fact=90.5%
+round=3 var=semantic newW=1.70: bench_mrr=0.9644 top1=0.937 synth_mrr=0.8349 fact=90.5%
+round=3 var=keyword newW=3.00: bench_mrr=0.9667 top1=0.942 synth_mrr=0.8358 fact=90.8%
+round=3 var=entity newW=2.70: bench_mrr=0.9672 top1=0.943 synth_mrr=0.8358 fact=90.9%
+round=4 var=semantic newW=1.80: bench_mrr=0.9690 top1=0.946 synth_mrr=0.8358 fact=91.2%
+round=4 var=keyword newW=3.10: bench_mrr=0.9693 top1=0.946 synth_mrr=0.8358 fact=91.2%
+round=4 var=entity newW=2.80: bench_mrr=0.9701 top1=0.948 synth_mrr=0.8377 fact=91.4%
+round=5 var=semantic newW=1.90: bench_mrr=0.9708 top1=0.949 synth_mrr=0.8377 fact=91.5%
+round=5 var=keyword newW=3.20: bench_mrr=0.9724 top1=0.952 synth_mrr=0.8377 fact=91.8%
+round=5 var=entity newW=2.90: bench_mrr=0.9731 top1=0.954 synth_mrr=0.8377 fact=92.0%
+round=6 var=semantic newW=2.00: bench_mrr=0.9747 top1=0.957 synth_mrr=0.8377 fact=92.3%
+最终: bench MRR=0.9747 top1=0.957 fact=92.3% | synth MRR=0.8377 | 用时=42m43s
+---RC=0---

@@ -313,10 +313,11 @@ func (rf *RankFusion) VoteFusion(ctx context.Context, query string, cands []Reca
 
 // ConflictDetector 检测 top-1 与 top-2 的语义冲突。
 // 冲突条件：
-//   1. 同一主体（reference_frame.entity 相同）
-//   2. 同类 kind
-//   3. 事实不同
-//   4. 向量距离 < 阈值（语义相似度高，但事实不同 → 冲突）
+//  1. 同一主体（reference_frame.entity 相同）
+//  2. 同类 kind
+//  3. 事实不同
+//  4. 向量距离 < 阈值（语义相似度高，但事实不同 → 冲突）
+//
 // 若 embedder 不可用，退化为启发式检测（isConflict）。
 func (rf *RankFusion) ConflictDetector(ctx context.Context, top1, top2 *FusedResult) bool {
 	if top1 == nil || top2 == nil || top1.Memory == nil || top2.Memory == nil {
@@ -622,13 +623,24 @@ func signalSourceTrust(_ context.Context, _ string, cands []RecalledCandidate) m
 }
 
 // signalReferenceFrame：参考系匹配度（上下文坐标匹配）。
+//
+// R3-A 修复（任务书 A.1）：原实现在 QueryFrame == nil 或查询端坐标全空时对每个
+// 候选返回 1.0 常数。归一化后常数信号不改变 RRF 排名 → reference_frame 权重对
+// 排序无影响，坐标下降必然把它压到 0.0（R2 收口 §7.2 根因）。
+// 修复：无参考系数据时返回 0.5 中性分（与 signalFeedbackHistory 无反馈时的中性
+// 分一致），不给正偏向。若评测器确实未设置 QueryFrame，本信号仍近似常数但分值为
+// 中性，不再伪装成「满匹配」。
+//
+// 方案选择记录：任务书 A.3.2 提供 方案 a（0.5 中性）/ 方案 b（0.0 关闭）二选一。
+// 本实现采用方案 a，理由：保留权重非零时的信息量（若某轮搜索把 reference_frame
+// 调到 >0，它应基于真实打分而非常数 1.0）；方案 b 在报告 A.2 已作为对照数据给出。
 func (rf *RankFusion) signalReferenceFrame(_ context.Context, _ string, cands []RecalledCandidate) map[string]float64 {
 	out := make(map[string]float64, len(cands))
 	qf := rf.QueryFrame
 	if qf == nil {
 		for _, c := range cands {
 			if c.Memory != nil {
-				out[c.Memory.MemoryID] = 1.0
+				out[c.Memory.MemoryID] = 0.5 // R3-A：中性分（无参考系数据时不给正偏向）
 			}
 		}
 		return out
@@ -667,9 +679,10 @@ func (rf *RankFusion) signalReferenceFrame(_ context.Context, _ string, cands []
 	}
 	_ = q
 	if len(coords) == 0 {
+		// R3-A：查询端所有参考系坐标均空，同样无信息量 → 中性分 0.5（而非原 1.0 常数）。
 		for _, c := range cands {
 			if c.Memory != nil {
-				out[c.Memory.MemoryID] = 1.0
+				out[c.Memory.MemoryID] = 0.5 // R3-A：中性分（无参考系数据时不给正偏向）
 			}
 		}
 		return out

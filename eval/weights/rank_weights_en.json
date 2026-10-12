@@ -1,14 +1,14 @@
 {
-  "_comment": "R2 任务A 英文长文本调优产物（坐标下降 12 轮收敛，2026-10-12）。方案 α：跳过 semantic（评测器无 embedder=RecallScore），只调 keyword/entity/reference_frame；fixed 信号保持 R3 值。基准：公开 MRR 0.546→0.940，合成 MRR 0.821→0.841（无回归）。",
   "k": 60,
+  "_comment": "R3-A 产物（方案 β）：semantic 已真实生效（char n-gram TF-IDF embedder，词表来自公开基准+合成集 query/fact，IDF 缓存 weights/embedder_vocab_en.json），reference_frame 修复后重新评估（QueryFrame 空→0.5 中性分）。搜索变量=[semantic,keyword,entity,reference_frame]，坐标下降步长 0.1，6 轮收敛。公开 MRR 0.9747，合成 MRR 0.8377。",
   "weights": [
-    { "name": "semantic", "weight": 1.5, "type": "calibrated", "note": "语义相似度（评测器无 embedder=RecallScore，R2-A 未调）" },
-    { "name": "keyword", "weight": 2.7, "type": "calibrated", "note": "BM25 全文关键词（R2-A 调优：1.5→2.7）" },
-    { "name": "entity", "weight": 2.4, "type": "calibrated", "note": "实体匹配（R2-A 调优：1.2→2.4）" },
+    { "name": "semantic", "weight": 2.0, "type": "calibrated", "note": "语义相似度（R3-A 真启：char trigram TF-IDF embedder 注入后调优 1.5→2.0）" },
+    { "name": "keyword", "weight": 3.2, "type": "calibrated", "note": "BM25 全文关键词（R3-A 调优 2.7→3.2）" },
+    { "name": "entity", "weight": 2.9, "type": "calibrated", "note": "实体匹配（R3-A 调优 2.4→2.9）" },
     { "name": "value", "weight": 0.2, "type": "fixed", "note": "记忆固有价值（固定）" },
     { "name": "freshness", "weight": 0.1, "type": "fixed", "note": "时效新鲜度（固定）" },
     { "name": "source_trust", "weight": 0.1, "type": "fixed", "note": "来源可信度（固定）" },
-    { "name": "reference_frame", "weight": 0.0, "type": "calibrated", "note": "参考系匹配度（R2-A 调优：1.2→0.0，对中英双源均为噪声，已关闭）" },
+    { "name": "reference_frame", "weight": 0.0, "type": "calibrated", "note": "参考系匹配度（R3-A 修复 QueryFrame 空→0.5 中性分后重新评估：每次 +0.1 均降级，确认当前评测器下无信息量，保留 0.0）" },
     { "name": "feedback", "weight": 0.1, "type": "fixed", "note": "反馈历史（固定）" }
   ]
 }

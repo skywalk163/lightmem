@@ -19,3 +19,6 @@ kernel/kernel/
 
 # macOS/编辑器
 .DS_Store
+
+# R3-A：embedder 词表缓存（BuildIDF 确定性可复现，不入库）
+eval/weights/embedder_vocab_en.json

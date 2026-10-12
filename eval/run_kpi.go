@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -175,6 +176,13 @@ func main() {
 	dsFlag := flag.String("dataset", dsDir+"/all.jsonl", "评测集 JSONL 路径（默认合成 all.jsonl）")
 	repFlag := flag.String("report", "kpi_baseline", "报告文件名前缀")
 	wFlag := flag.String("weights", "", "RankFusion 权重 JSON 路径；空则用 ../kernel/rank_fusion.default_weights.json")
+	// R3-A：是否注入确定性 char n-gram TF-IDF embedder。
+	// 默认注入（让 signalSemantic 真正生效）；-no-embedder 用于对照实验，
+	// 复现 R2 基线（signalSemantic 退化为 RecallScore）。
+	noEmbedder := flag.Bool("no-embedder", false, "R3-A: 跳过 embedder 注入，复现 R2 基线（semantic 退化为 RecallScore）")
+	// R3-A：embedder 词表缓存路径。首次运行时从两个评测集统计 IDF 并落盘，
+	// 后续复用同一词表（保证 tune 脚本与 run_kpi.go 向量维度一致、可复现）。
+	vocabPath := flag.String("vocab-path", "weights/embedder_vocab_en.json", "R3-A: char n-gram TF-IDF 词表缓存路径")
 	// R3-C：fact 口径 v3 的 char n-gram 相似度阈值。
 	// 0.55 为推荐起点；阈值敏感性分析在 0.4/0.5/0.55/0.6/0.7 五档下做。
 	factThr := flag.Float64("fact-threshold", 0.55, "R3-C: matchFactV3 char trigram 相似度阈值（仅当 R2 matchFact v2 未命中时生效）")
@@ -219,6 +227,17 @@ func main() {
 	}
 	if err := rf.LoadWeightsFromFile(weightsPath); err != nil {
 		log.Fatalf("load weights %s: %v", weightsPath, err)
+	}
+	// R3-A：注入确定性 char n-gram TF-IDF embedder（不调 LLM）。
+	// 词表（IDF）从两个评测集的 query+fact 文本统计，落盘后复用，seed 无关、无 time.Now()。
+	// 若不注入，signalSemantic 退化为 RecallScore（R2 基线），-no-embedder 可对照复现。
+	if !*noEmbedder {
+		v, err := loadEvalVocab(*vocabPath, dsPath)
+		if err != nil {
+			log.Fatalf("build/load embedder vocab: %v", err)
+		}
+		rf.SetEmbedder(v.EmbedFn())
+		log.Printf("[R3-A] embedder injected: ngram=%d dim=%d docs=%d", v.Ngram, v.Dim(), v.N)
 	}
 	srv.SetRankFusion(rf)
 
@@ -623,6 +642,72 @@ func check(actual, target float64) string {
 		return "✅ 达标"
 	}
 	return "❌ 未达标"
+}
+
+// ------------------------------------------------------------------
+// R3-A：评测器 embedder 注入——确定性 char n-gram TF-IDF 词表加载。
+// 红线：不调 LLM；seed 无关；IDF 从两个评测集（公开基准 + 合成集）的
+// query+fact 文本统计，词表落盘后复用（tune 脚本与 run_kpi.go 维度一致）。
+// ------------------------------------------------------------------
+
+// evalBenchmarkDataset 是公开基准数据集路径（用于词表构建，覆盖更多文本形态）。
+const evalBenchmarkDataset = "benchmarks/dataset/all.jsonl"
+
+// evalSynthDataset 是合成数据集路径（默认相对 eval/ 目录）。
+const evalSynthDataset = "dataset/all.jsonl"
+
+// collectVocabCorpus 收集两个评测集的 query+fact 文本作为 IDF 语料。
+// 返回当前 dsPath 对应的数据集路径（用于记录）+ 合并语料。
+func collectVocabCorpus(dsPath string) (benchPath, synthPath string, corpus []string) {
+	benchPath = evalBenchmarkDataset
+	synthPath = evalSynthDataset
+	if _, err := os.Stat("eval"); err == nil {
+		// 从仓库根运行：路径前加 eval/ 前缀。
+		benchPath = "eval/" + evalBenchmarkDataset
+		synthPath = "eval/" + evalSynthDataset
+	}
+	// 语料来源固定顺序：公开基准 → 合成集 → 当前数据集（若与前两者不同）。
+	for _, p := range []string{benchPath, synthPath, dsPath} {
+		items, err := loadDataset(p)
+		if err != nil {
+			log.Printf("[R3-A] vocab corpus skip %s: %v", p, err)
+			continue
+		}
+		for _, it := range items {
+			if it.Query != "" {
+				corpus = append(corpus, it.Query)
+			}
+			if it.ExpectedFact != "" {
+				corpus = append(corpus, it.ExpectedFact)
+			}
+			if it.Memory != nil && it.Memory.Fact != "" {
+				corpus = append(corpus, it.Memory.Fact)
+			}
+		}
+	}
+	return benchPath, synthPath, corpus
+}
+
+// loadEvalVocab 加载或构建 char n-gram TF-IDF 词表。
+//   - 优先复用磁盘缓存（保证 tune 脚本与 run_kpi.go 共用同一 IDF）。
+//   - 无缓存时从两个评测集构建并落盘（确定性，seed=42 无关，无 time.Now()）。
+func loadEvalVocab(vocabPath, dsPath string) (*kernel.CharNgramVocab, error) {
+	if v, err := kernel.LoadCharNgramVocabJSON(vocabPath); err == nil && v.Dim() > 0 {
+		return v, nil
+	}
+	_, _, corpus := collectVocabCorpus(dsPath)
+	if len(corpus) == 0 {
+		return nil, fmt.Errorf("no corpus for embedder vocab")
+	}
+	v := kernel.NewCharNgramVocab(3)
+	v.BuildIDF(corpus)
+	if dir := filepath.Dir(vocabPath); dir != "" {
+		_ = os.MkdirAll(dir, 0o755)
+	}
+	if err := v.SaveJSON(vocabPath); err != nil {
+		log.Printf("[R3-A] warn: save vocab %s: %v", vocabPath, err)
+	}
+	return v, nil
 }
 
 // ------------------------------------------------------------------
