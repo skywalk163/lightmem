@@ -196,6 +196,15 @@ func main() {
 	// R3-C：相似度算法选择。dice=任务书建议的 Dice 系数；contain=containment（软包含，
 	// 更适合 got 是 "speaker: turn" 长文本而 expected 是短答案的场景）。
 	factSim := flag.String("fact-sim", "dice", "R3-C: fact v3 相似度算法 dice|contain")
+	// R3-B：as_of 查询时把 rf.Now 设为样本的 as_of，让 freshness/feedback 时序生效。
+	// 注意 rf 是全局指针，必须按样本重置，否则污染下一条（任务书 B.3.2 警告）。
+	nowAsOf := flag.Bool("now-asof", false, "R3-B: as_of 查询时把 rf.Now 设为样本 as_of（对照实验用；非 as_of 样本保持评测启动时刻）")
+	// R3-B：固定 Now 为任务书指定的基准日期（YYYY-MM-DD），复现 R2 报告 rf.Now=2026-10-12 的历史值。
+	// 默认空 = 用评测启动时刻（与 -now-asof 关闭时的现状基线一致）。
+	nowFixed := flag.String("now-fixed", "", "R3-B: 固定 rf.Now 为该日期（如 2026-10-12）；空则用评测启动时刻")
+	// R3-B：诊断打印——命中指定 sample id 时打印 top-5 候选的 signal_scores，用于定位
+	// rf.Now 改变对 freshness/feedback 排序的影响（B 路根因分析）。
+	diagID := flag.String("diag", "", "R3-B: 诊断打印：指定样本 id，打印其 top-5 候选各信号分与融合分")
 	flag.Parse() // 必须先 Parse 再取值，否则取到的是默认值
 	dsPath := *dsFlag
 	repPrefix := *repFlag
@@ -220,10 +229,19 @@ func main() {
 	}
 	srv := kernel.NewAPIServer(prof, b)
 	rf := kernel.DefaultRankFusion()
-	// 确定性：固定 Now 为评测启动时刻，避免逐条查询 freshness 抖动。
-	// 若不固定，每条查询的 Now 差数秒，freshness 信号在 30 天半衰期下虽差异极小，
-	// 但经 RRF 排名叠加后仍可导致 top-1 顺序漂移（见收口报告 §4.4 根因 5）。
-	rf.Now = time.Now().UTC()
+	// 基准时刻：默认用评测启动时刻（避免逐条查询 freshness 抖动）；
+	// -now-fixed 则固定为指定日期（R3-B 对照实验：复现 R2 报告 rf.Now=2026-10-12）。
+	// baseNow 是逐样本重置时的默认 Now；-now-asof 仅对 as_of 样本覆盖它。
+	baseNow := time.Now().UTC()
+	if *nowFixed != "" {
+		if t, perr := time.Parse("2006-01-02", *nowFixed); perr == nil {
+			baseNow = t.UTC()
+			log.Printf("[R3-B] -now-fixed=%s -> baseNow=%s", *nowFixed, baseNow.Format(time.RFC3339))
+		} else {
+			log.Fatalf("-now-fixed %q: %v", *nowFixed, perr)
+		}
+	}
+	rf.Now = baseNow
 	// 权重加载（R2 任务A）：
 	//   - 未指定 -weights：沿用 ../kernel/rank_fusion.default_weights.json（R3 校准权重，
 	//     与 P7-D 报告 0.546 / 0.821 基线一致，保证回归可复现）。
@@ -329,6 +347,18 @@ func main() {
 		}
 
 		// 跑查询。
+		// R3-B：按样本重置 rf.Now，避免全局污染。
+		//   - 默认：恢复 baseNow（-now-fixed 未指定时为评测启动时刻，与现状基线一致）。
+		//   - -now-asof：as_of 查询时设为样本 as_of，让 freshness/feedback 时序生效。
+		// 必须在 RecallAndFuse 之前设置（该函数不会覆盖非零 Now，见 kernel/router_mem.go:250）。
+		rf.Now = baseNow
+		if *nowAsOf && item.AsOf != "" {
+			if t, perr := time.Parse("2006-01-02", item.AsOf); perr == nil {
+				rf.Now = t.UTC()
+			} else {
+				log.Printf("WARN: parse as_of %q for item %s: %v", item.AsOf, item.ID, perr)
+			}
+		}
 		startTime := time.Now().UTC()
 		signalComps := 0
 		rc := kernel.RouterContext{
@@ -353,6 +383,22 @@ func main() {
 			signalComps = 8 * 3 // 8 路信号 × top-3 候选，仅估算
 		}
 		cost.TotalSignalComputations += signalComps
+		// R3-B：诊断打印——rf.Now 改变后该样本 top-5 各信号分，用于定位 freshness 排序漂移。
+		if *diagID != "" && item.ID == *diagID {
+			log.Printf("[R3-B diag] id=%s bucket=%s as_of=%q rf.Now=%s",
+				item.ID, item.Bucket, item.AsOf, rf.Now.Format(time.RFC3339))
+			for i, r := range res.Fused {
+				if i >= 5 {
+					break
+				}
+				ss := r.SignalScores
+				log.Printf("  #%d %-20s score=%.5f freshness=%v feedback=%v semantic=%v keyword=%v entity=%v value=%v trust=%v ref=%v",
+					i+1, r.MemoryID, r.Score,
+					sigFmt(ss, "freshness"), sigFmt(ss, "feedback"), sigFmt(ss, "semantic"),
+					sigFmt(ss, "keyword"), sigFmt(ss, "entity"), sigFmt(ss, "value"),
+					sigFmt(ss, "source_trust"), sigFmt(ss, "reference_frame"))
+			}
+		}
 		if err != nil {
 			if isAdversarial {
 				pollutionHits++ // 查询失败同样不构成泄漏
@@ -690,6 +736,14 @@ func check(actual, target float64) string {
 		return "✅ 达标"
 	}
 	return "❌ 未达标"
+}
+
+// sigFmt R3-B：从 signal_scores map 中取出某个信号分，格式化为字符串（缺失显示 "<nil>"）。
+func sigFmt(m map[string]float64, name string) string {
+	if v, ok := m[name]; ok {
+		return fmt.Sprintf("%.4f", v)
+	}
+	return "<nil>"
 }
 
 // ------------------------------------------------------------------

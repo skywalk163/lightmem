@@ -136,7 +136,7 @@ func DefaultRankFusion() *RankFusion {
 		{Name: "freshness", Weight: rf.Weights["freshness"], Type: "fixed", Fn: rf.signalFreshness},
 		{Name: "source_trust", Weight: rf.Weights["source_trust"], Type: "fixed", Fn: signalSourceTrust},
 		{Name: "reference_frame", Weight: rf.Weights["reference_frame"], Type: "calibrated", Fn: rf.signalReferenceFrame},
-		{Name: "feedback", Weight: rf.Weights["feedback"], Type: "fixed", Fn: signalFeedbackHistory},
+		{Name: "feedback", Weight: rf.Weights["feedback"], Type: "fixed", Fn: rf.signalFeedbackHistory},
 	}
 	return rf
 }
@@ -602,8 +602,14 @@ func (rf *RankFusion) signalFreshness(_ context.Context, _ string, cands []Recal
 			t = *c.Memory.OccurredAt
 		}
 		age := rf.Now.Sub(t)
+		// R3-B 修复：as_of 之前的「未来记忆」不应得满分。
+		// 原实现 age<0 clamp 到 0 → exp(0)=1.0，把 occurred_at > as_of 的记忆（未来）
+		// 抬到 freshness 满分，污染 top-1。现在 rf.Now=as_of 时该 bug 会显性触发
+		// （实测 temporal 桶 2 条样本 rank 1→2，见 temporal_asof_now_20261012.md §3）。
+		// 未来记忆 freshness 归 0，等价于「该记忆当时还不存在，时效不可用」。
 		if age < 0 {
-			age = 0
+			out[c.Memory.MemoryID] = 0.0
+			continue
 		}
 		out[c.Memory.MemoryID] = math.Exp(-float64(age) / float64(hl))
 	}
@@ -717,9 +723,18 @@ func (rf *RankFusion) signalReferenceFrame(_ context.Context, _ string, cands []
 //   - 有反馈：adopted/(adopted+rejected)，但考虑时间衰减
 //   - rejected 记忆：反馈分 < 0.3（降权）
 //   - adopted 记忆：反馈分 > 0.7（升权）
-func signalFeedbackHistory(_ context.Context, _ string, cands []RecalledCandidate) map[string]float64 {
+//
+// R3-B 修复（任务书 B.2.1）：原实现用 time.Now().UTC()（第二个隐藏时间源），
+// 违反 seed=42 确定性（每次评测反馈时间不同），且与 as_of 时序不一致
+// （as_of 是 2023 时，feedback 却用 2026 判断 90 天内是否近期）。
+// 改为 rf.Now（与 signalFreshness 一致）；若 rf.Now 为零则回退 time.Now().UTC()
+// 保持向后兼容。
+func (rf *RankFusion) signalFeedbackHistory(_ context.Context, _ string, cands []RecalledCandidate) map[string]float64 {
 	out := make(map[string]float64, len(cands))
-	now := time.Now().UTC()
+	now := rf.Now
+	if now.IsZero() {
+		now = time.Now().UTC() // 向后兼容：未显式设置时回退
+	}
 	const halfLife = 90 * 24 * time.Hour // 90 天半衰期
 
 	for _, c := range cands {
