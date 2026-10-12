@@ -42,10 +42,16 @@ type EvalItem struct {
 	Memory           *kernel.Memory `json:"memory"`
 	// Hop1Memory 多跳样本的 hop-1 记忆（仅 multi-hop 桶使用）。
 	// 评测器需同时物化 hop-1 和 hop-2，否则 multi-hop 永远 0%。
-	Hop1Memory       *kernel.Memory `json:"hop1_memory,omitempty"`
+	Hop1Memory *kernel.Memory `json:"hop1_memory,omitempty"`
 	// SecondVersion 时序样本的另一版本（仅 temporal 桶使用）。
 	// 双时态回溯需同时物化两个版本，否则 as_of 过滤无法验证。
-	SecondVersion    *kernel.Memory `json:"second_version,omitempty"`
+	SecondVersion *kernel.Memory `json:"second_version,omitempty"`
+	// R5-B：multi-hop 单元素重构（只增不改）。
+	// ExpectedMemoryIDPrimary 是最终答案记忆（hop-2），作为多跳主判定口径；
+	// ExpectedMemoryIDHop 是跳板记忆（hop-1），作为 hop 口径对照。
+	// 原字段 ExpectedMemoryID 在多跳样本里重构为单元素（= hop-2），字段名与语义保持兼容。
+	ExpectedMemoryIDPrimary []string `json:"expected_memory_ids_primary,omitempty"`
+	ExpectedMemoryIDHop     []string `json:"expected_memory_ids_hop,omitempty"`
 }
 
 // 实体与事实模板。
@@ -137,16 +143,20 @@ func genMultiHop(r *rand.Rand, n int) []EvalItem {
 			Permission:     kernel.Permission{Owner: user},
 		}
 		out = append(out, EvalItem{
-			ID:               fmt.Sprintf("mh-%03d", i),
-			Query:            query,
-			ExpectedMemoryID: []string{memID1, memID2},
-			ExpectedFact:     fact2,
-			Bucket:           "multi-hop",
-			IsTemporal:       false,
-			HasInjection:     false,
-			HasPollution:     false,
-			Tenant:           tenant,
-			User:             user,
+			ID:    fmt.Sprintf("mh-%03d", i),
+			Query: query,
+			// R5-B：multi-hop 主口径改为**单元素**（hop-2 最终答案），消除 hop-1 被放在
+			// [0] 位、检索器正确召回 hop-2 却按 rank=2 计 0.5 的结构性惩罚（R4-D §1）。
+			ExpectedMemoryID:        []string{memID2},
+			ExpectedMemoryIDPrimary: []string{memID2},
+			ExpectedMemoryIDHop:     []string{memID1},
+			ExpectedFact:            fact2,
+			Bucket:                  "multi-hop",
+			IsTemporal:              false,
+			HasInjection:            false,
+			HasPollution:            false,
+			Tenant:                  tenant,
+			User:                    user,
 			Memory: &kernel.Memory{
 				MemoryID:       memID2,
 				IdempotencyKey: memID2,
@@ -240,63 +250,63 @@ func genTemporal(r *rand.Rand, n int) []EvalItem {
 					expectedID = memID2
 					expectedFact = factV2
 				}
-		// 把 as_of 日期嵌入 query，使每条 query 唯一对应一条 expected_fact。
-		// 时序回溯的「查询」天然就是「在 X 时间点查 Y」，这是业务语义而非 hack。
-		// 同时物化两个版本，使 as_of 过滤能正确验证。
-		otherAsOf := "2026-10-15"
-		otherID := memID2
-		otherFact := factV2
-		if i%2 == 0 {
-			otherAsOf = "2026-09-15"
-			otherID = memID1
-			otherFact = factV1
-		}
-		secondVersion := &kernel.Memory{
-			MemoryID:       otherID,
-			IdempotencyKey: otherID,
-			TenantID:       tenant,
-			UserID:         user,
-			Visibility:     kernel.VisTenant,
-			MemoryKind:     kernel.KindFact,
-			Fact:           otherFact,
-			Confidence:     0.85,
-			Source:         "chat",
-			Version:        1,
-			Layer:          kernel.LayerL1,
-			Provenance:     kernel.ProvNormal,
-			ValidFrom:      otherAsOf,
-			Permission:     kernel.Permission{Owner: user},
-		}
-		out = append(out, EvalItem{
-			ID:               fmt.Sprintf("tp-%03d", i),
-			Query:            fmt.Sprintf("%s（%s 生效）", expectedFact, asOf),
-			ExpectedMemoryID: []string{expectedID},
-			ExpectedFact:     expectedFact,
-			Bucket:           "temporal",
-			IsTemporal:       true,
-			HasInjection:     false,
-			HasPollution:     false,
-			Tenant:           tenant,
-			User:             user,
-			AsOf:             asOf,
-			Memory: &kernel.Memory{
-				MemoryID:       expectedID,
-				IdempotencyKey: expectedID,
-				TenantID:       tenant,
-				UserID:         user,
-				Visibility:     kernel.VisTenant,
-				MemoryKind:     kernel.KindFact,
-				Fact:           expectedFact,
-				Confidence:     0.85,
-				Source:         "chat",
-				Version:        1,
-				Layer:          kernel.LayerL1,
-				Provenance:     kernel.ProvNormal,
-				ValidFrom:      asOf,
-				Permission:     kernel.Permission{Owner: user},
-			},
-			SecondVersion: secondVersion,
-		})
+				// 把 as_of 日期嵌入 query，使每条 query 唯一对应一条 expected_fact。
+				// 时序回溯的「查询」天然就是「在 X 时间点查 Y」，这是业务语义而非 hack。
+				// 同时物化两个版本，使 as_of 过滤能正确验证。
+				otherAsOf := "2026-10-15"
+				otherID := memID2
+				otherFact := factV2
+				if i%2 == 0 {
+					otherAsOf = "2026-09-15"
+					otherID = memID1
+					otherFact = factV1
+				}
+				secondVersion := &kernel.Memory{
+					MemoryID:       otherID,
+					IdempotencyKey: otherID,
+					TenantID:       tenant,
+					UserID:         user,
+					Visibility:     kernel.VisTenant,
+					MemoryKind:     kernel.KindFact,
+					Fact:           otherFact,
+					Confidence:     0.85,
+					Source:         "chat",
+					Version:        1,
+					Layer:          kernel.LayerL1,
+					Provenance:     kernel.ProvNormal,
+					ValidFrom:      otherAsOf,
+					Permission:     kernel.Permission{Owner: user},
+				}
+				out = append(out, EvalItem{
+					ID:               fmt.Sprintf("tp-%03d", i),
+					Query:            fmt.Sprintf("%s（%s 生效）", expectedFact, asOf),
+					ExpectedMemoryID: []string{expectedID},
+					ExpectedFact:     expectedFact,
+					Bucket:           "temporal",
+					IsTemporal:       true,
+					HasInjection:     false,
+					HasPollution:     false,
+					Tenant:           tenant,
+					User:             user,
+					AsOf:             asOf,
+					Memory: &kernel.Memory{
+						MemoryID:       expectedID,
+						IdempotencyKey: expectedID,
+						TenantID:       tenant,
+						UserID:         user,
+						Visibility:     kernel.VisTenant,
+						MemoryKind:     kernel.KindFact,
+						Fact:           expectedFact,
+						Confidence:     0.85,
+						Source:         "chat",
+						Version:        1,
+						Layer:          kernel.LayerL1,
+						Provenance:     kernel.ProvNormal,
+						ValidFrom:      asOf,
+						Permission:     kernel.Permission{Owner: user},
+					},
+					SecondVersion: secondVersion,
+				})
 			}
 		}
 	}
@@ -319,66 +329,66 @@ func genTemporalChange(r *rand.Rand, n int) []EvalItem {
 			memID2 := fmt.Sprintf("tc2-%03d", i)
 			factV1 := fmt.Sprintf("%s的预算是%s", ent, amountsV1[j])
 			factV2 := fmt.Sprintf("%s的预算是%s", ent, amountsV2[j])
-		asOf := "2026-09-15"
-		expectedID := memID1
-		expectedFact := factV1
-		otherAsOf := "2026-10-15"
-		otherID := memID2
-		otherFact := factV2
-		if i%2 == 0 {
-			asOf = "2026-10-15"
-			expectedID = memID2
-			expectedFact = factV2
-			otherAsOf = "2026-09-15"
-			otherID = memID1
-			otherFact = factV1
-		}
-		secondVersion := &kernel.Memory{
-			MemoryID:       otherID,
-			IdempotencyKey: otherID,
-			TenantID:       tenant,
-			UserID:         user,
-			Visibility:     kernel.VisTenant,
-			MemoryKind:     kernel.KindFact,
-			Fact:           otherFact,
-			Confidence:     0.8,
-			Source:         "chat",
-			Version:        1,
-			Layer:          kernel.LayerL1,
-			Provenance:     kernel.ProvNormal,
-			ValidFrom:      otherAsOf,
-			Permission:     kernel.Permission{Owner: user},
-		}
-		out = append(out, EvalItem{
-			ID:               fmt.Sprintf("tc-%03d", i),
-			Query:            fmt.Sprintf("%s（%s 生效）", expectedFact, asOf),
-			ExpectedMemoryID: []string{expectedID},
-			ExpectedFact:     expectedFact,
-			Bucket:           "temporal",
-			IsTemporal:       true,
-			HasInjection:     false,
-			HasPollution:     false,
-			Tenant:           tenant,
-			User:             user,
-			AsOf:             asOf,
-			Memory: &kernel.Memory{
-				MemoryID:       expectedID,
-				IdempotencyKey: expectedID,
+			asOf := "2026-09-15"
+			expectedID := memID1
+			expectedFact := factV1
+			otherAsOf := "2026-10-15"
+			otherID := memID2
+			otherFact := factV2
+			if i%2 == 0 {
+				asOf = "2026-10-15"
+				expectedID = memID2
+				expectedFact = factV2
+				otherAsOf = "2026-09-15"
+				otherID = memID1
+				otherFact = factV1
+			}
+			secondVersion := &kernel.Memory{
+				MemoryID:       otherID,
+				IdempotencyKey: otherID,
 				TenantID:       tenant,
 				UserID:         user,
 				Visibility:     kernel.VisTenant,
 				MemoryKind:     kernel.KindFact,
-				Fact:           expectedFact,
+				Fact:           otherFact,
 				Confidence:     0.8,
 				Source:         "chat",
 				Version:        1,
 				Layer:          kernel.LayerL1,
 				Provenance:     kernel.ProvNormal,
-				ValidFrom:      asOf,
+				ValidFrom:      otherAsOf,
 				Permission:     kernel.Permission{Owner: user},
-			},
-			SecondVersion: secondVersion,
-		})
+			}
+			out = append(out, EvalItem{
+				ID:               fmt.Sprintf("tc-%03d", i),
+				Query:            fmt.Sprintf("%s（%s 生效）", expectedFact, asOf),
+				ExpectedMemoryID: []string{expectedID},
+				ExpectedFact:     expectedFact,
+				Bucket:           "temporal",
+				IsTemporal:       true,
+				HasInjection:     false,
+				HasPollution:     false,
+				Tenant:           tenant,
+				User:             user,
+				AsOf:             asOf,
+				Memory: &kernel.Memory{
+					MemoryID:       expectedID,
+					IdempotencyKey: expectedID,
+					TenantID:       tenant,
+					UserID:         user,
+					Visibility:     kernel.VisTenant,
+					MemoryKind:     kernel.KindFact,
+					Fact:           expectedFact,
+					Confidence:     0.8,
+					Source:         "chat",
+					Version:        1,
+					Layer:          kernel.LayerL1,
+					Provenance:     kernel.ProvNormal,
+					ValidFrom:      asOf,
+					Permission:     kernel.Permission{Owner: user},
+				},
+				SecondVersion: secondVersion,
+			})
 		}
 	}
 	return out
@@ -520,6 +530,29 @@ func main() {
 		f.WriteString("\n")
 	}
 	f.Close()
+
+	// R5-B：保留历史双元素口径到 all_multihop_dual.jsonl（历史可比性）。
+	// 原口径 expected_memory_ids = [hop-1, hop-2]（hop-1 在 [0] 位，正是主 MRR
+	// 结构性 0.5 惩罚的来源）。该文件不参与默认评测，仅供重构前后对照复跑。
+	dualPath := base + "/all_multihop_dual.jsonl"
+	df, err := os.Create(dualPath)
+	if err != nil {
+		log.Fatalf("create %s: %v", dualPath, err)
+	}
+	dualCount := 0
+	for _, item := range all {
+		if item.Bucket != "multi-hop" || len(item.ExpectedMemoryIDHop) == 0 || len(item.ExpectedMemoryIDPrimary) == 0 {
+			continue
+		}
+		dual := item
+		dual.ExpectedMemoryID = []string{item.ExpectedMemoryIDHop[0], item.ExpectedMemoryIDPrimary[0]}
+		b, _ := json.Marshal(dual)
+		df.Write(b)
+		df.WriteString("\n")
+		dualCount++
+	}
+	df.Close()
+	log.Printf("wrote %s: %d items (历史双元素口径，供重构前后对照)", dualPath, dualCount)
 
 	log.Printf("total: %d items across 4 buckets + 70 additional", len(all))
 }

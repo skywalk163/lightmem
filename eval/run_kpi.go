@@ -66,6 +66,12 @@ type EvalItem struct {
 	Project string `json:"project,omitempty"`
 	Scene   string `json:"scene,omitempty"`
 	Task    string `json:"task,omitempty"`
+	// R5-B：multi-hop 单元素重构字段（只增不改）。
+	// ExpectedMemoryIDPrimary 是最终答案记忆（hop-2），作为多跳主口径；
+	// ExpectedMemoryIDHop 是跳板记忆（hop-1），作为 hop 口径对照。
+	// 老样本（无此字段）回退到 ExpectedMemoryID。
+	ExpectedMemoryIDPrimary []string `json:"expected_memory_ids_primary,omitempty"`
+	ExpectedMemoryIDHop     []string `json:"expected_memory_ids_hop,omitempty"`
 }
 
 type KPIReport struct {
@@ -119,6 +125,15 @@ type KPIReport struct {
 	//   expected_top1_hit  — 期望记忆最终成为融合 top-1 的比例（命中率）
 	//   ref_top1_and_hit   — 期望记忆 ref 分最高且最终 top-1 命中的比例（信号→命中传导率）
 	RefFrameSignal map[string]float64 `json:"ref_frame_signal,omitempty"`
+	// R5-B：multi-hop 重构后的**主口径 MRR**——用 ExpectedMemoryIDPrimary（最终答案，单元素）
+	// 在全融合序内求首个命中的 1/rank。脱离 R4 的 0.500 结构性下限。
+	BucketMRRPrimary map[string]float64 `json:"bucket_mrr_primary,omitempty"`
+	// R5-B：multi-hop **跳板口径 MRR**——用 ExpectedMemoryIDHop（hop-1）判定，作为对照。
+	BucketMRRHop map[string]float64 `json:"bucket_mrr_hop,omitempty"`
+	// R5-B：fact 边界归一化开关状态（-fact-normalize，默认 true）。
+	FactNormalize bool `json:"fact_normalize,omitempty"`
+	// R5-B：本次评测合并的 temporal 样本数（-temporal-samples）。
+	TemporalExtra int `json:"temporal_extra,omitempty"`
 }
 
 // CostTracker 成本追踪（§9 评测增强）。
@@ -260,7 +275,16 @@ func main() {
 	// R4-A：multi-hop 诊断打印——指定样本 id（可逗号分隔多个），打印 hop 锚点、
 	// top-5 候选的 hop 证据（answers / cover / hop-2 推理链）与重排前后的 top-1。
 	diagMH := flag.String("diag-mh", "", "R4-A: 诊断打印：指定样本 id（逗号分隔多个），打印 hop 锚点与 top-5 候选的 hop 证据链")
+	// R5-B：temporal 样本补齐——加载额外 temporal JSONL 并合并进评测（追加到 items 末尾）。
+	// 用于把 generate_temporal.go 产出的窗口查询样本并入 temporal 桶评测。
+	temporalSamples := flag.String("temporal-samples", "", "R5-B: 额外 temporal 样本 JSONL 路径（合并进评测；空则不合并）")
+	// R5-B：fact 边界归一化开关（默认 true）。
+	//   开启后 fact 匹配前做确定性边界归一化（数值 $3,750→3750 / 日期 2023-04-01→2023 04 01 /
+	//   单位大小写统一），并在 char-trigram 模糊路径上追加「边界对齐词元覆盖」护栏，抑制
+	//   长 got 文本里的碎片误配（假阳性）。-fact-normalize=false 复现 R4 基线（逐位一致）。
+	factNormalize := flag.Bool("fact-normalize", true, "R5-B: fact 匹配边界归一化 + 边界对齐护栏；false 复现 R4 基线")
 	flag.Parse() // 必须先 Parse 再取值，否则取到的是默认值
+	factNormalizeEnabled = *factNormalize
 	dsPath := *dsFlag
 	repPrefix := *repFlag
 	wPath := *wFlag
@@ -287,6 +311,19 @@ func main() {
 		log.Fatalf("load dataset: %v", err)
 	}
 	log.Printf("loaded %d items", len(items))
+
+	// R5-B：合并额外 temporal 样本（-temporal-samples），追加到 items 末尾。
+	// 追加序确定（文件行序），不改变既有样本的相对顺序与统计口径。
+	temporalExtra := 0
+	if *temporalSamples != "" {
+		extra, err := loadDataset(*temporalSamples)
+		if err != nil {
+			log.Fatalf("load temporal samples %s: %v", *temporalSamples, err)
+		}
+		temporalExtra = len(extra)
+		items = append(items, extra...)
+		log.Printf("[R5-B] merged %d temporal samples from %s（total=%d）", len(extra), *temporalSamples, len(items))
+	}
 
 	// 2) 装配内核（SQLite 内存后端，无需真实 PG）。
 	prof := &kernel.Profile{Profile: kernel.TierSolo, StorageBackend: kernel.BackendSQLite}
@@ -361,6 +398,8 @@ func main() {
 	// R3-D：multi-hop 口径 A（hit@1 集合判定）与口径 B（hit@2）累计器。
 	multiSetHits, multiSetTotal := 0, 0
 	multiHit2Hits := 0
+	// R5-B：multi-hop 主口径（ExpectedMemoryIDPrimary）与跳板口径（ExpectedMemoryIDHop）的 rank 序列。
+	var multihopPrimaryRanks, multihopHopRanks []int
 	pollutionTotal, pollutionHits := 0, 0
 	// R4-B：reference_frame 信号复检计数器。
 	//   refFrameTotal    — reference_frame 桶样本数
@@ -691,6 +730,17 @@ func main() {
 			if multiHit2(res.Fused, item.ExpectedMemoryID) {
 				multiHit2Hits++
 			}
+			// R5-B：multi-hop 主口径 MRR——用 ExpectedMemoryIDPrimary（最终答案，单元素）
+			// 在全融合序内求首个命中的 1/rank。无 primary 字段的老样本回退 ExpectedMemoryID。
+			primaryIDs := item.ExpectedMemoryIDPrimary
+			if len(primaryIDs) == 0 {
+				primaryIDs = item.ExpectedMemoryID
+			}
+			multihopPrimaryRanks = append(multihopPrimaryRanks, firstRank(res.Fused, primaryIDs))
+			// R5-B：multi-hop 跳板口径 MRR——用 ExpectedMemoryIDHop（hop-1）判定（对照）。
+			if len(item.ExpectedMemoryIDHop) > 0 {
+				multihopHopRanks = append(multihopHopRanks, firstRank(res.Fused, item.ExpectedMemoryIDHop))
+			}
 		}
 
 		// R4-B：reference_frame 桶——复检 signalReferenceFrame 区分度。
@@ -825,6 +875,9 @@ func main() {
 		TemplateHits:     templateHits,
 		FactHitTop5Count: factHitTop5Count,
 		FactAlgo:         factAlgoLabel(),
+		// R5-B：fact 边界归一化开关状态 + 合并的 temporal 样本数（追溯用）。
+		FactNormalize: factNormalizeEnabled,
+		TemporalExtra: temporalExtra,
 	}
 	// R4-C：主 fact 准确率分母改为 factTotal（= total − templateTotal）。
 	// -fact-v4=false 时 templateExpected 恒 false → factTotal == total，
@@ -855,6 +908,14 @@ func main() {
 		report.BucketHit2 = map[string]float64{
 			"multi-hop": float64(multiHit2Hits) / float64(multiSetTotal),
 		}
+	}
+	// R5-B：multi-hop 主口径 MRR（ExpectedMemoryIDPrimary，最终答案）+ 跳板口径对照
+	// （ExpectedMemoryIDHop，hop-1）。主口径脱离 R4 的 0.500 结构性下限。
+	if mrr := mrrOfRanks(multihopPrimaryRanks); len(multihopPrimaryRanks) > 0 {
+		report.BucketMRRPrimary = map[string]float64{"multi-hop": mrr}
+	}
+	if mrr := mrrOfRanks(multihopHopRanks); len(multihopHopRanks) > 0 {
+		report.BucketMRRHop = map[string]float64{"multi-hop": mrr}
 	}
 	// R4-B：reference_frame 信号复检辅助口径——期望记忆的 signalReferenceFrame
 	// 打分是否最高（refTop1），与实际 top-1 是否命中的对照。
@@ -923,6 +984,19 @@ func main() {
 		fmt.Fprintf(&sb, "  - 主 MRR（口径 C，历史可比）：%.3f\n", main)
 		fmt.Fprintf(&sb, "  - 口径 A MRR（top-1 ∈ Expected 即 hit）：%.3f\n", set)
 		fmt.Fprintf(&sb, "  - 口径 B hit@2（top-2 内命中）：%.3f\n", h2)
+	}
+	// R5-B：multi-hop 主口径 / 跳板口径 MRR（ExpectedMemoryIDPrimary / Hop）。
+	if m, ok := report.BucketMRRPrimary["multi-hop"]; ok {
+		sb.WriteString("- multi-hop 桶 R5-B 主口径（ExpectedMemoryIDPrimary 最终答案 MRR）：")
+		fmt.Fprintf(&sb, "%.3f\n", m)
+	}
+	if m, ok := report.BucketMRRHop["multi-hop"]; ok {
+		sb.WriteString("- multi-hop 桶 R5-B 跳板口径（ExpectedMemoryIDHop hop-1 MRR，对照）：")
+		fmt.Fprintf(&sb, "%.3f\n", m)
+	}
+	fmt.Fprintf(&sb, "- fact 边界归一化（-fact-normalize）：%v\n", report.FactNormalize)
+	if report.TemporalExtra > 0 {
+		fmt.Fprintf(&sb, "- 合并 temporal 样本数（-temporal-samples）：%d\n", report.TemporalExtra)
 	}
 	sb.WriteString("\n")
 
@@ -1258,6 +1332,12 @@ func matchFactV3(gotFact, expectedFact string) bool {
 	if matchFact(gotFact, expectedFact) {
 		return true
 	}
+	// R5-B：边界归一化（数值/日期/单位/大小写）后复判——消弭书写形态差异。
+	// 仅在 -fact-normalize 开启时启用；false 时跳过，逐位复现 R4。
+	if factNormalizeEnabled &&
+		matchFact(normalizeFactBoundary(gotFact), normalizeFactBoundary(expectedFact)) {
+		return true
+	}
 	b := normalizeFact(expectedFact)
 	// 注意：Go len(string) 返回字节数，中文每字 3 字节，必须用 RuneCountInString。
 	if utf8.RuneCountInString(b) < 15 {
@@ -1268,7 +1348,51 @@ func matchFactV3(gotFact, expectedFact string) bool {
 		return false
 	}
 	sim := factV3Score(a, b)
-	return sim >= factV3Threshold
+	if sim < factV3Threshold {
+		return false
+	}
+	// R5-B：模糊路径边界对齐护栏——抑制长 got 文本里的碎片误配（假阳性）。
+	// CJK expected 无法词元化，跳过护栏（见 factBoundaryGuard）。
+	if factNormalizeEnabled {
+		return factBoundaryGuard(gotFact, expectedFact)
+	}
+	return true
+}
+
+// factBoundaryGuard R5-B：char-trigram 模糊路径命中后的**边界对齐护栏**。
+//
+// 动机：模糊相似度（Dice / containment）在 got 远长于 expected、且 got 含大量共同
+// 短 n-gram 时，可能把「碎片巧合」误判为命中（假阳性）。护栏要求 expected 的**实义词元**
+// 至少 need 个在 got 中**整词出现**（need = 2，当 expected 有 ≥2 个词元；否则为词元总数）。
+//
+// 规则（与离线验证脚本 r5b_norm_sim.py 逐位一致）：
+//   - expected 含 CJK（无法拉丁词元化）→ 直接放行（return true）；
+//   - 比较集合基于 factContentTokens（小写 + 去停用词），纯字符串、无随机源。
+func factBoundaryGuard(gotFact, expectedFact string) bool {
+	if hasCJK(expectedFact) {
+		return true
+	}
+	ct := factContentTokens(expectedFact)
+	gt := make(map[string]struct{})
+	for _, w := range factContentTokens(gotFact) {
+		gt[w] = struct{}{}
+	}
+	need := len(ct)
+	if len(ct) >= 2 {
+		need = 2
+	}
+	seen := make(map[string]struct{})
+	shared := 0
+	for _, w := range ct {
+		if _, dup := seen[w]; dup {
+			continue
+		}
+		seen[w] = struct{}{}
+		if _, ok := gt[w]; ok {
+			shared++
+		}
+	}
+	return shared >= need
 }
 
 // ------------------------------------------------------------------
@@ -1313,6 +1437,32 @@ func multiHit2(fused []kernel.FusedResult, expected []string) bool {
 	return false
 }
 
+// firstRank R5-B：返回 expected 中任一 MemoryID 在融合序 fused 中首次出现的 1-based rank；
+// 未命中返回 0。纯 ID 集合判定，确定性，无随机源。用于 multi-hop 主/跳板口径 MRR。
+func firstRank(fused []kernel.FusedResult, expected []string) int {
+	for i, f := range fused {
+		if sliceContains(expected, f.MemoryID) {
+			return i + 1
+		}
+	}
+	return 0
+}
+
+// mrrOfRanks R5-B：由 rank 序列计算 MRR（未命中 rank=0 计 0 分）。
+// 与主 MRR 口径（bucket_mrr）公式一致：sum(1/rank) / n。
+func mrrOfRanks(ranks []int) float64 {
+	if len(ranks) == 0 {
+		return 0
+	}
+	var sum float64
+	for _, r := range ranks {
+		if r > 0 {
+			sum += 1.0 / float64(r)
+		}
+	}
+	return sum / float64(len(ranks))
+}
+
 // ==================================================================
 // R4-C：fact 口径 v4——确定性残留补齐（模板剔除 / 时间推理 / 数值日期归一 / 短词元包含）。
 //
@@ -1334,6 +1484,15 @@ func multiHit2(fused []kernel.FusedResult, expected []string) bool {
 
 // factV4Enabled 是 fact 口径 v4 开关，由 -fact-v4 flag 注入（默认 true）。
 var factV4Enabled = true
+
+// factNormalizeEnabled 是 R5-B fact 边界归一化 + 边界对齐护栏开关，由 -fact-normalize
+// flag 注入（默认 true）。开启时：
+//  1. matchFactV3 在字面包含失败后，先做**边界归一化**（数值/日期/单位/大小写）复判；
+//  2. char-trigram 模糊路径命中后追加**边界对齐护栏**，要求 expected 的实义词元在 got 中
+//     整词出现（≥2 个，或 expected 仅 ≤1 个时全部），抑制长 got 文本里的碎片误配（假阳性）。
+//
+// -fact-normalize=false 时两条支路均不启用，逐位复现 R4 v4 基线（isolate）。
+var factNormalizeEnabled = true
 
 // factAlgoLabel 返回当前 fact 口径版本标识，写入报告便于追溯。
 func factAlgoLabel() string {
@@ -1509,6 +1668,30 @@ func normalizeFactNumbers(s string) string {
 		s = factReThousands.ReplaceAllString(s, "$1$2")
 	}
 	s = factReDateSep.ReplaceAllString(s, "$1 $2 $3")
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// factReUnitTail 尾随单位点（如 "3.5kg." / "12gb." 的句末点）与单位常见别名。
+var factReUnitTail = regexp.MustCompile(`([0-9])([a-z%]+)\.`)
+
+// normalizeFactBoundary R5-B：fact 匹配前的确定性**边界归一化**（-fact-normalize）。
+//
+// 与 normalizeFactNumbers 的差别：本函数把数值/日期/单位的**边界形态**压平成规范形，
+// 用于跨形态的包含复判与护栏词元对齐（不改变判定语义，仅消弭书写形态差异）：
+//   - 去货币符号（$ € £ ¥）+ 去千分位逗号："$3,750" → "3750"；
+//   - 日期去分隔符："2023-04-01" / "2023/04/01" → "20230401"；
+//   - 单位大小写统一（小写）并去尾随点："3.5KG." → "3.5kg"；
+//   - 压缩空白。
+//
+// 纯字符串处理，不调 LLM，无随机源（确定性）。
+func normalizeFactBoundary(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	s = factReCurrency.ReplaceAllString(s, "")
+	for factReThousands.MatchString(s) {
+		s = factReThousands.ReplaceAllString(s, "$1$2")
+	}
+	s = factReDateSep.ReplaceAllString(s, "$1$2$3")
+	s = factReUnitTail.ReplaceAllString(s, "$1$2")
 	return strings.Join(strings.Fields(s), " ")
 }
 

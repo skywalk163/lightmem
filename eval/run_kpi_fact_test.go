@@ -22,6 +22,8 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"github.com/lightmem/kernel"
 )
 
 // withThreshold 临时设置 factV3Threshold 并返回还原函数（用例隔离）。
@@ -32,6 +34,15 @@ func withThreshold(t *testing.T, thr float64) {
 	t.Cleanup(func() { factV3Threshold = old })
 }
 
+// withNormalize 临时设置 R5-B fact 边界归一化开关（-fact-normalize）并注册还原（用例隔离）。
+// 用于把「边界归一化 + 边界对齐护栏」这一路增益与既有 v2/v3/v4 路径隔离。
+func withNormalize(t *testing.T, on bool) {
+	t.Helper()
+	old := factNormalizeEnabled
+	factNormalizeEnabled = on
+	t.Cleanup(func() { factNormalizeEnabled = old })
+}
+
 // 1. RuneCountInString 门槛（中文 15 rune 边界 / 英文 15 字符边界）。
 //
 // 关键：把阈值压到 0.0，使「是否越过长度门槛」成为唯一变量——
@@ -39,6 +50,8 @@ func withThreshold(t *testing.T, thr float64) {
 // 「≥15 字符」而进入相似度判定并命中，本用例即失败。
 func TestMatchFactV3_RuneThreshold(t *testing.T) {
 	withThreshold(t, 0.0)
+	// 本用例只考察「长度门槛」这一变量，关闭 R5-B 边界归一化与护栏（两者正交）。
+	withNormalize(t, false)
 
 	// 中文 5 rune（=15 字节）：修复后应被门槛拒绝（RuneCount 5 < 15 边界）。
 	shortCJK := "你好世界啊"  // 5 rune / 15 byte
@@ -212,5 +225,125 @@ func TestMatchFactV4ShortTokensAndTop5(t *testing.T) {
 	longExp := "this expected fact is clearly longer than fifteen runes"
 	if matchFactTop5([]string{longExp}, longExp, nil) {
 		t.Fatalf(">=15 rune 的 expected 不应进入候选扩展")
+	}
+}
+
+// ==================================================================
+// R5-B：fact 边界归一化（-fact-normalize）单测。
+// 覆盖任务书 §2 B.3.4：数值 / 日期 / 单位 / 大小写 / 混合样本。
+// ==================================================================
+
+// 7. normalizeFactBoundary：数值 / 日期 / 单位 / 大小写 / 混合。
+func TestNormalizeFactBoundary(t *testing.T) {
+	cases := []struct{ in, want string }{
+		// 数值：去货币符号 + 去千分位逗号（含多位千分位）。
+		{"$3,750", "3750"},
+		{"Price: $1,234,567", "price: 1234567"},
+		{"€99", "99"},
+		{"¥1,000", "1000"},
+		// 日期：去分隔符（ISO / 斜杠两种形态统一为紧凑数字）。
+		{"2023-04-01", "20230401"},
+		{"2023/04/01", "20230401"},
+		// 单位：大小写统一 + 去尾随点。
+		{"3.5KG.", "3.5kg"},
+		{"12GB.", "12gb"},
+		{"60%", "60%"},
+		// 大小写：整体小写。
+		{"HELLO World", "hello world"},
+		// 混合：数值 + 日期 + 单位 + 大小写同时出现。
+		{"Total: $3,750 on 2023-04-01 (12GB.)", "total: 3750 on 20230401 (12gb)"},
+		// 空白压缩。
+		{"  a   b  ", "a b"},
+	}
+	for _, c := range cases {
+		if got := normalizeFactBoundary(c.in); got != c.want {
+			t.Fatalf("normalizeFactBoundary(%q)=%q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// 8. factBoundaryGuard：边界对齐护栏（CJK 放行 / 词元覆盖 / 碎片拒绝 / 单词元）。
+func TestFactBoundaryGuard(t *testing.T) {
+	cases := []struct {
+		name string
+		got  string
+		exp  string
+		want bool
+	}{
+		// CJK expected 无法拉丁词元化 → 直接放行。
+		{"CJK 放行", "任意中文内容", "中文内容", true},
+		// 多词元：需 ≥2 个实义词元整词出现。
+		{"词元覆盖达标", "the total revenue for this quarter is up", "total revenue for this quarter", true},
+		{"词元覆盖不足", "totally unrelated revenue stream", "total revenue for this quarter", false},
+		// 单词元：需该词元整词出现。
+		{"单词元命中", "we discussed revenue today", "revenue", true},
+		{"单词元未命中", "we discussed profits today", "revenue", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := factBoundaryGuard(c.got, c.exp); got != c.want {
+				t.Fatalf("factBoundaryGuard(%q,%q)=%v, want %v", c.got, c.exp, got, c.want)
+			}
+		})
+	}
+}
+
+// 9. matchFactV3 在 -fact-normalize 开 / 关下的差异。
+//   - 开：数值形态差被边界归一化抹平 → 命中；
+//   - 关：模糊路径碎片误配被护栏拒绝 → 不命中。
+func TestMatchFactV3_FactNormalizeSwitch(t *testing.T) {
+	withThreshold(t, 1.0)
+
+	// 数值/日期形态差：阈值 1.0 下 v3 直判必然 miss，边界归一化后应命中。
+	gotNum, expNum := "the total is 3750", "the total is $3,750"
+	withNormalize(t, true)
+	if !matchFactV3(gotNum, expNum) {
+		t.Fatalf("开启边界归一化后应命中: got=%q exp=%q", gotNum, expNum)
+	}
+	withNormalize(t, false)
+	if matchFactV3(gotNum, expNum) {
+		t.Fatalf("关闭边界归一化后形态差应 miss: got=%q exp=%q", gotNum, expNum)
+	}
+
+	// 护栏：模糊命中但边界不对齐（碎片误配）→ 开启时拒绝，关闭时命中。
+	withThreshold(t, 0.5)
+	gotFrag, expFrag := "abcdefghijklmnx", "abcdefghijklmnop"
+	withNormalize(t, true)
+	if matchFactV3(gotFrag, expFrag) {
+		t.Fatalf("护栏应拒绝碎片误配: got=%q exp=%q", gotFrag, expFrag)
+	}
+	withNormalize(t, false)
+	if !matchFactV3(gotFrag, expFrag) {
+		t.Fatalf("关闭护栏后模糊相似度应命中: got=%q exp=%q", gotFrag, expFrag)
+	}
+}
+
+// 10. multi-hop 主 / 跳板口径 MRR 的 rank 辅助（firstRank / mrrOfRanks）。
+func TestFirstRankAndMRR(t *testing.T) {
+	fused := []kernel.FusedResult{
+		{MemoryID: "hop1-000"},
+		{MemoryID: "noise"},
+		{MemoryID: "hop2-000"},
+	}
+	// 主口径：期望最终答案 hop2-000，应命中 rank=3。
+	if r := firstRank(fused, []string{"hop2-000"}); r != 3 {
+		t.Fatalf("firstRank 主口径 = %d, want 3", r)
+	}
+	// 跳板口径：期望 hop1-000，应命中 rank=1。
+	if r := firstRank(fused, []string{"hop1-000"}); r != 1 {
+		t.Fatalf("firstRank 跳板口径 = %d, want 1", r)
+	}
+	// 未命中 rank=0。
+	if r := firstRank(fused, []string{"absent"}); r != 0 {
+		t.Fatalf("firstRank 未命中 = %d, want 0", r)
+	}
+	// MRR：[(3),(1),(0)] → (1/3 + 1 + 0)/3 = 0.444…。
+	got := mrrOfRanks([]int{3, 1, 0})
+	want := (1.0/3.0 + 1.0) / 3.0
+	if diff := got - want; diff > 1e-9 || diff < -1e-9 {
+		t.Fatalf("mrrOfRanks = %v, want %v", got, want)
+	}
+	if m := mrrOfRanks(nil); m != 0 {
+		t.Fatalf("空 rank 序列 MRR = %v, want 0", m)
 	}
 }
