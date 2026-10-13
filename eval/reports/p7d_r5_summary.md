@@ -99,6 +99,8 @@ M2 控制面 token 占比 0.4375（压缩后 0.3447）——控制面开销小�
 
 **8/8 清除或结论关闭。**
 
+> **收口追加（2026-10-13 19:20，P1 处置）**：R5-B 重构数据集已提交入库（用户拍板）。本提交纳入 `dataset/all.jsonl`、`single-hop.jsonl`、`multi-hop.jsonl`、`open-domain.jsonl`、`temporal.jsonl`、`all_multihop_dual.jsonl`——由**已提交的生成器** `eval/eval_generate.go`（seed=42，确定性）产出。入库前核验：① `injection.jsonl`/`pollution.jsonl`/`reference_frame.jsonl` 重新生成后与 committed 版**逐字节一致**（生成器确定性证据）；② multi-hop 150 条全部单元素 Expected + `expected_memory_ids_primary`；③ single-hop 50 个 (实体,主题) 组 × 周一/周二/周三 三条互斥事实，query 括号为**消歧锚**（生成器 line 73 注释的设计意图，非答案泄漏构造）；④ temporal 130 条全部带 as_of + second_version。**P8 以此定论**：committed 生成器实际产出 130 条 temporal（B 路报告「50 条」为 `-count` 参数描述，以文件与生成器为准）。合流最终态指标（§0 表）即在此数据集上测得。剩余待办 P3/P4/P7 转入下一轮（R6）任务书。
+
 ## 3. roadmap v4 未启动泳道完成情况（任务书 §0.2）
 
 | 泳道 | 任务 | 结果 |
