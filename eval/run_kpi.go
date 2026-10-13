@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -232,6 +233,9 @@ func main() {
 	// 默认注入（让 signalSemantic 真正生效）；-no-embedder 用于对照实验，
 	// 复现 R2 基线（signalSemantic 退化为 RecallScore）。
 	noEmbedder := flag.Bool("no-embedder", false, "R3-A: 跳过 embedder 注入，复现 R2 基线（semantic 退化为 RecallScore）")
+	// R5-A：embedder 实现切换。vector=静态向量（BGE-m3）；tfidf=R3-A 原有 char n-gram TF-IDF；none=不注入。
+	// -no-embedder=true 时覆盖本 flag（等价 none），保留 R3-A 的 isolate 兼容。
+	embedderFlag := flag.String("embedder", "tfidf", "R5-A: embedder 实现 tfidf|vector|none")
 	// R3-A：embedder 词表缓存路径。首次运行时从两个评测集统计 IDF 并落盘，
 	// 后续复用同一词表（保证 tune 脚本与 run_kpi.go 向量维度一致、可复现）。
 	vocabPath := flag.String("vocab-path", "weights/embedder_vocab_en.json", "R3-A: char n-gram TF-IDF 词表缓存路径")
@@ -357,10 +361,34 @@ func main() {
 	if err := rf.LoadWeightsFromFile(weightsPath); err != nil {
 		log.Fatalf("load weights %s: %v", weightsPath, err)
 	}
-	// R3-A：注入确定性 char n-gram TF-IDF embedder（不调 LLM）。
-	// 词表（IDF）从两个评测集的 query+fact 文本统计，落盘后复用，seed 无关、无 time.Now()。
-	// 若不注入，signalSemantic 退化为 RecallScore（R2 基线），-no-embedder 可对照复现。
-	if !*noEmbedder {
+	// R5-A：向量 embedder 注入方式（-embedder vector|tfidf|none）。
+	//   vector  — 加载 BGE-m3 静态向量文件（kernel/embedder_vector.go），semantic 用真实语义向量；
+	//   tfidf   — R3-A 原有 char n-gram TF-IDF embedder（历史默认）；
+	//   none    — 不注入（signalSemantic 退化为 RecallScore，R2 基线）。
+	// 默认 tfidf：保持 R4 基线逐位一致；-embedder vector 需先由远端脚本生成
+	// eval/vectors/vectors.npy（模型文件缺失时报错并提示回退 tfidf，任务书 §A.3.1）。
+	// 兼容性：-no-embedder=true 等价于 -embedder none。
+	switch *embedderFlag {
+	case "none", "vector", "tfidf":
+		// 合法值，继续。
+	default:
+		log.Fatalf("-embedder %q invalid: must be tfidf|vector|none", *embedderFlag)
+	}
+	if *noEmbedder {
+		// R3-A 兼容：-no-embedder=true 强制不注入（等价 -embedder none）。
+		*embedderFlag = "none"
+	}
+	switch *embedderFlag {
+	case "none":
+		log.Printf("[R5-A] embedder mode=none (semantic falls back to RecallScore)")
+	case "vector":
+		ve, err := loadVectorEmbedder(dsPath)
+		if err != nil {
+			log.Fatalf("[R5-A] load vector embedder: %v\n  -> 建议回退：-embedder tfidf（任务书 §5.4 降级）", err)
+		}
+		rf.SetEmbedderImpl(ve)
+		log.Printf("[R5-A] embedder injected: name=%s dim=%d count=%d", ve.Name(), ve.Dim(), ve.Count())
+	default: // "tfidf"
 		v, err := loadEvalVocab(*vocabPath, dsPath)
 		if err != nil {
 			log.Fatalf("build/load embedder vocab: %v", err)
@@ -1157,6 +1185,186 @@ func loadEvalVocab(vocabPath, dsPath string) (*kernel.CharNgramVocab, error) {
 		log.Printf("[R3-A] warn: save vocab %s: %v", vocabPath, err)
 	}
 	return v, nil
+}
+
+// ------------------------------------------------------------------
+// R5-A：向量 embedder（BGE-m3 静态向量文件）——确定性嵌入，不调 LLM。
+//
+// 背景（任务书 §A.1 / §A.3.1 / §5.4）：Go 进程内无 onnxruntime/llama.cpp；
+// 远端 0.88 用 torch+transformers 离线加载 BAAI/bge-m3 生成静态向量（.npy + .json），
+// Go 侧读取该文件实现"确定性嵌入 + 余弦相似度"的 semantic 信号。
+// 向量表 key = 归一化文本（小写 + 压缩空白），query 与 passage 均不加深造前缀，
+// 保证 Embed(query) 与 Embed(fact) 落在同一空间（BGE-m3 原生多语检索已够用）。
+// ------------------------------------------------------------------
+
+// vectorFileSet 静态向量文件的三个产物路径。
+type vectorFileSet struct {
+	matrix string // .npy（float32，[N, Dim]）
+	meta   string // .json（VectorMeta）
+	index  string // .jsonl（text -> 行号）
+}
+
+// vectorPaths 返回相对 eval/ 目录的向量文件路径（与 gen_vectors.py 输出一致）。
+func vectorPaths() vectorFileSet {
+	return vectorFileSet{
+		matrix: "vectors/vectors.npy",
+		meta:   "vectors/vectors_meta.json",
+		index:  "vectors/vectors_index.jsonl",
+	}
+}
+
+// collectVectorCorpus 收集向量化语料（query + fact），顺序固定：
+// 公开基准 → 合成集 → 当前数据集 → reference_frame → temporal。
+// 与 collectVocabCorpus 同源但额外纳入 reference_frame/temporal（它们含中文模板，
+// 是 LoCoMo 之外唯一依赖语义向量的桶）。顺序固定保证向量表可复现。
+func collectVectorCorpus(dsPath string) []string {
+	corpus := []string{}
+	add := func(path string) {
+		if path == "" {
+			return
+		}
+		items, err := loadDataset(path)
+		if err != nil {
+			log.Printf("[R5-A] vector corpus skip %s: %v", path, err)
+			return
+		}
+		for _, it := range items {
+			if it.Query != "" {
+				corpus = append(corpus, it.Query)
+			}
+			if it.Memory != nil && it.Memory.Fact != "" {
+				corpus = append(corpus, it.Memory.Fact)
+			}
+			if it.Hop1Memory != nil && it.Hop1Memory.Fact != "" {
+				corpus = append(corpus, it.Hop1Memory.Fact)
+			}
+			if it.Hop2Memory != nil && it.Hop2Memory.Fact != "" {
+				corpus = append(corpus, it.Hop2Memory.Fact)
+			}
+			if it.SecondVersion != nil && it.SecondVersion.Fact != "" {
+				corpus = append(corpus, it.SecondVersion.Fact)
+			}
+		}
+	}
+	// 路径前缀：从 eval/ 或仓库根运行均可。
+	prefix := ""
+	if _, err := os.Stat("eval"); err == nil {
+		prefix = "eval/"
+	}
+	add(prefix + "benchmarks/dataset/all.jsonl")
+	add(prefix + "dataset/all.jsonl")
+	if dsPath != "" && dsPath != prefix+"benchmarks/dataset/all.jsonl" && dsPath != prefix+"dataset/all.jsonl" {
+		add(dsPath)
+	}
+	add(prefix + "dataset/reference_frame.jsonl")
+	add(prefix + "dataset/temporal.jsonl")
+	return corpus
+}
+
+// needVectorGenerate 判断向量文件是否缺失或与当前语料不匹配。
+// 匹配判据：meta.count == len(去重后 corpus)（语料规模变化则重生成）。
+// 注意：collectVectorCorpus 可能重复加入同一文本（如 dsPath == reference_frame.jsonl），
+// 因此必须先去重再比较 meta.count，否则每次评测都会误判"过期"而重复跑 27 分钟的生成。
+func needVectorGenerate(corpus []string, paths vectorFileSet) bool {
+	for _, p := range []string{paths.matrix, paths.meta, paths.index} {
+		if _, err := os.Stat(p); err != nil {
+			return true
+		}
+	}
+	raw, err := os.ReadFile(paths.meta)
+	if err != nil {
+		return true
+	}
+	var m struct {
+		Count int `json:"count"`
+	}
+	if json.Unmarshal(raw, &m) != nil {
+		return true
+	}
+	return m.Count != uniqueCount(corpus)
+}
+
+// uniqueCount 返回语料去重后的条目数（顺序无关，仅比较规模用）。
+func uniqueCount(corpus []string) int {
+	if len(corpus) == 0 {
+		return 0
+	}
+	seen := make(map[string]struct{}, len(corpus))
+	for _, t := range corpus {
+		seen[t] = struct{}{}
+	}
+	return len(seen)
+}
+
+// generateVectors 调用远端 Python 脚本生成静态向量文件（0.88 上执行）。
+// corpus 写入临时 JSONL，脚本读取后调用 BGE-m3 生成向量。
+// 不调 LLM（BGE 嵌入属任务书 §0 例外条款允许的"确定性嵌入"）。
+func generateVectors(corpus []string, paths vectorFileSet) error {
+	if len(corpus) == 0 {
+		return fmt.Errorf("empty corpus")
+	}
+	// 语料去重（保持首次出现顺序，确定性）。
+	seen := map[string]bool{}
+	unique := make([]string, 0, len(corpus))
+	for _, t := range corpus {
+		if seen[t] {
+			continue
+		}
+		seen[t] = true
+		unique = append(unique, t)
+	}
+	// 写入输入文件（eval/vectors/corpus.txt）。
+	if dir := filepath.Dir(paths.matrix); dir != "" {
+		_ = os.MkdirAll(dir, 0o755)
+	}
+	input := filepath.Join(filepath.Dir(paths.matrix), "corpus.txt")
+	var sb strings.Builder
+	for _, t := range unique {
+		sb.WriteString(strings.ReplaceAll(t, "\n", " "))
+		sb.WriteString("\n")
+	}
+	if err := os.WriteFile(input, []byte(sb.String()), 0o644); err != nil {
+		return fmt.Errorf("write corpus: %w", err)
+	}
+	// 调用远端脚本（本地工作区内的 gen_vectors.py，已同步到 0.88 同目录）。
+	script := filepath.Join(filepath.Dir(paths.matrix), "gen_vectors.py")
+	if _, err := os.Stat(script); err != nil {
+		return fmt.Errorf("gen_vectors.py missing at %s (需同步到 0.88 后重跑): %w", script, err)
+	}
+	cmd := exec.Command("python3", script,
+		"-in", input,
+		"-out", paths.matrix,
+		"-meta", paths.meta,
+		"-index", paths.index,
+		"-model", "BAAI/bge-m3",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("gen_vectors failed: %v\n%s", err, string(out))
+	}
+	log.Printf("[R5-A] vectors generated: n=%d, script output: %s", len(unique), trimForLog(string(out), 200))
+	return nil
+}
+
+// loadVectorEmbedder 加载（必要时自动生成）BGE-m3 静态向量 embedder。
+// 生成失败返回错误，调用方应提示回退 `-embedder tfidf`（任务书 §5.4 降级）。
+func loadVectorEmbedder(dsPath string) (*kernel.VectorEmbedder, error) {
+	corpus := collectVectorCorpus(dsPath)
+	paths := vectorPaths()
+	if needVectorGenerate(corpus, paths) {
+		if err := generateVectors(corpus, paths); err != nil {
+			return nil, fmt.Errorf("向量文件缺失/过期且自动生成失败（模型文件需在 0.88 就绪）: %w\n  回退建议：-embedder tfidf", err)
+		}
+	}
+	ve, err := kernel.NewVectorEmbedder(kernel.VectorEmbedderConfig{
+		MatrixPath: paths.matrix,
+		MetaPath:   paths.meta,
+		IndexPath:  paths.index,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("load vector embedder: %w", err)
+	}
+	return ve, nil
 }
 
 // ------------------------------------------------------------------

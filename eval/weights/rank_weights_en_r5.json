@@ -1,0 +1,54 @@
+{
+  "k": 60,
+  "_comment": "R5-A 交付产物（vector embedder 调优）：起始=R4 联合（semantic=2.0），纳入 semantic 搜索变量后 +0.1 步长坐标下降 1 轮收敛于基准最优；reference_frame 纳入搜索变量但 +0.1 无提升，保留 0.0（明确结论：纳入后无收益）。semantic 大幅扫描（3/4/5/6/8/12/16/20/30/50）后 sem=12 为公开基准与合成集双达标最优平衡点（public 0.9900 / synth 0.8585，LoCoMo 4 条 rank 1/5/4/4）。L3 depth=2 重评估负收益（0.9900->0.9842），保持关闭。",
+  "weights": [
+    {
+      "name": "semantic",
+      "weight": 12.0,
+      "type": "calibrated",
+      "note": "语义相似度（R5-A：char n-gram TF-IDF embedder 注入后调优，可切 -embedder vector 用 BGE-m3）"
+    },
+    {
+      "name": "keyword",
+      "weight": 3.2,
+      "type": "calibrated",
+      "note": "BM25 全文关键词（R5-A 调优）"
+    },
+    {
+      "name": "entity",
+      "weight": 2.9,
+      "type": "calibrated",
+      "note": "实体匹配（R5-A 调优）"
+    },
+    {
+      "name": "value",
+      "weight": 0.2,
+      "type": "fixed",
+      "note": "记忆固有价值（R5-A 未纳入校准：kernel 固定公式，红线 1 只增不改语义）"
+    },
+    {
+      "name": "freshness",
+      "weight": 0.1,
+      "type": "fixed",
+      "note": "时效新鲜度（R5-A 未纳入校准：kernel 固定公式，红线 1 只增不改语义）"
+    },
+    {
+      "name": "source_trust",
+      "weight": 0.1,
+      "type": "fixed",
+      "note": "来源可信度（R5-A 未纳入校准：kernel 固定公式，红线 1 只增不改语义）"
+    },
+    {
+      "name": "reference_frame",
+      "weight": 0,
+      "type": "calibrated",
+      "note": "R5-A 重校准后仍为 0.0（纳入搜索变量但坐标下降收敛到 0，明确结论：纳入后无收益）"
+    },
+    {
+      "name": "feedback",
+      "weight": 0.1,
+      "type": "fixed",
+      "note": "反馈历史（R5-A 未纳入校准：kernel 固定公式，红线 1 只增不改语义）"
+    }
+  ]
+}
