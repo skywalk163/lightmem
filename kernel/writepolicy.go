@@ -315,14 +315,3 @@ func (p *FeedbackPolicy) Validate(_ context.Context, m *Memory, _ WriteMeta) err
 	}
 	return nil
 }
-
-// clamp01 将值限制在 [0, 1] 区间。
-func clamp01(v float64) float64 {
-	if v < 0 {
-		return 0
-	}
-	if v > 1 {
-		return 1
-	}
-	return v
-}

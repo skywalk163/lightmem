@@ -12,8 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"time"
-
-	_ "github.com/lib/pq"
 )
 
 // Connector 外部连接器接口
@@ -53,9 +51,9 @@ func (r *ConnectorRegistry) All() []Connector {
 
 // DBConnector 数据库连接器（完整实现）
 type DBConnector struct {
-	name   string
-	db     *sql.DB
-	cfg    *DBConfig
+	name    string
+	db      *sql.DB
+	cfg     *DBConfig
 	backend StorageBackend
 }
 
@@ -143,7 +141,7 @@ func (c *DBConnector) Sync(ctx context.Context, cfg json.RawMessage) error {
 					Version:        1,
 					Layer:          LayerL1,
 				}
-				if _, err := c.backend.Upsert(ctx, m); err != nil {
+				if err := c.backend.Upsert(ctx, m); err != nil {
 					log.Printf("[connector] %s upsert %s: %v", c.name, key, err)
 					continue
 				}
@@ -166,11 +164,11 @@ type DocConnector struct {
 }
 
 type DocConfig struct {
-	Path        string   `json:"path"`
-	Extensions  []string `json:"extensions"`
-	PollSec     int      `json:"poll_sec"`
-	TenantID    string   `json:"tenant_id"`
-	UserID      string   `json:"user_id"`
+	Path       string   `json:"path"`
+	Extensions []string `json:"extensions"`
+	PollSec    int      `json:"poll_sec"`
+	TenantID   string   `json:"tenant_id"`
+	UserID     string   `json:"user_id"`
 }
 
 func NewDocConnector(name string, backend StorageBackend) *DocConnector {
@@ -252,7 +250,7 @@ func (c *DocConnector) Sync(ctx context.Context, cfg json.RawMessage) error {
 					Version:        1,
 					Layer:          LayerL1,
 				}
-				if _, err := c.backend.Upsert(ctx, m); err != nil {
+				if err := c.backend.Upsert(ctx, m); err != nil {
 					log.Printf("[doc] %s upsert %s: %v", c.name, f, err)
 					continue
 				}

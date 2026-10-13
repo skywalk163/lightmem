@@ -104,37 +104,37 @@ func (b *sqliteBackend) Query(ctx context.Context, q QueryParams) ([]QueryResult
 		if q.AsOf != nil && !m.visibleAt(*q.AsOf) {
 			continue
 		}
-	score := 0.0
-	if needle != "" {
-		fact := strings.ToLower(m.Fact)
-		if fact == needle {
-			score = 1.0
-		} else if strings.Contains(fact, needle) {
-			score = 0.7
-		} else {
-			// 词元回退：查询与事实的分词重合度（与 router_mem.go 的 recallScore 一致）。
-			// 使 SQLite 骨架后端的 Query 与 RecallLayers 的文本匹配行为一致。
-			qTokens := tokenize(needle)
-			if len(qTokens) > 0 {
-				fSet := tokenSet(m.Fact)
-				hit := 0
-				for _, t := range qTokens {
-					if fSet[t] {
-						hit++
+		score := 0.0
+		if needle != "" {
+			fact := strings.ToLower(m.Fact)
+			if fact == needle {
+				score = 1.0
+			} else if strings.Contains(fact, needle) {
+				score = 0.7
+			} else {
+				// 词元回退：查询与事实的分词重合度（与 router_mem.go 的 recallScore 一致）。
+				// 使 SQLite 骨架后端的 Query 与 RecallLayers 的文本匹配行为一致。
+				qTokens := tokenize(needle)
+				if len(qTokens) > 0 {
+					fSet := tokenSet(m.Fact)
+					hit := 0
+					for _, t := range qTokens {
+						if fSet[t] {
+							hit++
+						}
 					}
-				}
-				if hit > 0 {
-					score = 0.5 * float64(hit) / float64(len(qTokens))
+					if hit > 0 {
+						score = 0.5 * float64(hit) / float64(len(qTokens))
+					} else {
+						continue
+					}
 				} else {
 					continue
 				}
-			} else {
-				continue
 			}
+		} else {
+			score = 0.1
 		}
-	} else {
-		score = 0.1
-	}
 		score += m.Confidence * 0.2
 		res = append(res, b.toResult(m, score))
 	}
@@ -172,6 +172,64 @@ func (b *sqliteBackend) CountByKind(ctx context.Context, kind MemoryKind, tenant
 }
 
 func (b *sqliteBackend) Close() error { return nil }
+
+// ------------------------------------------------------------------
+// ComplianceBackend（P7-A GDPR，§7.3/§7.4/§7.5）
+// 只增不改：在 SQLite 骨架内存后端上补齐删除/导出，使 Solo 档与单测无需真实 PG 即可跑通 GDPR 通路。
+// 确定性：导出/返回 ID 均按 (recorded_at, memory_id) 升序。
+// ------------------------------------------------------------------
+
+// ExportByScope 返回 (tenant, userID) 作用域下的全部记忆（深拷贝，避免调用方篡改内存 map）。
+func (b *sqliteBackend) ExportByScope(ctx context.Context, tenant, userID string) ([]*Memory, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	out := make([]*Memory, 0, len(b.data))
+	for _, m := range b.data {
+		if m.TenantID == tenant && m.UserID == userID {
+			cp := *m
+			out = append(out, &cp)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if !out[i].RecordedAt.Equal(out[j].RecordedAt) {
+			return out[i].RecordedAt.Before(out[j].RecordedAt)
+		}
+		return out[i].MemoryID < out[j].MemoryID
+	})
+	return out, nil
+}
+
+// DeleteByScope 级联删除 (tenant, userID) 作用域下全部记忆，返回被删 ID（升序）。
+func (b *sqliteBackend) DeleteByScope(ctx context.Context, tenant, userID string) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var ids []string
+	for id, m := range b.data {
+		if m.TenantID == tenant && m.UserID == userID {
+			ids = append(ids, id)
+			delete(b.data, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids, nil
+}
+
+// DeleteByID 物理删除单条记忆（被遗忘权）。不存在时视为已遗忘（返回 nil，幂等）。
+func (b *sqliteBackend) DeleteByID(ctx context.Context, memoryID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.data, memoryID)
+	return nil
+}
 
 // ---- LayerScanner / MemoryScanner / IdempotencyLookup（P2 A1/A3/A4/A6）----
 // 说明：SQLite 骨架后端在内存 map 上补齐分层扫描与幂等查找，

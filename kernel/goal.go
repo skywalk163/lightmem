@@ -5,9 +5,9 @@ package kernel
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"time"
 )
 
@@ -77,7 +77,7 @@ func (m *GoalManager) CreateGoal(ctx context.Context, goal, deadline string, kpi
 			Deadline:    deadline,
 		},
 	}
-	if _, err := m.backend.Upsert(ctx, m2); err != nil {
+	if err := m.backend.Upsert(ctx, m2); err != nil {
 		return nil, err
 	}
 	GetAuditLogger().Log("goal_create", m2.MemoryID, m2.TenantID, m2.UserID, actor, goal)
@@ -281,7 +281,7 @@ func BatchImport(ctx context.Context, backend StorageBackend, tenant, user strin
 		if m.Layer == "" {
 			m.Layer = ClassifyLayer(m)
 		}
-		if _, err := backend.Upsert(ctx, m); err != nil {
+		if err := backend.Upsert(ctx, m); err != nil {
 			log.Printf("[import] %s: %v", m.MemoryID, err)
 			continue
 		}

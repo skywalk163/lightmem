@@ -76,6 +76,11 @@ func (s *APIServer) Handler() http.Handler {
 	mux.HandleFunc("GET /metrics", s.handleMetrics)
 	mux.HandleFunc("GET /audit/{memory_id}", s.handleAudit)
 	mux.HandleFunc("GET /audit", s.handleAuditList)
+	// P7-A GDPR 合规端点（§7.3 删除权 / §7.4 数据可携 / §7.5 被遗忘权）
+	// 仅新增路由，不改动任何检索/写入链路。
+	mux.HandleFunc("POST /api/v1/gdpr/cascade-delete", s.handleGDPRCascadeDelete)
+	mux.HandleFunc("POST /api/v1/gdpr/export", s.handleGDPRExport)
+	mux.HandleFunc("POST /api/v1/gdpr/forget", s.handleGDPRForget)
 	return mux
 }
 
@@ -433,6 +438,92 @@ func (s *APIServer) handleAuditList(w http.ResponseWriter, r *http.Request) {
 		"audit_log":   entries,
 		"audit_count": len(entries),
 	})
+}
+
+// ------------------------------------------------------------------
+// P7-A GDPR 合规端点（§7.3/§7.4/§7.5）
+// 仅新增，不改动检索/写入链路。
+// ------------------------------------------------------------------
+
+// handleGDPRCascadeDelete 级联删除（§7.3 删除权）：POST /api/v1/gdpr/cascade-delete
+// body: {"tenant_id":..., "user_id":..., "actor":...}
+func (s *APIServer) handleGDPRCascadeDelete(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		TenantID string `json:"tenant_id"`
+		UserID   string `json:"user_id"`
+		Actor    string `json:"actor"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad json: " + err.Error()})
+		return
+	}
+	if req.TenantID == "" || req.UserID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "tenant_id and user_id required"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	res, err := CascadeDelete(ctx, s.backend, req.TenantID, req.UserID, req.Actor)
+	if err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// handleGDPRExport 数据可携导出（§7.4）：POST /api/v1/gdpr/export
+// body: {"tenant_id":..., "user_id":...}；返回该作用域全部记忆（NDJSON 友好 JSON 数组）。
+func (s *APIServer) handleGDPRExport(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		TenantID string `json:"tenant_id"`
+		UserID   string `json:"user_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad json: " + err.Error()})
+		return
+	}
+	if req.TenantID == "" || req.UserID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "tenant_id and user_id required"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	mems, err := ExportAll(ctx, s.backend, req.TenantID, req.UserID)
+	if err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"tenant_id": req.TenantID,
+		"user_id":   req.UserID,
+		"exported":  len(mems),
+		"memories":  mems,
+	})
+}
+
+// handleGDPRForget 被遗忘权（§7.5）：POST /api/v1/gdpr/forget
+// body: {"memory_id":..., "actor":...}；彻底移除 + 匿名化（不保留 trace）。
+func (s *APIServer) handleGDPRForget(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		MemoryID string `json:"memory_id"`
+		Actor    string `json:"actor"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad json: " + err.Error()})
+		return
+	}
+	if req.MemoryID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "memory_id required"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	res, err := RightToBeForgotten(ctx, s.backend, req.MemoryID, req.Actor)
+	if err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 // ---- helpers ----

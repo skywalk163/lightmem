@@ -10,7 +10,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -27,27 +26,27 @@ const (
 type PackageType string
 
 const (
-	PkgService    PackageType = "service"
-	PkgConnector  PackageType = "connector"
-	PkgSkill      PackageType = "skill"
-	PkgPolicy     PackageType = "policy"
-	PkgPack       PackageType = "pack"
-	PkgScheduler  PackageType = "scheduler"
+	PkgService   PackageType = "service"
+	PkgConnector PackageType = "connector"
+	PkgSkill     PackageType = "skill"
+	PkgPolicy    PackageType = "policy"
+	PkgPack      PackageType = "pack"
+	PkgScheduler PackageType = "scheduler"
 )
 
 // PackageManifest 包清单（manifest.json 对应结构）
 type PackageManifest struct {
-	Name        string            `json:"name"`
-	Version     string            `json:"version"`
-	Description string            `json:"description"`
-	Author      string            `json:"author"`
-	Trust       PackageTrust      `json:"trust"`
-	Type        PackageType       `json:"type"`
-	Entrypoint  string            `json:"entrypoint"`
-	Config      json.RawMessage   `json:"config,omitempty"`
-	Permissions []string          `json:"permissions,omitempty"`
-	MemoryTypes []string          `json:"memory_types,omitempty"`
-	Dependencies []string         `json:"dependencies,omitempty"`
+	Name         string          `json:"name"`
+	Version      string          `json:"version"`
+	Description  string          `json:"description"`
+	Author       string          `json:"author"`
+	Trust        PackageTrust    `json:"trust"`
+	Type         PackageType     `json:"type"`
+	Entrypoint   string          `json:"entrypoint"`
+	Config       json.RawMessage `json:"config,omitempty"`
+	Permissions  []string        `json:"permissions,omitempty"`
+	MemoryTypes  []string        `json:"memory_types,omitempty"`
+	Dependencies []string        `json:"dependencies,omitempty"`
 }
 
 // PackageState 包状态
@@ -110,7 +109,7 @@ func (p *PackageLifecycle) Install(ctx context.Context, manifestPath, actor stri
 
 // Configure 配置包
 func (p *PackageLifecycle) Configure(ctx context.Context, name string, cfg json.RawMessage, actor string) error {
-	mf, ok := p.pkgs[name]
+	_, ok := p.pkgs[name]
 	if !ok {
 		return fmt.Errorf("package not found: %s", name)
 	}
@@ -166,7 +165,7 @@ func (p *PackageLifecycle) Upgrade(ctx context.Context, name, newVersion, actor 
 
 // Uninstall 卸载包
 func (p *PackageLifecycle) Uninstall(ctx context.Context, name, actor string) error {
-	mf, ok := p.pkgs[name]
+	_, ok := p.pkgs[name]
 	if !ok {
 		return fmt.Errorf("package not found: %s", name)
 	}
@@ -335,7 +334,7 @@ func ExtractPackageMemory(ctx context.Context, backend StorageBackend, pkgName s
 			Version:        1,
 			Layer:          LayerL2,
 		}
-		if _, err := backend.Upsert(ctx, m); err != nil {
+		if err := backend.Upsert(ctx, m); err != nil {
 			return extracted, err
 		}
 		extracted++
@@ -354,7 +353,7 @@ func ExtractPackageMemory(ctx context.Context, backend StorageBackend, pkgName s
 			Version:        1,
 			Layer:          LayerL2,
 		}
-		if _, err := backend.Upsert(ctx, m); err != nil {
+		if err := backend.Upsert(ctx, m); err != nil {
 			return extracted, err
 		}
 		extracted++

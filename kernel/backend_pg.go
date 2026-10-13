@@ -594,6 +594,69 @@ func (b *pgBackend) scanMemoryRows(rows *sql.Rows) ([]*Memory, error) {
 	return out, rows.Err()
 }
 
+// ------------------------------------------------------------------
+// ComplianceBackend（P7-A GDPR，§7.3/§7.4/§7.5）
+// 只增不改：在 pgvector 后端上补齐删除/导出。导出/返回 ID 均按确定性排序。
+// ------------------------------------------------------------------
+
+// ExportByScope 返回 (tenant, userID) 作用域下的全部记忆。
+func (b *pgBackend) ExportByScope(ctx context.Context, tenant, userID string) ([]*Memory, error) {
+	rows, err := b.db.QueryContext(ctx, `
+	SELECT memory_id, idempotency_key, tenant_id, user_id, agent_id, project_id,
+		visibility, shared_with_tenants, permission, permission_level,
+		memory_kind, fact, reference_frame,
+		occurred_at, recorded_at, valid_from, valid_until, superseded_by,
+		confidence, source, version, importance, recent_access_score, access_count, expire_at,
+		provenance, source_evidence, vector_status, is_historical,
+		goal_detail, external_ref, layer
+	FROM `+b.table+`
+	WHERE tenant_id=$1 AND user_id=$2
+	ORDER BY recorded_at ASC, memory_id ASC`, tenant, userID)
+	if err != nil {
+		return nil, fmt.Errorf("pg export by scope: %w", err)
+	}
+	defer rows.Close()
+	return b.scanMemoryRows(rows)
+}
+
+// DeleteByScope 级联删除 (tenant, userID) 作用域下全部记忆，返回被删 ID（升序）。
+func (b *pgBackend) DeleteByScope(ctx context.Context, tenant, userID string) ([]string, error) {
+	rows, err := b.db.QueryContext(ctx, `
+	DELETE FROM `+b.table+`
+	WHERE tenant_id=$1 AND user_id=$2
+	RETURNING memory_id ORDER BY memory_id ASC`, tenant, userID)
+	if err != nil {
+		return nil, fmt.Errorf("pg cascade delete: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("pg cascade delete scan: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// DeleteByID 物理删除单条记忆（被遗忘权）。不存在时视为已遗忘（返回 nil，幂等）。
+func (b *pgBackend) DeleteByID(ctx context.Context, memoryID string) error {
+	if memoryID == "" {
+		return fmt.Errorf("memory_id required")
+	}
+	res, err := b.db.ExecContext(ctx,
+		`DELETE FROM `+b.table+` WHERE memory_id=$1`, memoryID)
+	if err != nil {
+		return fmt.Errorf("pg delete by id: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		// 已不存在 → 视为已遗忘（幂等）
+		return nil
+	}
+	return nil
+}
+
 // ---- helper ----
 
 func maxInt(a, b int) int {
