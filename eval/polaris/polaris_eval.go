@@ -190,11 +190,17 @@ func main() {
 	compressFlag := flag.Bool("compress", false, "控制面压缩口径：query 先过 CompressQuery 再检索（覆盖率不降验证用）")
 	nowFixed := flag.String("now-fixed", defaultNowFixed, "固定 rf.Now 基准日期（YYYY-MM-DD；确定性保证，勿用 time.Now）")
 	reportsDir := flag.String("reports-dir", "", "报告输出目录（默认自动探测 eval/reports）")
+
+	// R6-D 评测有效性开关：-validity 跑全套；-no-anchor/-ablate/-multiview 单独跑。
+	validityFlag := flag.Bool("validity", false, "R6-D：跑全套评测有效性（无锚变体 + 消融 + 多视图）")
+	noAnchorFlag := flag.Bool("no-anchor", false, "R6-D：仅跑无锚变体（剥离括号锚，量化锚红利）")
+	ablateFlag := flag.String("ablate", "", "R6-D：消融模式，关闭指定信号（semantic|keyword|entity|value|freshness|source_trust|reference_frame|feedback|all）")
+	multiviewFlag := flag.Bool("multiview", false, "R6-D：仅跑多视图集成（确定性模板视图 + 候选得票集成）")
 	flag.Parse()
 
 	_ = os.MkdirAll(resolveReportsDir(*reportsDir), 0o755)
 
-	// ---- 语料加载（两种模式共用） ----
+	// ---- 语料加载（所有模式共用） ----
 	holdoutPath := *holdoutFlag
 	if holdoutPath == "" {
 		holdoutPath = resolvePath(
@@ -214,6 +220,14 @@ func main() {
 		log.Fatalf("load holdout %s: %v", holdoutPath, err)
 	}
 	log.Printf("loaded %d holdout items from %s", len(items), holdoutPath)
+
+	// R6-D 评测有效性模式（优先级高于 -mode eval）
+	if *validityFlag || *noAnchorFlag || *ablateFlag != "" || *multiviewFlag {
+		runValidityMode(items, holdoutPath, *corpusFlag, *weightsFlag, *embedderFlag,
+			*reportFlag, resolveReportsDir(*reportsDir), *topK, *compressFlag, *nowFixed, *vocabFlag,
+			*noAnchorFlag, *ablateFlag, *multiviewFlag)
+		return
+	}
 
 	switch *mode {
 	case "compress":
@@ -595,4 +609,122 @@ func buildPolarisVocab(items []HoldoutItem) (*kernel.CharNgramVocab, error) {
 	v := kernel.NewCharNgramVocab(3)
 	v.BuildIDF(corpus)
 	return v, nil
+}
+
+// ------------------------------------------------------------------
+// R6-D 评测有效性：无锚变体 + 消融 + 多视图集成。
+// ------------------------------------------------------------------
+
+// runValidityMode R6-D 评测有效性主入口。
+// 优先级：-validity 全套；-no-anchor 仅无锚；-ablate=<sig> 仅消融；-multiview 仅多视图。
+func runValidityMode(items []HoldoutItem, holdoutPath, corpusPath, weightsPath, embedderMode,
+	prefix, dir string, topK int, compressed bool, nowFixed, vocabPath string,
+	noAnchor bool, ablate string, multiview bool) {
+	ctx := context.Background()
+
+	// ---- 装配内核（与 runEvalMode 同链路） ----
+	prof := &kernel.Profile{Profile: kernel.TierSolo, StorageBackend: kernel.BackendSQLite}
+	b, err := kernel.NewStorageBackend(ctx, prof)
+	if err != nil {
+		log.Fatalf("new backend: %v", err)
+	}
+	srv := kernel.NewAPIServer(prof, b)
+	rf := kernel.DefaultRankFusion()
+	baseNow := time.Now().UTC()
+	if nowFixed != "" {
+		t, perr := time.Parse("2006-01-02", nowFixed)
+		if perr != nil {
+			log.Fatalf("-now-fixed %q: %v", nowFixed, perr)
+		}
+		baseNow = t.UTC()
+	}
+	rf.Now = baseNow
+	if err := rf.LoadWeightsFromFile(weightsPath); err != nil {
+		log.Fatalf("load weights %s: %v", weightsPath, err)
+	}
+	log.Printf("weights=%s baseNow=%s (fixed, 确定性)", weightsPath, baseNow.Format(time.RFC3339))
+
+	// ---- embedder 注入 ----
+	embedderName := ""
+	switch embedderMode {
+	case "none":
+		log.Printf("[polaris] embedder mode=none (semantic falls back to RecallScore)")
+	case "vector":
+		ve, verr := loadPolarisVectorEmbedder()
+		if verr != nil {
+			log.Fatalf("[polaris] load vector embedder: %v\n  -> 回退建议：-embedder tfidf", verr)
+		}
+		rf.SetEmbedderImpl(ve)
+		embedderName = ve.Name()
+		log.Printf("[polaris] embedder injected: name=%s dim=%d count=%d", ve.Name(), ve.Dim(), ve.Count())
+	case "tfidf":
+		v, verr := loadPolarisVocab(vocabPath, items)
+		if verr != nil {
+			log.Fatalf("[polaris] load/build tfidf vocab: %v", verr)
+		}
+		rf.SetEmbedder(v.EmbedFn())
+		embedderName = v.Name()
+		log.Printf("[polaris] embedder injected: ngram=%d dim=%d docs=%d", v.Ngram, v.Dim(), v.N)
+	case "auto":
+		if ve, verr := loadPolarisVectorEmbedder(); verr == nil {
+			rf.SetEmbedderImpl(ve)
+			embedderName = ve.Name()
+			log.Printf("[polaris] embedder auto->vector: name=%s dim=%d count=%d", ve.Name(), ve.Dim(), ve.Count())
+		} else {
+			v, verr2 := loadPolarisVocab(vocabPath, items)
+			if verr2 != nil {
+				log.Fatalf("[polaris] auto 模式向量不可用且 tfidf 构建失败: vector=%v tfidf=%v", verr, verr2)
+			}
+			rf.SetEmbedder(v.EmbedFn())
+			embedderName = v.Name()
+			log.Printf("[polaris] embedder auto->tfidf (vector unavailable: %v)", verr)
+		}
+	default:
+		log.Fatalf("-embedder %q invalid: must be auto|vector|tfidf|none", embedderMode)
+	}
+	srv.SetRankFusion(rf)
+
+	// ---- multi-hop 重排（与 run_kpi.go R4-A 后默认一致：开启、深度 1） ----
+	mhCfg := kernel.DefaultMultiHopConfig()
+	mhCfg.Enabled = true
+	mhCfg.Depth = 1
+	srv.SetMultiHopConfig(mhCfg)
+	log.Printf("[polaris] multi-hop rerank: enabled=%v depth=%d", mhCfg.Enabled, mhCfg.Depth)
+
+	// ---- 可选：批量预载语料 ----
+	if corpusPath != "" {
+		mems, cerr := loadMemories(corpusPath)
+		if cerr != nil {
+			log.Fatalf("load corpus %s: %v", corpusPath, cerr)
+		}
+		actor := "polaris-corpus"
+		saved := 0
+		for i := range mems {
+			if _, serr := srv.SaveMemory(ctx, &mems[i], actor); serr != nil {
+				log.Printf("WARN: save corpus memory %s: %v", mems[i].MemoryID, serr)
+				continue
+			}
+			saved++
+		}
+		log.Printf("[polaris] corpus preloaded: %d/%d from %s", saved, len(mems), corpusPath)
+	}
+
+	// ---- 分发到各子模块 ----
+	if noAnchor {
+		runNoAnchor(ctx, items, srv, rf, holdoutPath, weightsPath, embedderMode, embedderName, vocabPath, nowFixed, topK, compressed, dir, prefix)
+		return
+	}
+	if ablate != "" {
+		runAblation(ctx, items, srv, rf, holdoutPath, weightsPath, embedderMode, embedderName, vocabPath, nowFixed, topK, compressed, dir, prefix, ablate)
+		return
+	}
+	if multiview {
+		runMultiview(ctx, items, srv, rf, holdoutPath, weightsPath, embedderMode, embedderName, vocabPath, nowFixed, topK, compressed, dir, prefix)
+		return
+	}
+	// -validity：全套
+	runNoAnchor(ctx, items, srv, rf, holdoutPath, weightsPath, embedderMode, embedderName, vocabPath, nowFixed, topK, compressed, dir, prefix)
+	runAblation(ctx, items, srv, rf, holdoutPath, weightsPath, embedderMode, embedderName, vocabPath, nowFixed, topK, compressed, dir, prefix, "all")
+	runMultiview(ctx, items, srv, rf, holdoutPath, weightsPath, embedderMode, embedderName, vocabPath, nowFixed, topK, compressed, dir, prefix)
+	log.Printf("[validity] R6-D 评测有效性全套完成：无锚 + 消融 + 多视图")
 }

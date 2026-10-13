@@ -231,3 +231,95 @@ func TestJudgeM1(t *testing.T) {
 		t.Errorf("topk=1 时 top-2 答案不应命中: %+v", tr3)
 	}
 }
+
+// ------------------------------------------------------------------
+// R6-D 无锚变体（stripAnchor 确定性）。
+// ------------------------------------------------------------------
+
+func TestStripAnchor(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"客户A的偏好是什么（周一）", "客户A的偏好是什么"},
+		{"客户B的偏好是什么（周二）", "客户B的偏好是什么"},
+		{"客户C的偏好是什么（周三）", "客户C的偏好是什么"},
+		{"客户A的偏好是什么", "客户A的偏好是什么"}, // 无锚，原样
+		{"", ""},
+		{"（周一）", ""}, // 只有锚，剥离后为空
+		{"客户A的偏好是什么（周一）额外", "客户A的偏好是什么（周一）额外"}, // 锚不在行尾，不剥离
+		{"客户A的偏好是什么（周一）", "客户A的偏好是什么"},
+	}
+	for _, c := range cases {
+		if got := stripAnchor(c.in); got != c.want {
+			t.Errorf("stripAnchor(%q)=%q want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestStripAnchorDeterministic(t *testing.T) {
+	in := "客户A的偏好是什么（周一）"
+	for i := 0; i < 100; i++ {
+		if got := stripAnchor(in); got != "客户A的偏好是什么" {
+			t.Fatalf("非确定: iter %d -> %q", i, got)
+		}
+	}
+}
+
+// ------------------------------------------------------------------
+// R6-D 多视图生成（确定性模板）。
+// ------------------------------------------------------------------
+
+func TestGenerateMultiviews(t *testing.T) {
+	// 标准模式：X的Y是什么（day）
+	views := generateMultiviews("客户A的偏好是什么（周一）")
+	if len(views) < 2 {
+		t.Errorf("view count=%d want >=2", len(views))
+	}
+	// 视图 0 应是原 query
+	if views[0] != "客户A的偏好是什么（周一）" {
+		t.Errorf("view[0]=%q want 原 query", views[0])
+	}
+	// 确定性：同输入同输出
+	views2 := generateMultiviews("客户A的偏好是什么（周一）")
+	for i := range views {
+		if views[i] != views2[i] {
+			t.Errorf("非确定 view[%d]: %q vs %q", i, views[i], views2[i])
+		}
+	}
+
+	// 回退模式：无锚 query
+	views3 := generateMultiviews("客户A的偏好是什么")
+	if len(views3) < 3 {
+		t.Errorf("fallback view count=%d want >=3", len(views3))
+	}
+	if views3[0] != "客户A的偏好是什么" {
+		t.Errorf("fallback view[0]=%q want 原 query", views3[0])
+	}
+}
+
+func TestGenerateMultiviewsEmpty(t *testing.T) {
+	views := generateMultiviews("")
+	if len(views) < 1 {
+		t.Errorf("empty input should produce at least 1 view")
+	}
+	if views[0] != "" {
+		t.Errorf("empty input view[0]=%q want \"\"", views[0])
+	}
+}
+
+// ------------------------------------------------------------------
+// R6-D 信号列表完整性。
+// ------------------------------------------------------------------
+
+func TestAllSignalNames(t *testing.T) {
+	want := []string{"semantic", "keyword", "entity", "value", "freshness", "source_trust", "reference_frame", "feedback"}
+	if len(allSignalNames) != len(want) {
+		t.Fatalf("signal count=%d want %d", len(allSignalNames), len(want))
+	}
+	for i, w := range want {
+		if allSignalNames[i] != w {
+			t.Errorf("allSignalNames[%d]=%q want %q", i, allSignalNames[i], w)
+		}
+	}
+}
