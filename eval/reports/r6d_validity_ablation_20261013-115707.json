@@ -1,0 +1,141 @@
+{
+  "baseline_m1": {
+    "n": 590,
+    "hits": 562,
+    "m1_coverage": 0.9525423728813559,
+    "hit_at_1": 536,
+    "hit_at_1_rate": 0.9084745762711864,
+    "id_hit": 507,
+    "id_total": 590,
+    "id_hit_rate": 0.8593220338983051,
+    "mean_rr": 0.8402824858757062,
+    "by_bucket": {
+      "multi-hop": {
+        "n": 150,
+        "hits": 142,
+        "coverage": 0.9466666666666667,
+        "hit_at_1": 126
+      },
+      "open-domain": {
+        "n": 100,
+        "hits": 100,
+        "coverage": 1,
+        "hit_at_1": 100
+      },
+      "reference_frame": {
+        "n": 60,
+        "hits": 40,
+        "coverage": 0.6666666666666666,
+        "hit_at_1": 30
+      },
+      "single-hop": {
+        "n": 150,
+        "hits": 150,
+        "coverage": 1,
+        "hit_at_1": 150
+      },
+      "temporal": {
+        "n": 130,
+        "hits": 130,
+        "coverage": 1,
+        "hit_at_1": 130
+      }
+    },
+    "topk": 5
+  },
+  "baseline_mean_rr": 0.8402824858757062,
+  "ablations": [
+    {
+      "signal": "semantic",
+      "m1_coverage": 0.7457627118644068,
+      "hit_at_1_rate": 0.6694915254237288,
+      "mean_rr": 0.6093220338983051,
+      "delta_coverage_pp": 20.67796610169491,
+      "delta_mean_rr": 0.23096045197740112,
+      "pass": false
+    },
+    {
+      "signal": "keyword",
+      "m1_coverage": 0.9525423728813559,
+      "hit_at_1_rate": 0.9033898305084745,
+      "mean_rr": 0.8473446327683616,
+      "delta_coverage_pp": 0,
+      "delta_mean_rr": -0.007062146892655385,
+      "pass": true
+    },
+    {
+      "signal": "entity",
+      "m1_coverage": 0.9033898305084745,
+      "hit_at_1_rate": 0.8830508474576271,
+      "mean_rr": 0.8061016949152542,
+      "delta_coverage_pp": 4.915254237288136,
+      "delta_mean_rr": 0.03418079096045201,
+      "pass": true
+    },
+    {
+      "signal": "value",
+      "m1_coverage": 0.9525423728813559,
+      "hit_at_1_rate": 0.9033898305084745,
+      "mean_rr": 0.8394350282485875,
+      "delta_coverage_pp": 0,
+      "delta_mean_rr": 0.0008474576271186862,
+      "pass": true
+    },
+    {
+      "signal": "freshness",
+      "m1_coverage": 0.9525423728813559,
+      "hit_at_1_rate": 0.9084745762711864,
+      "mean_rr": 0.8402824858757062,
+      "delta_coverage_pp": 0,
+      "delta_mean_rr": 0,
+      "pass": true
+    },
+    {
+      "signal": "source_trust",
+      "m1_coverage": 0.9525423728813559,
+      "hit_at_1_rate": 0.911864406779661,
+      "mean_rr": 0.8419774011299435,
+      "delta_coverage_pp": 0,
+      "delta_mean_rr": -0.0016949152542372614,
+      "pass": true
+    },
+    {
+      "signal": "reference_frame",
+      "m1_coverage": 0.9525423728813559,
+      "hit_at_1_rate": 0.9084745762711864,
+      "mean_rr": 0.8402824858757062,
+      "delta_coverage_pp": 0,
+      "delta_mean_rr": 0,
+      "pass": true
+    },
+    {
+      "signal": "feedback",
+      "m1_coverage": 0.9525423728813559,
+      "hit_at_1_rate": 0.9084745762711864,
+      "mean_rr": 0.8402824858757062,
+      "delta_coverage_pp": 0,
+      "delta_mean_rr": 0,
+      "pass": true
+    }
+  ],
+  "retention_rate": {
+    "entity": 0.9593222618167148,
+    "feedback": 1,
+    "freshness": 1,
+    "keyword": 1.0084044913601828,
+    "reference_frame": 1,
+    "semantic": 0.7251395145565791,
+    "source_trust": 1.002017077926444,
+    "value": 0.998991461036778
+  },
+  "pass": {
+    "entity": true,
+    "feedback": true,
+    "freshness": true,
+    "keyword": true,
+    "reference_frame": true,
+    "semantic": false,
+    "source_trust": true,
+    "value": true
+  }
+}
