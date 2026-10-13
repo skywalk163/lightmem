@@ -1,0 +1,54 @@
+{
+  "k": 60,
+  "_comment": "R6-A 交付产物（千脑投票共识 + 参考系激活 refin）：基于 R5 交付态，仅将 reference_frame 权重 0.0->3.0（最小达标点）。其余 7 路权重与 R5 完全一致。breaking change 无（默认 FusionMode=rrf 且未设 ref-activate 时逐位等于 R5）。",
+  "weights": [
+    {
+      "name": "semantic",
+      "weight": 12.0,
+      "type": "calibrated",
+      "note": "语义相似度（R5-A：char n-gram TF-IDF embedder 注入后调优，可切 -embedder vector 用 BGE-m3）"
+    },
+    {
+      "name": "keyword",
+      "weight": 3.2,
+      "type": "calibrated",
+      "note": "BM25 全文关键词（R5-A 调优）"
+    },
+    {
+      "name": "entity",
+      "weight": 2.9,
+      "type": "calibrated",
+      "note": "实体匹配（R5-A 调优）"
+    },
+    {
+      "name": "value",
+      "weight": 0.2,
+      "type": "fixed",
+      "note": "记忆固有价值（R5-A 未纳入校准：kernel 固定公式，红线 1 只增不改语义）"
+    },
+    {
+      "name": "freshness",
+      "weight": 0.1,
+      "type": "fixed",
+      "note": "时效新鲜度（R5-A 未纳入校准：kernel 固定公式，红线 1 只增不改语义）"
+    },
+    {
+      "name": "source_trust",
+      "weight": 0.1,
+      "type": "fixed",
+      "note": "来源可信度（R5-A 未纳入校准：kernel 固定公式，红线 1 只增不改语义）"
+    },
+    {
+      "name": "reference_frame",
+      "weight": 3.0,
+      "type": "calibrated",
+      "note": "R6-A: ref 信号激活后重校准（P3 突破）。根因=信号在评测链路里是死的（RouterContext 未携带参考系坐标 + 查询实体正则贪婪），非权重稀释。激活后 ref 桶 M1 0.667->1.000，公开 MRR 0.992（基线 0.9917 持平）、合成 1.000，其余四桶零回归。3.0 为最小达标点（2.0->0.833 不足，3.0->1.000）。"
+    },
+    {
+      "name": "feedback",
+      "weight": 0.1,
+      "type": "fixed",
+      "note": "反馈历史（R5-A 未纳入校准：kernel 固定公式，红线 1 只增不改语义）"
+    }
+  ]
+}

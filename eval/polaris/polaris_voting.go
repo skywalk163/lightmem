@@ -103,7 +103,7 @@ func main() {
 	fusionFlag := flag.String("fusion", "rrf", "融合模式 rrf|vote（默认 rrf，isolate 复现）")
 	refActivate := flag.Bool("ref-activate", true, "从 query 确定性提取参考系赋 QueryFrame（默认开；关闭时复现基线 ref 信号恒 0.5）")
 	holdoutFlag := flag.String("holdout", "", "评测集 NDJSON")
-	weightsFlag := flag.String("weights", "", "权重 JSON（默认 eval/weights/rank_weights_en_r5.json）")
+	weightsFlag := flag.String("weights", "", "权重 JSON（默认 eval/weights/rank_weights_r6_ref.json；缺失回退 rank_weights_en_r5.json）")
 	embedderFlag := flag.String("embedder", "auto", "auto|vector|tfidf|none")
 	vocabFlag := flag.String("vocab-path", "", "tfidf 词表缓存")
 	reportFlag := flag.String("report", "r6a_vote", "报告文件名前缀")
@@ -141,9 +141,15 @@ func main() {
 	// ---- 装配内核 ----
 	ctx := context.Background()
 	if *weightsFlag == "" {
+		// R6-A 交付权重优先（ref 激活后的重校准态）；缺失时回退 R5 交付态。
 		*weightsFlag = resolveVotingPath(
-			"../weights/rank_weights_en_r5.json", "eval/weights/rank_weights_en_r5.json", "weights/rank_weights_en_r5.json",
+			"../weights/rank_weights_r6_ref.json", "eval/weights/rank_weights_r6_ref.json", "weights/rank_weights_r6_ref.json",
 		)
+		if *weightsFlag == "" {
+			*weightsFlag = resolveVotingPath(
+				"../weights/rank_weights_en_r5.json", "eval/weights/rank_weights_en_r5.json", "weights/rank_weights_en_r5.json",
+			)
+		}
 	}
 	if *weightsFlag == "" {
 		log.Fatalf("未找到权重文件")
