@@ -82,6 +82,14 @@ type RankFusion struct {
 	// 仅 FusionModeVote 时生效。
 	VoteTopK int
 
+	// SemanticRedundant R7-A：semantic 信号启用多路径冗余（默认 false，保证不回归）。
+	// 开启后 signalSemantic 用多路径投票替代单值加权；false 时逐位保持 R6 行为。
+	SemanticRedundant bool
+	// SemanticAblatePath R7-A：多路径冗余模式下消融的语义路径名
+	// （semantic-path0|semantic-path1|semantic-path2）；空=不消融。
+	// 仅 SemanticRedundant=true 时生效。
+	SemanticAblatePath string
+
 	embedder Embedder // 可选：真实语义向量化（nil 时用召回分近似；R4-D 起为接口类型）
 }
 
@@ -627,7 +635,15 @@ func (rf *RankFusion) ensureDefaults() {
 // ------------------------------------------------------------------
 
 // signalSemantic：语义相似度。优先用真实向量；否则用召回阶段分（向量/文本粗分）近似。
-func (rf *RankFusion) signalSemantic(_ context.Context, query string, cands []RecalledCandidate) map[string]float64 {
+//
+// R7-A（Q1）：SemanticRedundant=true 时启用**多路径语义冗余**——在既有向量路径
+// 之外，并行接入 slot-value 结构匹配（路径 1）与 token 共现加权相似度（路径 2），
+// 三路经 ConsensusVoter 投票产出语义共识序 + 语义分歧度。消除 semantic 单点故障
+// （R6-D 消融 −20.68pp）。默认 SemanticRedundant=false，本函数逐位保持 R6 行为。
+func (rf *RankFusion) signalSemantic(ctx context.Context, query string, cands []RecalledCandidate) map[string]float64 {
+	if rf.SemanticRedundant {
+		return rf.semanticMultiScore(ctx, query, cands)
+	}
 	out := make(map[string]float64, len(cands))
 	if rf.embedder != nil && query != "" {
 		if qv, err := rf.embedder.Embed(query); err == nil {

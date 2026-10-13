@@ -1,0 +1,114 @@
+{
+  "baseline": {
+    "n": 590,
+    "hits": 570,
+    "m1_coverage": 0.9661016949152542,
+    "hit_at_1": 564,
+    "hit_at_1_rate": 0.9559322033898305,
+    "id_hit": 549,
+    "id_total": 590,
+    "id_hit_rate": 0.9305084745762712,
+    "mean_rr": 0.9062994350282496,
+    "by_bucket": {
+      "multi-hop": {
+        "n": 150,
+        "hits": 150,
+        "coverage": 1,
+        "hit_at_1": 150
+      },
+      "open-domain": {
+        "n": 100,
+        "hits": 100,
+        "coverage": 1,
+        "hit_at_1": 100
+      },
+      "reference_frame": {
+        "n": 60,
+        "hits": 40,
+        "coverage": 0.6666666666666666,
+        "hit_at_1": 34
+      },
+      "single-hop": {
+        "n": 150,
+        "hits": 150,
+        "coverage": 1,
+        "hit_at_1": 150
+      },
+      "temporal": {
+        "n": 130,
+        "hits": 130,
+        "coverage": 1,
+        "hit_at_1": 130
+      }
+    },
+    "topk": 5
+  },
+  "multi_on": {
+    "n": 590,
+    "hits": 590,
+    "m1_coverage": 1,
+    "hit_at_1": 545,
+    "hit_at_1_rate": 0.923728813559322,
+    "id_hit": 517,
+    "id_total": 590,
+    "id_hit_rate": 0.8762711864406779,
+    "mean_rr": 0.8527966101694915,
+    "by_bucket": {
+      "multi-hop": {
+        "n": 150,
+        "hits": 150,
+        "coverage": 1,
+        "hit_at_1": 131
+      },
+      "open-domain": {
+        "n": 100,
+        "hits": 100,
+        "coverage": 1,
+        "hit_at_1": 100
+      },
+      "reference_frame": {
+        "n": 60,
+        "hits": 60,
+        "coverage": 1,
+        "hit_at_1": 34
+      },
+      "single-hop": {
+        "n": 150,
+        "hits": 150,
+        "coverage": 1,
+        "hit_at_1": 150
+      },
+      "temporal": {
+        "n": 130,
+        "hits": 130,
+        "coverage": 1,
+        "hit_at_1": 130
+      }
+    },
+    "topk": 5
+  },
+  "ablations": [
+    {
+      "path": "semantic-path0",
+      "m1_coverage": 1,
+      "delta_coverage_pp": -3.3898305084745783,
+      "pass": true
+    },
+    {
+      "path": "semantic-path1",
+      "m1_coverage": 0.9932203389830508,
+      "delta_coverage_pp": -2.7118644067796627,
+      "pass": true
+    },
+    {
+      "path": "semantic-path2",
+      "m1_coverage": 0.9898305084745763,
+      "delta_coverage_pp": -2.3728813559322104,
+      "pass": true
+    }
+  ],
+  "delta_coverage_pp": 0,
+  "pass": true,
+  "r6d_baseline_coverage": 0.7458,
+  "r6d_semantic_delta_pp": 20.68
+}

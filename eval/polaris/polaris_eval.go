@@ -195,7 +195,12 @@ func main() {
 	validityFlag := flag.Bool("validity", false, "R6-D：跑全套评测有效性（无锚变体 + 消融 + 多视图）")
 	noAnchorFlag := flag.Bool("no-anchor", false, "R6-D：仅跑无锚变体（剥离括号锚，量化锚红利）")
 	ablateFlag := flag.String("ablate", "", "R6-D：消融模式，关闭指定信号（semantic|keyword|entity|value|freshness|source_trust|reference_frame|feedback|all）")
-	multiviewFlag := flag.Bool("multiview", false, "R6-D：仅跑多视图集成（确定性模板视图 + 候选得票集成）")
+	// R7-B：-multiview 从 bool 升级为 string，支持 legacy|v1|v2；-view 选 baseline|integrated。
+	multiviewFlag := flag.String("multiview", "", "R6-D/R7-B：多视图模式 legacy|R6-D 语气词模板；v1=结构视图(倒装+实体帧)；v2=结构视图+候选回读")
+	viewFlag := flag.String("view", "integrated", "R7-B：baseline=只跑 view_0 单视图 M1；integrated=多视图 ConsensusVoter 集成")
+	// R7-A：semantic 多路径冗余（Q1 单点故障修复；只增不改，默认关闭不回归）。
+	semRedundantFlag := flag.Bool("semantic-redundant", false, "R7-A：semantic 启用多路径冗余（默认关闭，保证不回归；开启后三路语义投票替代单值加权）")
+	semAblatePathFlag := flag.String("semantic-ablate-path", "", "R7-A：多路径模式下消融的语义路径（semantic-path0|semantic-path1|semantic-path2；空=不消融）")
 	flag.Parse()
 
 	_ = os.MkdirAll(resolveReportsDir(*reportsDir), 0o755)
@@ -222,10 +227,12 @@ func main() {
 	log.Printf("loaded %d holdout items from %s", len(items), holdoutPath)
 
 	// R6-D 评测有效性模式（优先级高于 -mode eval）
-	if *validityFlag || *noAnchorFlag || *ablateFlag != "" || *multiviewFlag {
+	if *validityFlag || *noAnchorFlag || *ablateFlag != "" || *multiviewFlag != "" ||
+		*semRedundantFlag || *semAblatePathFlag != "" {
 		runValidityMode(items, holdoutPath, *corpusFlag, *weightsFlag, *embedderFlag,
 			*reportFlag, resolveReportsDir(*reportsDir), *topK, *compressFlag, *nowFixed, *vocabFlag,
-			*noAnchorFlag, *ablateFlag, *multiviewFlag)
+			*noAnchorFlag, *ablateFlag, *multiviewFlag, *viewFlag,
+			*semRedundantFlag, *semAblatePathFlag)
 		return
 	}
 
@@ -616,10 +623,12 @@ func buildPolarisVocab(items []HoldoutItem) (*kernel.CharNgramVocab, error) {
 // ------------------------------------------------------------------
 
 // runValidityMode R6-D 评测有效性主入口。
-// 优先级：-validity 全套；-no-anchor 仅无锚；-ablate=<sig> 仅消融；-multiview 仅多视图。
+// 优先级：-validity 全套；-no-anchor 仅无锚；-ablate=<sig> 仅消融；-multiview=<mode> 仅多视图；
+// -semantic-redundant 仅 R7-A 语义多路径冗余评测。
 func runValidityMode(items []HoldoutItem, holdoutPath, corpusPath, weightsPath, embedderMode,
 	prefix, dir string, topK int, compressed bool, nowFixed, vocabPath string,
-	noAnchor bool, ablate string, multiview bool) {
+	noAnchor bool, ablate string, multiviewMode, viewMode string,
+	semRedundant bool, semAblatePath string) {
 	ctx := context.Background()
 
 	// ---- 装配内核（与 runEvalMode 同链路） ----
@@ -710,6 +719,11 @@ func runValidityMode(items []HoldoutItem, holdoutPath, corpusPath, weightsPath, 
 	}
 
 	// ---- 分发到各子模块 ----
+	// R7-A：semantic 多路径冗余评测（Q1 单点故障修复）——优先级最高。
+	if semRedundant {
+		runSemanticRedundancy(ctx, items, srv, rf, holdoutPath, weightsPath, embedderMode, embedderName, vocabPath, nowFixed, topK, compressed, dir, prefix, semAblatePath)
+		return
+	}
 	if noAnchor {
 		runNoAnchor(ctx, items, srv, rf, holdoutPath, weightsPath, embedderMode, embedderName, vocabPath, nowFixed, topK, compressed, dir, prefix)
 		return
@@ -718,11 +732,16 @@ func runValidityMode(items []HoldoutItem, holdoutPath, corpusPath, weightsPath, 
 		runAblation(ctx, items, srv, rf, holdoutPath, weightsPath, embedderMode, embedderName, vocabPath, nowFixed, topK, compressed, dir, prefix, ablate)
 		return
 	}
-	if multiview {
+	// R7-B 多视图路由：legacy=R6-D 语气词模板；v1/v2=确定性结构视图
+	if multiviewMode == "legacy" {
 		runMultiview(ctx, items, srv, rf, holdoutPath, weightsPath, embedderMode, embedderName, vocabPath, nowFixed, topK, compressed, dir, prefix)
 		return
 	}
-	// -validity：全套
+	if multiviewMode == "v1" || multiviewMode == "v2" {
+		runMultiviewV2(ctx, items, srv, rf, holdoutPath, weightsPath, embedderMode, embedderName, vocabPath, nowFixed, topK, compressed, dir, prefix, multiviewMode, viewMode)
+		return
+	}
+	// -validity：全套（默认多视图用 legacy R6-D 模板）
 	runNoAnchor(ctx, items, srv, rf, holdoutPath, weightsPath, embedderMode, embedderName, vocabPath, nowFixed, topK, compressed, dir, prefix)
 	runAblation(ctx, items, srv, rf, holdoutPath, weightsPath, embedderMode, embedderName, vocabPath, nowFixed, topK, compressed, dir, prefix, "all")
 	runMultiview(ctx, items, srv, rf, holdoutPath, weightsPath, embedderMode, embedderName, vocabPath, nowFixed, topK, compressed, dir, prefix)

@@ -102,6 +102,9 @@ func main() {
 
 	fusionFlag := flag.String("fusion", "rrf", "融合模式 rrf|vote（默认 rrf，isolate 复现）")
 	refActivate := flag.Bool("ref-activate", true, "从 query 确定性提取参考系赋 QueryFrame（默认开；关闭时复现基线 ref 信号恒 0.5）")
+	// R7-A：semantic 多路径冗余（默认关闭，不回归）。
+	semRedundantFlag := flag.Bool("semantic-redundant", false, "R7-A：semantic 启用多路径冗余（默认关闭，保证不回归）")
+	semAblatePathFlag := flag.String("semantic-ablate-path", "", "R7-A：多路径模式下消融的语义路径（semantic-path0|semantic-path1|semantic-path2；空=不消融）")
 	holdoutFlag := flag.String("holdout", "", "评测集 NDJSON")
 	weightsFlag := flag.String("weights", "", "权重 JSON（默认 eval/weights/rank_weights_r6_ref.json；缺失回退 rank_weights_en_r5.json）")
 	embedderFlag := flag.String("embedder", "auto", "auto|vector|tfidf|none")
@@ -179,8 +182,14 @@ func main() {
 		// 票数被 200 个候选稀释到无区分度（R6-A 实证：vote 整体 0.90 / ref 0.55）。
 		rf.VoteTopK = *voteTopKFlag
 	}
-	log.Printf("fusion=%s ref_activate=%v weights=%s baseNow=%s",
-		*fusionFlag, *refActivate, *weightsFlag, baseNow.Format(time.RFC3339))
+	// R7-A：semantic 多路径冗余（默认关闭不回归；开启后三路语义投票）。
+	if *semRedundantFlag {
+		rf.SemanticRedundant = true
+		rf.SemanticAblatePath = *semAblatePathFlag
+	}
+	log.Printf("fusion=%s ref_activate=%v weights=%s baseNow=%s semantic_redundant=%v ablate_path=%q",
+		*fusionFlag, *refActivate, *weightsFlag, baseNow.Format(time.RFC3339),
+		*semRedundantFlag, *semAblatePathFlag)
 
 	embedderName := ""
 	switch *embedderFlag {
