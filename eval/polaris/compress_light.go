@@ -197,3 +197,89 @@ func CompressControlPlane(queries []string) CompressionReport {
 	}
 	return rep
 }
+
+// ------------------------------------------------------------------
+// R6-C 数据面压缩：候选 fact 展示/计费面文本压缩。
+//
+// 安全边界（任务书风险表）：压缩**只作用于展示/计费面的候选文本副本**，
+// 不作用于 matchFactV4 的判定输入（双口径对照见 polaris_holdout.go）。
+// 全部规则确定性：固定正则 + 固定截断长度，无随机性。
+// ------------------------------------------------------------------
+
+// dataFactSpeakerRe 对话体 speaker 前缀（"Sam: " / "Evan: " / "John: "）。
+var dataFactSpeakerRe = regexp.MustCompile(`^[A-Z][A-Za-z'’]+:\s*`)
+
+// dataFactSentenceRe 句子边界（保留首句做线索优先/核心块保留）。
+var dataFactSentenceRe = regexp.MustCompile(`[.!?。！？]+`)
+
+// dataFactMaxRunes 无 => 对话体的首句保留上限（核心块最大长度）。
+const dataFactMaxRunes = 60
+
+// CompressDataFact 数据面压缩一条候选 fact（展示/计费面副本）。
+//
+//	规则1 剥离 speaker 前缀（对话体噪音，不含判定线索）；
+//	规则2 "Q => A" 事实只保留回答侧——问题镜像在控制面已计费，数据面不重复；
+//	规则3 无 => 的对话体保留首句（线索优先），超上限按 rune 截断；
+//	护栏 压缩结果为空时返回原文（永不产生空数据块）。
+//
+// 注意：本函数只用于展示/计费面 token 估算副本；matchFactV4 判定输入不受影响。
+func CompressDataFact(fact string) string {
+	s := strings.TrimSpace(fact)
+	if s == "" {
+		return s
+	}
+	orig := s
+	// 规则1：speaker 前缀。
+	s = dataFactSpeakerRe.ReplaceAllString(s, "")
+	// 规则2：Q=>A 只留回答侧。
+	if i := strings.Index(s, "=>"); i >= 0 {
+		if ans := strings.TrimSpace(s[i+len("=>"):]); ans != "" {
+			s = ans
+		}
+	} else {
+		// 规则3：无 =>，首句核心块保留。跳过呼语碎片（"Hey Evan!" / "Hi!"），
+		// 保留第一个 ≥10 rune 的实质句；超长按 rune 截断（词界内收，不切词中）。
+		for _, part := range dataFactSentenceRe.Split(s, -1) {
+			part = strings.TrimSpace(part)
+			if len([]rune(part)) < 10 {
+				continue
+			}
+			s = part
+			break
+		}
+		if r := []rune(s); len(r) > dataFactMaxRunes {
+			cut := string(r[:dataFactMaxRunes])
+			if i := strings.LastIndexAny(cut, " ,—-"); i >= 0 && i > 0 {
+				cut = cut[:i]
+			}
+			s = strings.TrimSpace(cut)
+		}
+	}
+	s = tailPunctRe.ReplaceAllString(s, "")
+	if s == "" {
+		return orig
+	}
+	return s
+}
+
+// DataPlaneTokensBeforeAfter 数据面压缩前后 token 对照（确定性账目）。
+type DataPlaneTokensBeforeAfter struct {
+	TokensBefore int     `json:"tokens_before"`
+	TokensAfter  int     `json:"tokens_after"`
+	Saved        int     `json:"saved"`
+	Reduction    float64 `json:"reduction_rate"`
+}
+
+// CompressDataPlaneAccount 批量统计候选 fact 列表的数据面 token 前后对照。
+func CompressDataPlaneAccount(facts []string) DataPlaneTokensBeforeAfter {
+	var acct DataPlaneTokensBeforeAfter
+	for _, f := range facts {
+		acct.TokensBefore += EstimateTokens(f)
+		acct.TokensAfter += EstimateTokens(CompressDataFact(f))
+	}
+	acct.Saved = acct.TokensBefore - acct.TokensAfter
+	if acct.TokensBefore > 0 {
+		acct.Reduction = float64(acct.Saved) / float64(acct.TokensBefore)
+	}
+	return acct
+}
