@@ -39,10 +39,10 @@ type MetricsCollector struct {
 
 	// 污染率
 	rejectedCount int64
-totalCount    int64
+	totalCount    int64
 
 	// 反馈统计
-	adoptedCount   int64
+	adoptedCount          int64
 	rejectedCountFeedback int64
 
 	// 生命周期操作
@@ -52,10 +52,10 @@ totalCount    int64
 // NewMetricsCollector 创建指标收集器。
 func NewMetricsCollector() *MetricsCollector {
 	return &MetricsCollector{
-		recallLatencies:    make([]int64, 0, 1000),
-		signalLatencies:    make(map[string][]int64),
-		layerCounts:        make(map[MemoryLayer]int64),
-		lifecycleSteps:     make(map[string]int64),
+		recallLatencies: make([]int64, 0, 1000),
+		signalLatencies: make(map[string][]int64),
+		layerCounts:     make(map[MemoryLayer]int64),
+		lifecycleSteps:  make(map[string]int64),
 	}
 }
 
@@ -135,15 +135,15 @@ func (m *MetricsCollector) RecordLifecycleStep(step string) {
 
 // MetricsSnapshot 指标快照。
 type MetricsSnapshot struct {
-	RecallLatencyMS    float64           `json:"recall_latency_ms"`
-	HitRate            float64           `json:"hit_rate"`
-	PollutionRate      float64           `json:"pollution_rate"`
-	LayerCounts        map[string]int64  `json:"layer_counts"`
-	SignalLatencies    map[string]float64 `json:"signal_latencies_ms,omitempty"`
-	FeedbackStats      map[string]int64  `json:"feedback_stats,omitempty"`
-	LifecycleStats     map[string]int64  `json:"lifecycle_stats,omitempty"`
-	TotalQueries       int64             `json:"total_queries"`
-	TotalMemories      int64             `json:"total_memories"`
+	RecallLatencyMS float64            `json:"recall_latency_ms"`
+	HitRate         float64            `json:"hit_rate"`
+	PollutionRate   float64            `json:"pollution_rate"`
+	LayerCounts     map[string]int64   `json:"layer_counts"`
+	SignalLatencies map[string]float64 `json:"signal_latencies_ms,omitempty"`
+	FeedbackStats   map[string]int64   `json:"feedback_stats,omitempty"`
+	LifecycleStats  map[string]int64   `json:"lifecycle_stats,omitempty"`
+	TotalQueries    int64              `json:"total_queries"`
+	TotalMemories   int64              `json:"total_memories"`
 }
 
 // Snapshot 获取当前指标快照。
@@ -152,10 +152,10 @@ func (m *MetricsCollector) Snapshot() *MetricsSnapshot {
 	defer m.mu.RUnlock()
 
 	snap := &MetricsSnapshot{
-		LayerCounts:    make(map[string]int64),
+		LayerCounts:     make(map[string]int64),
 		SignalLatencies: make(map[string]float64),
-		FeedbackStats:  make(map[string]int64),
-		LifecycleStats: make(map[string]int64),
+		FeedbackStats:   make(map[string]int64),
+		LifecycleStats:  make(map[string]int64),
 	}
 
 	// 检索延迟
@@ -290,7 +290,7 @@ func GetMetricsCollector() *MetricsCollector {
 // AuditEntry 审计日志条目。
 type AuditEntry struct {
 	Timestamp time.Time `json:"timestamp"`
-	Action    string    `json:"action"`    // save / update / feedback / forget / lifecycle
+	Action    string    `json:"action"` // save / update / feedback / forget / lifecycle
 	MemoryID  string    `json:"memory_id"`
 	TenantID  string    `json:"tenant_id"`
 	UserID    string    `json:"user_id"`
@@ -300,8 +300,8 @@ type AuditEntry struct {
 
 // AuditLogger 审计日志记录器。
 type AuditLogger struct {
-	mu     sync.RWMutex
-	entries []AuditEntry
+	mu         sync.RWMutex
+	entries    []AuditEntry
 	maxEntries int
 }
 
