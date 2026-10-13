@@ -14,6 +14,8 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	"github.com/lightmem/kernel/i18n"
 )
 
 // ------------------------------------------------------------------
@@ -400,4 +402,26 @@ func GetAuditLogger() *AuditLogger {
 		globalAuditLogger = NewAuditLogger()
 	})
 	return globalAuditLogger
+}
+
+// ------------------------------------------------------------------
+// R8-A（P7-E）i18n 接入样板（只增不改：新增调用点，不改既有返回语义）
+// ------------------------------------------------------------------
+
+// AuditLogText 返回「审计动作记录」的 i18n 文案（metrics 日志接入样板）。
+// 用法：`log.Printf("%s", AuditLogText(action, memoryID, tenantID, userID, actor, detail))`。
+// 只增不改：本函数为新增导出，不修改 AuditLogger.Log 等既有函数签名/返回值。
+func AuditLogText(action, memoryID, tenantID, userID, actor, detail string) string {
+	return T(i18n.MsgAuditAction, action, memoryID, tenantID, userID, actor, detail)
+}
+
+// AuditForgetText 返回「审计遗忘记录」的 i18n 文案。
+// 用法：`log.Printf("%s", AuditForgetText(memoryID, tenantID, viewer, reason))`。
+func AuditForgetText(memoryID, tenantID, viewer, reason string) string {
+	return T(i18n.MsgAuditForget, memoryID, tenantID, viewer, reason)
+}
+
+// FeedbackCorrectionText 返回「反馈修正候选」的 i18n 文案。
+func FeedbackCorrectionText(memoryID, rejectedReason string) string {
+	return T(i18n.MsgFeedbackCorr, memoryID, rejectedReason)
 }

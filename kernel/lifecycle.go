@@ -19,6 +19,8 @@ import (
 	"log"
 	"sort"
 	"time"
+
+	"github.com/lightmem/kernel/i18n"
 )
 
 // LifecycleStep 单次生命周期动作（§3.10）
@@ -494,4 +496,30 @@ func CompressionEngine(ctx context.Context, backend StorageBackend, embedder fun
 		merged[m1ID] = true
 	}
 	return compressed, nil
+}
+
+// ------------------------------------------------------------------
+// R8-A（P7-E）i18n 接入样板（只增不改：新增调用点，不改既有返回语义）
+// ------------------------------------------------------------------
+
+// LifecycleLayerScannerError 返回「后端未实现 LayerScanner」的 i18n 文案。
+// 接入样板：新增 i18n 调用点，供上层按当前 kernel locale 输出本地化错误文案，
+// 与既有 `fmt.Errorf("backend %s does not implement LayerScanner...", ...)`
+// 并存且互不影响；`SetKernelLocale(LocaleEN)` 可切回英文口径。
+// 只增不改：本函数为新增导出，不修改 LifecycleScannerByValue 等既有函数签名/返回值。
+func LifecycleLayerScannerError(backendName string) string {
+	return T(i18n.MsgLayerScannerUnsupported, backendName)
+}
+
+// LifecycleScanLayerError 返回「扫描层失败」的 i18n 文案。
+// 用法：`fmt.Errorf("%s", LifecycleScanLayerError(layer))`；
+// 如需保留 wrap 语义可写 `fmt.Errorf("%s: %w", LifecycleScanLayerError(layer), err)`。
+func LifecycleScanLayerError(layer MemoryLayer) string {
+	return T(i18n.MsgScanFailed, layer)
+}
+
+// LifecycleUpdateFailedError 返回「层迁移失败」的 i18n 文案（lifecycle 日志/错误共用）。
+// 用法：`log.Printf("%s", LifecycleUpdateFailedError(m.MemoryID, to, err))`。
+func LifecycleUpdateFailedError(memoryID string, to MemoryLayer, err error) string {
+	return T(i18n.MsgLifecycleUpdateFailed, memoryID, to, err)
 }

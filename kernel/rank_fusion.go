@@ -21,6 +21,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/lightmem/kernel/i18n"
 )
 
 // ------------------------------------------------------------------
@@ -1102,4 +1104,17 @@ func tokenSet(s string) map[string]bool {
 		out[t] = true
 	}
 	return out
+}
+
+// ------------------------------------------------------------------
+// R8-A（P7-E）i18n 接入样板（只增不改：新增调用点，不改既有返回语义）
+// ------------------------------------------------------------------
+
+// RankFusionParseWeightsError 返回「权重解析失败」的 i18n 文案。
+// 接入样板：新增 i18n 调用点，供上层按当前 kernel locale 输出本地化错误文案，
+// 与既有 `fmt.Errorf("parse weights %s: %w", path, err)` 并存；如需保留 wrap
+// 语义可写 `fmt.Errorf("%s: %w", RankFusionParseWeightsError(path), err)`。
+// 只增不改：本函数为新增导出，不修改 LoadWeightsFromFile 等既有函数签名/返回值。
+func RankFusionParseWeightsError(path string) string {
+	return T(i18n.MsgParseWeightsFailed, path)
 }
