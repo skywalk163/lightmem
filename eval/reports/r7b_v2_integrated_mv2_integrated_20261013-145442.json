@@ -1,0 +1,150 @@
+{
+  "version": "v2",
+  "view_defs": [
+    {
+      "index": 0,
+      "name": "view_0",
+      "template": "客户A的偏好是什么（周一）"
+    },
+    {
+      "index": 1,
+      "name": "view_1_invert",
+      "template": "周一：客户A的偏好是什么"
+    },
+    {
+      "index": 2,
+      "name": "view_2_entity",
+      "template": "客户A（周一）"
+    },
+    {
+      "index": 3,
+      "name": "view_3_readback",
+      "template": "客户A的偏好是周一"
+    }
+  ],
+  "baseline_m1": {
+    "n": 590,
+    "hits": 570,
+    "m1_coverage": 0.9661016949152542,
+    "hit_at_1": 564,
+    "hit_at_1_rate": 0.9559322033898305,
+    "id_hit": 549,
+    "id_total": 590,
+    "id_hit_rate": 0.9305084745762712,
+    "mean_rr": 0.9062994350282496,
+    "by_bucket": {
+      "multi-hop": {
+        "n": 150,
+        "hits": 150,
+        "coverage": 1,
+        "hit_at_1": 150
+      },
+      "open-domain": {
+        "n": 100,
+        "hits": 100,
+        "coverage": 1,
+        "hit_at_1": 100
+      },
+      "reference_frame": {
+        "n": 60,
+        "hits": 40,
+        "coverage": 0.6666666666666666,
+        "hit_at_1": 34
+      },
+      "single-hop": {
+        "n": 150,
+        "hits": 150,
+        "coverage": 1,
+        "hit_at_1": 150
+      },
+      "temporal": {
+        "n": 130,
+        "hits": 130,
+        "coverage": 1,
+        "hit_at_1": 130
+      }
+    },
+    "topk": 5
+  },
+  "per_view": [
+    {
+      "index": 0,
+      "name": "view_0",
+      "m1_coverage": 0.9525423728813559,
+      "hit_at_1_rate": 0.9084745762711864
+    },
+    {
+      "index": 1,
+      "name": "view_1_invert",
+      "m1_coverage": 0.6372881355932203,
+      "hit_at_1_rate": 0.6372881355932203
+    },
+    {
+      "index": 2,
+      "name": "view_2_entity",
+      "m1_coverage": 0.27796610169491526,
+      "hit_at_1_rate": 0.27796610169491526
+    },
+    {
+      "index": 3,
+      "name": "view_3_readback",
+      "m1_coverage": 0.9661016949152542,
+      "hit_at_1_rate": 0.9491525423728814
+    }
+  ],
+  "overlap_matrix": {
+    "view_0:view_1_invert": "0.1287",
+    "view_0:view_2_entity": "0.0980",
+    "view_0:view_3_readback": "0.4766",
+    "view_1_invert:view_2_entity": "0.0472",
+    "view_1_invert:view_3_readback": "0.1266",
+    "view_2_entity:view_3_readback": "0.0698"
+  },
+  "integrated_m1": {
+    "n": 590,
+    "hits": 570,
+    "m1_coverage": 0.9661016949152542,
+    "hit_at_1": 555,
+    "hit_at_1_rate": 0.940677966101695,
+    "id_hit": 513,
+    "id_total": 590,
+    "id_hit_rate": 0.8694915254237288,
+    "mean_rr": 0.8547175141242939,
+    "by_bucket": {
+      "multi-hop": {
+        "n": 150,
+        "hits": 150,
+        "coverage": 1,
+        "hit_at_1": 137
+      },
+      "open-domain": {
+        "n": 100,
+        "hits": 100,
+        "coverage": 1,
+        "hit_at_1": 100
+      },
+      "reference_frame": {
+        "n": 60,
+        "hits": 40,
+        "coverage": 0.6666666666666666,
+        "hit_at_1": 38
+      },
+      "single-hop": {
+        "n": 150,
+        "hits": 150,
+        "coverage": 1,
+        "hit_at_1": 150
+      },
+      "temporal": {
+        "n": 130,
+        "hits": 130,
+        "coverage": 1,
+        "hit_at_1": 130
+      }
+    },
+    "topk": 5
+  },
+  "divergence_mean": 0.5826273797096756,
+  "improvement_delta": 0,
+  "pass": true
+}
