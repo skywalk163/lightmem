@@ -102,6 +102,11 @@ type RouterContext struct {
 	AsOf            *string      `json:"as_of,omitempty"`
 	MemoryKinds     []MemoryKind `json:"memory_kinds,omitempty"`
 	Visibility      []Visibility `json:"visibility,omitempty"`
+	// ComposeExpand 组合记忆检索展开开关（R6-B，storage 期组合 / 千脑「组合物体」）。
+	// 默认 false = 关闭（isolate 复现，等价于组合特性上线前）；
+	// 置 true 时 RecallAndFuse 对组合记忆候选展开其子事实（见 expandCompositions）。
+	// 对不含组合的既有数据集零影响（无 Components 候选不触发展开）。
+	ComposeExpand bool `json:"compose_expand,omitempty"`
 }
 
 func (rc RouterContext) frame() *ReferenceFrame {
@@ -258,6 +263,12 @@ func (s *APIServer) RecallAndFuse(ctx context.Context, rc RouterContext) (Router
 	// 默认 Enabled=false → 本行不改变任何行为，单跳路径逐位不变。
 	if s.multiHop.Enabled {
 		fused = MultiHopReRank(rc.Text, fused, s.multiHop)
+	}
+	// R6-B：组合记忆检索展开（千脑「组合物体」）。仅当调用方显式开启
+	// rc.ComposeExpand 且候选含非空 Components 时生效；默认 false → 逐位保持
+	// 既有单跳/多跳行为（对不含组合的既有数据集零影响）。
+	if rc.ComposeExpand {
+		fused = s.expandCompositions(ctx, rc, fused)
 	}
 	res.Fused = fused
 

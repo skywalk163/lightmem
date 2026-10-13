@@ -153,7 +153,11 @@ type Memory struct {
 	ExternalRef     *string          `json:"external_ref,omitempty"`
 	GoalDetail      *GoalDetail      `json:"goal_detail,omitempty"`
 	// IsCore 核心记忆块（P4）：高频访问记忆常驻上下文，优先返回。
-	IsCore          bool             `json:"is_core,omitempty"`
+	IsCore bool `json:"is_core,omitempty"`
+	// Components 组合记忆子记忆 ID 列表（R6-B：存储期组合，千脑「组合物体」）。
+	// 只增不改：纯新增可选字段，不影响任何既有字段语义；空 = 非组合记忆。
+	// 父记忆记录其子记忆 ID；检索时可按需展开（见 composition.go / expandCompositions）。
+	Components []string `json:"components,omitempty"`
 }
 
 // QueryResult 单条检索结果（§4.4 响应）

@@ -69,6 +69,24 @@ func (c *Consolidator) RunOnce(ctx context.Context) (ConsolidationReport, error)
 	rep.Scanned = len(ms)
 	now := time.Now().UTC()
 
+	// 组合记忆索引：byID 全量指针表；inCompSet 标记处于组合中的记忆
+	// （组合父记忆 Components 非空，或其 ID 出现在某父记忆的 Components 中）。
+	// 用于「组合不去重拆散」：合并步骤跳过这些记忆，避免破坏父子绑定。
+	byID := make(map[string]*Memory, len(ms))
+	inCompSet := make(map[string]bool, len(ms))
+	for _, m := range ms {
+		if m == nil {
+			continue
+		}
+		byID[m.MemoryID] = m
+		if len(m.Components) > 0 {
+			inCompSet[m.MemoryID] = true
+		}
+		for _, cid := range m.Components {
+			inCompSet[cid] = true
+		}
+	}
+
 	// 1) 重复记忆合并：同 idempotency_key 或同 (tenant,user,kind,fact) 取最新版，旧条目标 superseded_by。
 	groups := map[string][]*Memory{}
 	for _, m := range ms {
@@ -79,6 +97,17 @@ func (c *Consolidator) RunOnce(ctx context.Context) (ConsolidationReport, error)
 	}
 	for _, g := range groups {
 		if len(g) < 2 {
+			continue
+		}
+		// 组合不去重拆散：组合父记忆或子记忆不参与去重合并，保持组合结构完整。
+		skip := false
+		for _, m := range g {
+			if inCompSet[m.MemoryID] {
+				skip = true
+				break
+			}
+		}
+		if skip {
 			continue
 		}
 		sort.SliceStable(g, func(i, j int) bool { return g[i].RecordedAt.After(g[j].RecordedAt) })
@@ -94,6 +123,33 @@ func (c *Consolidator) RunOnce(ctx context.Context) (ConsolidationReport, error)
 				continue
 			}
 			rep.Merged++
+		}
+	}
+
+	// 1.5) 组合记忆一致性（千脑「组合物体」落地）：父记忆 Components 只保留仍存在且
+	// 未被取代（SupersededBy==nil）的子记忆 ID——子记忆被取代/遗忘时父列表同步清理
+	// （确定性：固定遍历 byID，仅当确有剔除才 Upsert）。对不含组合的既有数据无操作。
+	for _, parent := range byID {
+		if len(parent.Components) == 0 {
+			continue
+		}
+		dirty := false
+		kept := make([]string, 0, len(parent.Components))
+		for _, cid := range parent.Components {
+			child, ok := byID[cid]
+			if !ok || child.SupersededBy != nil {
+				dirty = true
+				continue
+			}
+			kept = append(kept, cid)
+		}
+		if dirty {
+			parent.Components = kept
+			if err := c.backend.Upsert(ctx, parent); err != nil {
+				rep.Notes = append(rep.Notes, "composition sync failed: "+err.Error())
+			} else {
+				rep.Notes = append(rep.Notes, "composition sync: parent "+parent.MemoryID)
+			}
 		}
 	}
 
