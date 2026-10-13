@@ -1,5 +1,9 @@
 # P7-D 公开基准对标报告（合成 + 公开双源）
 
+> ⚠️ **已过期（SUPERSEDED）**：本报告记录公开 MRR **0.546**，为 R2 之前的默认权重态。
+> 经 R2→R3→R4→R5 四轮升级，公开基准最终态为 **MRR 0.9917 / fact v4 0.9607**（780 条，含 temporal 合并）。
+> **正式收口报告见** `eval/reports/p7d_benchmarks_final_20261014.md`。本文件仅作历史留痕，勿再引用其数值。
+
 > 生成时间：2026-10-12 ｜ 任务：P7-D 公开基准对标
 > 实机：192.168.0.88（freebsd/amd64，go1.25.14）｜ 评测器：`eval/run_kpi.go`（HEAD 增强版，含 MRR/Cost/PollutionTrend）
 > 前置：R1 外部基准数据集（`eval/benchmarks/dataset/`，650 条）已交付；合成 KPI 集 `eval/dataset/all.jsonl`（570 条）

@@ -24,6 +24,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"lightmem/eval/benchmarks"
+
 	"github.com/lightmem/kernel"
 )
 
@@ -119,6 +121,13 @@ type KPIReport struct {
 	FactHitTop5Count int `json:"fact_hit_top5_count,omitempty"`
 	// R4-C：主 fact 准确率（= factHits / (total − templateTotal)），即 v4 口径。
 	OverallAccuracyByFactV4 float64 `json:"overall_accuracy_by_fact_v4,omitempty"`
+	// R8-B：公开基准适配判定口径（⚠️ 非北极星口径）——fact 准确率 = factAdapterHits / factTotal。
+	// 仅 -fact-adapter=true 时输出；与北极星口径（OverallAccuracyByFactV4）并存不混用。
+	FactAccuracyAdapter float64 `json:"fact_accuracy_adapter,omitempty"`
+	// R8-B：适配口径命中数（分子，非模板样本内）。
+	FactAdapterHits int `json:"fact_adapter_hits,omitempty"`
+	// R8-B：适配口径是否启用（追溯用）。
+	FactAdapterEnabled bool `json:"fact_adapter_enabled,omitempty"`
 	// R4-C：fact 口径版本标识：v3（-fact-v4=false）/ v4（默认）。
 	FactAlgo string `json:"fact_algo,omitempty"`
 	// R4-B：reference_frame 信号复检辅助口径。
@@ -287,6 +296,12 @@ func main() {
 	//   单位大小写统一），并在 char-trigram 模糊路径上追加「边界对齐词元覆盖」护栏，抑制
 	//   长 got 文本里的碎片误配（假阳性）。-fact-normalize=false 复现 R4 基线（逐位一致）。
 	factNormalize := flag.Bool("fact-normalize", true, "R5-B: fact 匹配边界归一化 + 边界对齐护栏；false 复现 R4 基线")
+	// R8-B：公开基准适配判定口径开关（默认 false，**只增不改北极星口径**）。
+	// 开启时**额外**计算 fact 准确率（适配口径）写入报告；北极星口径（matchFactV4）
+	// 与 MRR 判定字段均不变。适配口径见 lightmem/eval/benchmarks.MatchFactBenchmarks：
+	// expected 以确定性包含关系出现在 got（或其 `=>` 答案段）即判命中，
+	// 解决公开基准 `question => answer` 形态导致的假阴性。
+	factAdapter := flag.Bool("fact-adapter", false, "R8-B: 额外计算公开基准适配判定口径（非北极星口径；默认 false）")
 	flag.Parse() // 必须先 Parse 再取值，否则取到的是默认值
 	factNormalizeEnabled = *factNormalize
 	dsPath := *dsFlag
@@ -295,6 +310,8 @@ func main() {
 	factV3Threshold = *factThr
 	factV3SimAlgo = *factSim
 	factV4Enabled = *factV4Flag
+	// R8-B：适配判定口径开关（非北极星；默认 false）。
+	factAdapterEnabled = *factAdapter
 	// R4-B：`-now-asof-default` 语义——当它为 true 时强制启用 -now-asof
 	//（把 R3-B 的默认关闭翻转为默认开启）。-now-asof=false 可显式关闭。
 	// -now-asof 默认值本身保持 false（R3-B 决策，避免隐式改变历史基线）。
@@ -421,6 +438,8 @@ func main() {
 	templateTotal, templateHits := 0, 0
 	// R4-C：候选扩展辅助口径——短 expected 在本样本 top-5 候选内命中数（不覆盖主口径）。
 	factHitTop5Count := 0
+	// R8-B：公开基准适配判定口径命中数（非北极星口径；仅 -fact-adapter=true 时累计）。
+	factAdapterHits := 0
 	temporalHits, temporalTotal := 0, 0
 	multiSignalHits, multiSignalTotal := 0, 0
 	// R3-D：multi-hop 口径 A（hit@1 集合判定）与口径 B（hit@2）累计器。
@@ -707,6 +726,11 @@ func main() {
 			}
 		} else {
 			factTotal++
+			// R8-B：适配判定口径（非北极星）——与北极星 fact_hit 独立累计，仅统计非模板样本。
+			// 默认关闭时该分支不执行，零开销、逐位复现历史基线。
+			if factAdapterEnabled && benchmarks.MatchFactBenchmarks(gotFact, item.ExpectedFact) {
+				factAdapterHits++
+			}
 			if factHit {
 				factHits++
 				// R4-C：假阳性留痕——fact_hit=true 但 top-1 MemoryID 不在 expected 内。
@@ -916,6 +940,15 @@ func main() {
 	} else if total > 0 {
 		report.OverallAccuracyByFact = float64(factHits) / float64(total)
 	}
+	// R8-B：适配判定口径（⚠️ 非北极星口径）——仅在 -fact-adapter=true 时写入，
+	// 与北极星口径（OverallAccuracyByFactV4）并存不混用，不影响任何北极星字段。
+	if factAdapterEnabled {
+		report.FactAdapterEnabled = true
+		report.FactAdapterHits = factAdapterHits
+		if factTotal > 0 {
+			report.FactAccuracyAdapter = float64(factAdapterHits) / float64(factTotal)
+		}
+	}
 	for bucket, tot := range bucketTotal {
 		if tot > 0 {
 			report.BucketAccuracy[bucket] = float64(bucketHits[bucket]) / float64(tot)
@@ -1059,6 +1092,10 @@ func main() {
 	fmt.Fprintf(&sb, "- 模板 expected（beam-* \"LLM response should ...:\"，含 contain/state/mention）：剔除 %d 条（其中 fact_hit %d 条，单列不计入主口径）\n",
 		report.TemplateTotal, report.TemplateHits)
 	fmt.Fprintf(&sb, "- 候选扩展辅助口径（短 expected 在 top-5 候选内命中）：%d 条（不覆盖主口径）\n", report.FactHitTop5Count)
+	if report.FactAdapterEnabled {
+		fmt.Fprintf(&sb, "- 公开基准适配判定口径（⚠️ 非北极星口径，-fact-adapter）：%.1f%%（%d/%d）\n",
+			report.FactAccuracyAdapter*100, report.FactAdapterHits, report.FactTotal)
+	}
 	if report.FactThreshold > 0 {
 		fmt.Fprintf(&sb, "- v3 char n-gram 阈值：%.2f（算法 %s）\n", report.FactThreshold, report.FactSimAlgo)
 	}
@@ -1701,6 +1738,14 @@ var factV4Enabled = true
 //
 // -fact-normalize=false 时两条支路均不启用，逐位复现 R4 v4 基线（isolate）。
 var factNormalizeEnabled = true
+
+// factAdapterEnabled 是 R8-B 公开基准适配判定口径开关，由 -fact-adapter 注入（默认 false）。
+//
+// ⚠️ 非北极星口径：仅在开启时**额外**计算 benchmarks.MatchFactBenchmarks（公开基准
+// `question => answer` 形态的确定性包含判定）并写入报告 FactAccuracyAdapter；
+// **不改变**北极星 fact 口径（matchFactV4）与 MRR 判定。默认 false 时零开销，
+// 逐位复现历史基线（-fact-adapter=false 与未加该 flag 完全等价）。
+var factAdapterEnabled = false
 
 // factAlgoLabel 返回当前 fact 口径版本标识，写入报告便于追溯。
 func factAlgoLabel() string {
