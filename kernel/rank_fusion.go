@@ -53,6 +53,14 @@ type NamedSignal struct {
 	Fn     SignalFunc
 }
 
+// FusionMode 融合模式常量（R6-A）。
+const (
+	// FusionModeRRF 原有 RRF 融合（默认；空字符串也等价于此，isolate 复现）。
+	FusionModeRRF = "rrf"
+	// FusionModeVote R6-A 解释级共识投票（千脑「柱间投票」）。
+	FusionModeVote = "vote"
+)
+
 // RankFusion 多信号 rank 融合引擎（§3.4）。
 type RankFusion struct {
 	Signals        []NamedSignal
@@ -64,6 +72,15 @@ type RankFusion struct {
 	Now            time.Time       // 打分基准时刻（可注入，便于测试）
 	AsOf           *string         // 显式回溯日期（YYYY-MM-DD），非空时返回历史版本
 	QueryFrame     *ReferenceFrame // 查询端参考系（供参考系匹配度信号使用）
+
+	// FusionMode 融合模式：FusionModeRRF（默认，"" 等价）或 FusionModeVote。
+	// 默认 rrf，投票模式默认关闭以保不回归（R6-A）。
+	// 本字段不影响 rrf 路径的逐位行为；置 vote 后 Rank() 走解释级共识投票。
+	FusionMode string
+
+	// VoteTopK 投票模式下每路解释参与计票的 top-K 深度；<=0 取候选总数。
+	// 仅 FusionModeVote 时生效。
+	VoteTopK int
 
 	embedder Embedder // 可选：真实语义向量化（nil 时用召回分近似；R4-D 起为接口类型）
 }
@@ -87,6 +104,19 @@ type FusedResult struct {
 	FusedWith            []string           `json:"fused_with,omitempty"`
 	Reason               string             `json:"reason,omitempty"`
 	Memory               *Memory            `json:"memory,omitempty"`
+	// ConsensusVoteScore 该候选在解释级共识投票中的共识分（R6-A side-channel）。
+	// 仅 FusionModeVote 时填充；RRF 路径恒为零值（omitempty，不影响既有 JSON）。
+	ConsensusVoteScore float64 `json:"consensus_vote_score,omitempty"`
+	// VoteConsensus 全 query 的共识度（R6-A side-channel，每条候选同值）∈[0,1]。
+	VoteConsensus float64 `json:"vote_consensus,omitempty"`
+	// VoteDivergence 全 query 的分歧度（R6-A side-channel）∈[0,1]。
+	// 分歧大 → 上层可判定「需确认 / 低置信」（千脑「分歧=不确定」）。
+	VoteDivergence float64 `json:"vote_divergence,omitempty"`
+	// VoteSources 参与投票的解释来源名（按字典序；R6-A）。
+	VoteSources []string `json:"vote_sources,omitempty"`
+	// VoteCount 该候选被多少路解释列为解释成员（R6-A side-channel）。
+	// 用于「得票数 vs top1 错误率」分析。
+	VoteCount int `json:"vote_count,omitempty"`
 }
 
 // ------------------------------------------------------------------
@@ -202,8 +232,20 @@ func (rf *RankFusion) LoadWeightsFromFile(path string) error {
 // ------------------------------------------------------------------
 
 // Rank 返回全部候选的融合排序（归一化分 [0,1]，降序）。
+//
+// R6-A：默认（FusionMode 为空或 FusionModeRRF）走原有 RRF 加权和路径，
+// 逐位不变（isolate 复现）；FusionMode==FusionModeVote 时走解释级共识投票
+// （千脑「柱间投票」），见 consensusVoteRank。
 func (rf *RankFusion) Rank(ctx context.Context, query string, cands []RecalledCandidate) []FusedResult {
 	rf.ensureDefaults()
+	if rf.FusionMode == FusionModeVote {
+		return rf.consensusVoteRank(ctx, query, cands)
+	}
+	return rf.rrfRank(ctx, query, cands)
+}
+
+// rrfRank 原有 RRF 加权和路径（isolate 复现，逐位不变）。
+func (rf *RankFusion) rrfRank(ctx context.Context, query string, cands []RecalledCandidate) []FusedResult {
 	if len(cands) == 0 {
 		return nil
 	}
@@ -281,6 +323,113 @@ func (rf *RankFusion) Rank(ctx context.Context, query string, cands []RecalledCa
 		}
 		return out[i].MemoryID < out[j].MemoryID
 	})
+	return out
+}
+
+// sqrtVoteWeight 柱间信度的 sqrt 缩放：防单柱权重独大稀释投票。
+// R6-A：R5 权重里 semantic=12 独大（占 65% 票权），投票口径下会把
+// 多跳中间证据顶到 top1，multi-hop 桶严重回退。sqrt 缩放后保留主导但不过强。
+// w<=0 视为 0（该柱无信度，不参与投票）。
+func sqrtVoteWeight(w float64) float64 {
+	if w <= 0 {
+		return 0
+	}
+	return math.Sqrt(w)
+}
+
+// consensusVoteRank 解释级共识投票融合路径（R6-A，千脑「柱间投票」）。
+//
+// 步骤（确定性，无随机源）：
+//  1. 每路信号独立打分并归一化（与 RRF 路径同一套打分，保证可比）；
+//  2. 每路信号的 top-VoteTopK 候选构成该信号的「解释」（Interpretation）；
+//  3. ConsensusVoter 做倒数秩计票，得共识序 + 共识度 + 分歧度；
+//  4. 输出按共识分降序的 FusedResult，并附 ConsensusVoteScore / VoteConsensus /
+//     VoteDivergence / VoteSources 侧通道字段（只增不改）。
+//
+// Score 口径：共识分按最大值归一化到 [0,1]（与 RRF 归一化到 [0,1] 同维度，
+// 供上层沿用 AbsoluteFloor / ProximityRatio 判定语义）。Fuse() 在投票模式下
+// 依赖此归一分做三态决策。
+func (rf *RankFusion) consensusVoteRank(ctx context.Context, query string, cands []RecalledCandidate) []FusedResult {
+	if len(cands) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(cands))
+	byID := make(map[string]*Memory, len(cands))
+	for _, c := range cands {
+		if c.Memory == nil || c.Memory.MemoryID == "" {
+			continue
+		}
+		ids = append(ids, c.Memory.MemoryID)
+		byID[c.Memory.MemoryID] = c.Memory
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	// 1) 主排序：复用 RRF 加权和路径（vote 模式下主排序逐位与 rrf 一致，
+	//    天然不回归——A.4 红线「公开/合成 MRR 不回归」）。
+	out := rf.rrfRank(ctx, query, cands)
+
+	// 2) 各信号独立打分 + 归一化 + 名次（与 RRF 路径同一套，可比）。
+	norm := make(map[string]map[string]float64, len(rf.Signals))
+	ranks := make(map[string]map[string]int, len(rf.Signals))
+	for _, s := range rf.Signals {
+		raw := s.Fn(ctx, query, cands)
+		n := normalizeMax(raw)
+		norm[s.Name] = n
+		ranks[s.Name] = rankMap(n)
+	}
+
+	// 3) 每路信号 → top-K 解释，ConsensusVoter 计票得共识分 + 分歧度（side-channel）。
+	topK := rf.VoteTopK
+	if topK <= 0 {
+		topK = len(ids)
+	}
+	interps := make([]Interpretation, 0, len(rf.Signals))
+	for _, s := range rf.Signals {
+		rk := ranks[s.Name]
+		type kv struct {
+			id   string
+			rank int
+		}
+		arr := make([]kv, 0, len(rk))
+		for id, r := range rk {
+			arr = append(arr, kv{id, r})
+		}
+		sort.SliceStable(arr, func(i, j int) bool {
+			if arr[i].rank != arr[j].rank {
+				return arr[i].rank < arr[j].rank
+			}
+			return arr[i].id < arr[j].id
+		})
+		var topIDs []string
+		for i, e := range arr {
+			if i >= topK {
+				break
+			}
+			topIDs = append(topIDs, e.id)
+		}
+		if len(topIDs) == 0 {
+			continue
+		}
+		interps = append(interps, Interpretation{
+			Source: s.Name,
+			TopIDs: topIDs,
+			Score:  norm[s.Name],
+			Weight: sqrtVoteWeight(rf.Weights[s.Name]),
+		})
+	}
+	voter := &ConsensusVoter{K: topK}
+	res := voter.Vote(interps)
+
+	// 4) 把共识分/分歧度作为 side-channel 附到 RRF 排序结果（只增不改：Score 仍是 RRF 分）。
+	for i := range out {
+		out[i].ConsensusVoteScore = res.Scores[out[i].MemoryID]
+		out[i].VoteCount = res.VoteCounts[out[i].MemoryID]
+		out[i].VoteConsensus = res.Consensus
+		out[i].VoteDivergence = res.Divergence
+		out[i].VoteSources = res.Interpretations
+	}
 	return out
 }
 
