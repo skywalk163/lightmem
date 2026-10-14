@@ -109,7 +109,11 @@ func BenchmarkPgVectorSearch(b *testing.B) {
 		m := makeTestMemory(fmt.Sprintf("bench_v_%04d", i), tenant, user, fmt.Sprintf("vector fact %d about quantum physics", i))
 		_ = be.Upsert(ctx, m)
 	}
-	_ = be.BackfillVectors(ctx, benchEmbed)
+	type backfiller interface {
+		BackfillVectors(ctx context.Context, embed func(string) ([]float32, error)) error
+	}
+	bf := be.(backfiller)
+	_ = bf.BackfillVectors(ctx, benchEmbed)
 
 	// 查询向量
 	queryVec, _ := benchEmbed("quantum physics vector search test")

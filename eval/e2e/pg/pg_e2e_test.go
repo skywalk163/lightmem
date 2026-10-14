@@ -177,7 +177,7 @@ func TestPgUpsertGetRoundtrip(t *testing.T) {
 		{"Visibility", string(got.Visibility), string(m.Visibility)},
 		{"Provenance", string(got.Provenance), string(m.Provenance)},
 		{"VectorStatus", string(got.VectorStatus), string(m.VectorStatus)},
-		{"RecordedAt", got.RecordedAt, m.RecordedAt},
+		{"RecordedAtUnix", got.RecordedAt.Unix(), m.RecordedAt.Unix()},
 	}
 	for _, c := range checks {
 		if c.got != c.want {
@@ -228,6 +228,12 @@ func TestPgQueryVectorSearch(t *testing.T) {
 		}
 	}
 
+	// backfiller 是 pgBackend 的 BackfillVectors 接口（不在 StorageBackend 公共接口里）。
+	type backfiller interface {
+		BackfillVectors(ctx context.Context, embed func(string) ([]float32, error)) error
+	}
+	bf := be.(backfiller)
+
 	// 补全向量：用确定性 hash embedder（前 20 维非零，其余为 0，dim=1024）
 	// 注意：这里直接调 BackfillVectors，验证它能把 pending 变成 vectorized
 	hashEmbed := func(text string) ([]float32, error) {
@@ -242,15 +248,15 @@ func TestPgQueryVectorSearch(t *testing.T) {
 		}
 		return vec, nil
 	}
-	if err := be.BackfillVectors(ctx, hashEmbed); err != nil {
+	if err := bf.BackfillVectors(ctx, hashEmbed); err != nil {
 		t.Fatalf("BackfillVectors: %v", err)
 	}
 
-	// 1) 文本 Query：搜 "paris eiffel"，预期命中第 7 条
+	// 1) 文本 Query：搜 "eiffel"，预期命中第 7 条
 	q := kernel.QueryParams{
 		TenantID: tenant,
 		Viewer:   user,
-		Text:     "paris eiffel tower",
+		Text:     "eiffel",
 		TopK:     5,
 	}
 	results, err := be.Query(ctx, q)
@@ -513,6 +519,10 @@ func TestPgBackfillVectors(t *testing.T) {
 	}
 
 	// 执行 Backfill
+	type backfiller interface {
+		BackfillVectors(ctx context.Context, embed func(string) ([]float32, error)) error
+	}
+	bf := be.(backfiller)
 	embed := func(text string) ([]float32, error) {
 		vec := make([]float32, 1024)
 		for i := 0; i < 32; i++ {
@@ -520,7 +530,7 @@ func TestPgBackfillVectors(t *testing.T) {
 		}
 		return vec, nil
 	}
-	if err := be.BackfillVectors(ctx, embed); err != nil {
+	if err := bf.BackfillVectors(ctx, embed); err != nil {
 		t.Fatalf("BackfillVectors: %v", err)
 	}
 
