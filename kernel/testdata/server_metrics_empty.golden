@@ -1,0 +1,38 @@
+# HELP http_requests_total HTTP 请求总数（按 method/path/status 切分）
+# TYPE http_requests_total counter
+# HELP http_request_duration_ms HTTP 请求延迟（毫秒）
+# TYPE http_request_duration_ms histogram
+http_request_duration_ms_bucket{le="1ms"} 0
+http_request_duration_ms_bucket{le="5ms"} 0
+http_request_duration_ms_bucket{le="10ms"} 0
+http_request_duration_ms_bucket{le="25ms"} 0
+http_request_duration_ms_bucket{le="50ms"} 0
+http_request_duration_ms_bucket{le="100ms"} 0
+http_request_duration_ms_bucket{le="250ms"} 0
+http_request_duration_ms_bucket{le="500ms"} 0
+http_request_duration_ms_bucket{le="1000ms"} 0
+http_request_duration_ms_bucket{le="5000ms"} 0
+http_request_duration_ms_bucket{le="+Inf"} 0
+http_request_duration_ms_sum 0
+http_request_duration_ms_count 0
+# HELP memories_saved_total 已成功写入的记忆总数
+# TYPE memories_saved_total counter
+memories_saved_total 0
+# HELP memories_recalled_total 已成功检索的次数总数
+# TYPE memories_recalled_total counter
+memories_recalled_total 0
+# HELP recall_latency_ms 检索延迟（毫秒）
+# TYPE recall_latency_ms histogram
+recall_latency_ms_bucket{le="1ms"} 0
+recall_latency_ms_bucket{le="5ms"} 0
+recall_latency_ms_bucket{le="10ms"} 0
+recall_latency_ms_bucket{le="25ms"} 0
+recall_latency_ms_bucket{le="50ms"} 0
+recall_latency_ms_bucket{le="100ms"} 0
+recall_latency_ms_bucket{le="250ms"} 0
+recall_latency_ms_bucket{le="500ms"} 0
+recall_latency_ms_bucket{le="1000ms"} 0
+recall_latency_ms_bucket{le="5000ms"} 0
+recall_latency_ms_bucket{le="+Inf"} 0
+recall_latency_ms_sum 0
+recall_latency_ms_count 0

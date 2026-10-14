@@ -1,0 +1,45 @@
+# HELP http_requests_total HTTP 请求总数（按 method/path/status 切分）
+# TYPE http_requests_total counter
+http_requests_total{method="GET",path="/missing",status="404"} 1
+http_requests_total{method="GET",path="/search",status="200"} 2
+http_requests_total{method="GET",path="/search/vector",status="200"} 1
+http_requests_total{method="POST",path="/memories",status="201"} 1
+http_requests_total{method="POST",path="/memories",status="400"} 1
+http_requests_total{method="POST",path="/tools/memory/recall",status="200"} 1
+http_requests_total{method="POST",path="/tools/memory/save",status="200"} 1
+# HELP http_request_duration_ms HTTP 请求延迟（毫秒）
+# TYPE http_request_duration_ms histogram
+http_request_duration_ms_bucket{le="1ms"} 3
+http_request_duration_ms_bucket{le="5ms"} 4
+http_request_duration_ms_bucket{le="10ms"} 6
+http_request_duration_ms_bucket{le="25ms"} 7
+http_request_duration_ms_bucket{le="50ms"} 8
+http_request_duration_ms_bucket{le="100ms"} 8
+http_request_duration_ms_bucket{le="250ms"} 8
+http_request_duration_ms_bucket{le="500ms"} 8
+http_request_duration_ms_bucket{le="1000ms"} 8
+http_request_duration_ms_bucket{le="5000ms"} 8
+http_request_duration_ms_bucket{le="+Inf"} 8
+http_request_duration_ms_sum 56.1
+http_request_duration_ms_count 8
+# HELP memories_saved_total 已成功写入的记忆总数
+# TYPE memories_saved_total counter
+memories_saved_total 1
+# HELP memories_recalled_total 已成功检索的次数总数
+# TYPE memories_recalled_total counter
+memories_recalled_total 4
+# HELP recall_latency_ms 检索延迟（毫秒）
+# TYPE recall_latency_ms histogram
+recall_latency_ms_bucket{le="1ms"} 1
+recall_latency_ms_bucket{le="5ms"} 1
+recall_latency_ms_bucket{le="10ms"} 3
+recall_latency_ms_bucket{le="25ms"} 3
+recall_latency_ms_bucket{le="50ms"} 4
+recall_latency_ms_bucket{le="100ms"} 4
+recall_latency_ms_bucket{le="250ms"} 4
+recall_latency_ms_bucket{le="500ms"} 4
+recall_latency_ms_bucket{le="1000ms"} 4
+recall_latency_ms_bucket{le="5000ms"} 4
+recall_latency_ms_bucket{le="+Inf"} 4
+recall_latency_ms_sum 38.6
+recall_latency_ms_count 4
