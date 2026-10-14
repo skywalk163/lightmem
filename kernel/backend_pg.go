@@ -14,6 +14,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -621,10 +622,12 @@ func (b *pgBackend) ExportByScope(ctx context.Context, tenant, userID string) ([
 
 // DeleteByScope 级联删除 (tenant, userID) 作用域下全部记忆，返回被删 ID（升序）。
 func (b *pgBackend) DeleteByScope(ctx context.Context, tenant, userID string) ([]string, error) {
+	// 注：PostgreSQL 的 DELETE ... RETURNING 不支持 ORDER BY 子句，
+	// 故在应用层对返回的 memory_id 做升序排序，保持接口语义不变。
 	rows, err := b.db.QueryContext(ctx, `
 	DELETE FROM `+b.table+`
 	WHERE tenant_id=$1 AND user_id=$2
-	RETURNING memory_id ORDER BY memory_id ASC`, tenant, userID)
+	RETURNING memory_id`, tenant, userID)
 	if err != nil {
 		return nil, fmt.Errorf("pg cascade delete: %w", err)
 	}
@@ -637,7 +640,11 @@ func (b *pgBackend) DeleteByScope(ctx context.Context, tenant, userID string) ([
 		}
 		ids = append(ids, id)
 	}
-	return ids, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Strings(ids)
+	return ids, nil
 }
 
 // DeleteByID 物理删除单条记忆（被遗忘权）。不存在时视为已遗忘（返回 nil，幂等）。
