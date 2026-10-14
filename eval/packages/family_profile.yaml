@@ -1,0 +1,134 @@
+# ============================================================
+# 光明记忆（LIMS）R11-B 首批 8 包 Family 档装配档案
+# 真源：lightmem.md §6.2 应用包生态、kernel/package.go FirstPartyPackages
+# 用途：定义首批 8 包的元数据 / 依赖图 / 安装顺序，
+#       供 install_family.sh 装配与 kernel.InstallOrder 拓扑排序校验使用。
+# 一致性红线：本文件的包名、信任级、类型必须与 kernel/package.go FirstPartyPackages 一致。
+# ============================================================
+
+profile: family
+
+# 包生态版本（家族档当前装配基线）
+ecosystem:
+  family_version: "1.0.0"
+  # 装配档位：family（家庭实验室，单机 FreeBSD + jail）
+  tier: family
+
+# 首批 8 包清单
+# 顺序无关：真实安装顺序由 dependencies 决定的拓扑序给出（见 kernel/package_order.go）。
+packages:
+
+  - name: registry
+    version: "1.0.0"
+    description: "包注册中心"
+    author: "lightmem"
+    trust: official
+    type: service
+    entrypoint: "bin/registry"
+    permissions: ["read:pkg", "write:pkg"]
+    memory_types: ["fact"]
+    # 基础包，无依赖
+    dependencies: []
+
+  - name: gitea
+    version: "1.0.0"
+    description: "Gitea 代码托管连接器"
+    author: "lightmem"
+    trust: official
+    type: service
+    entrypoint: "bin/gitea"
+    permissions: ["read:repo", "write:repo"]
+    memory_types: ["fact", "procedure"]
+    dependencies: []
+
+  - name: llm-gateway
+    version: "1.0.0"
+    description: "LLM 网关（token 计费与限流）"
+    author: "lightmem"
+    trust: official
+    type: service
+    entrypoint: "bin/llm-gateway"
+    permissions: ["use:llm"]
+    memory_types: ["fact"]
+    dependencies: []
+
+  - name: git-connector
+    version: "1.0.0"
+    description: "Git 仓库增量同步"
+    author: "lightmem"
+    trust: official
+    type: connector
+    entrypoint: "bin/git-connector"
+    permissions: ["read:repo"]
+    memory_types: ["fact"]
+    dependencies: ["gitea"]
+
+  - name: search
+    version: "1.0.0"
+    description: "BM25 全文检索"
+    author: "lightmem"
+    trust: official
+    type: service
+    entrypoint: "bin/search"
+    permissions: ["read:pkg"]
+    memory_types: ["fact"]
+    dependencies: ["registry"]
+
+  - name: backup
+    version: "1.0.0"
+    description: "ZFS 快照备份"
+    author: "lightmem"
+    trust: official
+    type: service
+    entrypoint: "bin/backup"
+    permissions: ["zfs:snapshot"]
+    memory_types: ["fact"]
+    dependencies: ["registry"]
+
+  - name: mesh-sync
+    version: "1.0.0"
+    description: "集合体节点同步"
+    author: "lightmem"
+    trust: official
+    type: service
+    entrypoint: "bin/mesh-sync"
+    permissions: ["mesh:broadcast"]
+    memory_types: ["fact"]
+    dependencies: ["registry"]
+
+  - name: webui
+    version: "1.0.0"
+    description: "Web 管理界面"
+    author: "lightmem"
+    trust: official
+    type: service
+    entrypoint: "bin/webui"
+    permissions: ["read:all"]
+    memory_types: ["fact"]
+    dependencies: ["registry", "search", "gitea"]
+
+# 期望的拓扑安装顺序（由依赖图推导；webui 依赖最深）
+# 说明：registry / gitea / llm-gateway 无依赖可先装；
+#        git-connector / search / backup / mesh-sync 依赖 registry 或 gitea；
+#       webui 依赖最多，最后装。
+expected_install_order:
+  - registry
+  - gitea
+  - llm-gateway
+  - git-connector
+  - search
+  - backup
+  - mesh-sync
+  - webui
+
+# 全链路生命周期动作（install_family.sh 逐包执行）
+lifecycle_actions: [install, configure, enable, upgrade, uninstall]
+
+# 包记忆抽取配置（B.2：每包抽 3 条结构化记忆）
+memory_extraction:
+  enabled: true
+  views: ["metadata", "config", "changelog"]
+  # 抽取后写入的记忆库租户/用户
+  tenant: "system"
+  user: "system"
+  layer: "L2"

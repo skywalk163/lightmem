@@ -1,0 +1,13 @@
+{
+  "name": "gitea",
+  "version": "1.0.0",
+  "description": "Gitea 代码托管连接器",
+  "author": "lightmem",
+  "trust": "official",
+  "type": "service",
+  "entrypoint": "bin/gitea",
+  "config": {"host": "192.168.1.5", "port": 3000, "proto": "https"},
+  "permissions": ["read:repo", "write:repo"],
+  "memory_types": ["fact", "procedure"],
+  "dependencies": []
+}

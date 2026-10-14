@@ -1,0 +1,13 @@
+{
+  "name": "git-connector",
+  "version": "1.0.0",
+  "description": "Git 仓库增量同步",
+  "author": "lightmem",
+  "trust": "official",
+  "type": "connector",
+  "entrypoint": "bin/git-connector",
+  "config": {"remote": "gitea", "interval_sec": 300, "branch": "main"},
+  "permissions": ["read:repo"],
+  "memory_types": ["fact"],
+  "dependencies": ["gitea"]
+}

@@ -1,0 +1,13 @@
+{
+  "name": "webui",
+  "version": "1.0.0",
+  "description": "Web 管理界面",
+  "author": "lightmem",
+  "trust": "official",
+  "type": "service",
+  "entrypoint": "bin/webui",
+  "config": {"bind": "192.168.1.5", "port": 8443, "tls": "self_signed"},
+  "permissions": ["read:all"],
+  "memory_types": ["fact"],
+  "dependencies": ["registry", "search", "gitea"]
+}

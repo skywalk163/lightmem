@@ -1,0 +1,13 @@
+{
+  "name": "registry",
+  "version": "1.0.0",
+  "description": "包注册中心",
+  "author": "lightmem",
+  "trust": "official",
+  "type": "service",
+  "entrypoint": "bin/registry",
+  "config": {"host": "10.0.10.60", "port": 9000},
+  "permissions": ["read:pkg", "write:pkg"],
+  "memory_types": ["fact"],
+  "dependencies": []
+}

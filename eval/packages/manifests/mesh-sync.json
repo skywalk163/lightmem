@@ -1,0 +1,13 @@
+{
+  "name": "mesh-sync",
+  "version": "1.0.0",
+  "description": "集合体节点同步",
+  "author": "lightmem",
+  "trust": "official",
+  "type": "service",
+  "entrypoint": "bin/mesh-sync",
+  "config": {"coordinator": "10.0.10.50", "workers": ["10.0.10.51", "10.0.10.52"], "heartbeat_sec": 15},
+  "permissions": ["mesh:broadcast"],
+  "memory_types": ["fact"],
+  "dependencies": ["registry"]
+}

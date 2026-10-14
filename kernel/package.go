@@ -10,7 +10,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"time"
 )
 
 // PackageTrust 包信任分级
@@ -309,59 +308,9 @@ var FirstPartyPackages = map[string]PackageManifest{
 	},
 }
 
-// ExtractPackageMemory 从包抽取记忆（P9 完整实现）
-func ExtractPackageMemory(ctx context.Context, backend StorageBackend, pkgName string) (int, error) {
-	mf, ok := FirstPartyPackages[pkgName]
-	if !ok {
-		return 0, fmt.Errorf("unknown package: %s", pkgName)
-	}
-
-	// 根据包类型提取记忆
-	extracted := 0
-	switch mf.Type {
-	case PkgConnector:
-		// 连接器包：提取连接配置和同步状态
-		m := &Memory{
-			MemoryID:       newMemoryID(),
-			IdempotencyKey: "pkg:" + pkgName + ":config",
-			TenantID:       "system",
-			UserID:         "system",
-			MemoryKind:     KindFact,
-			Fact:           fmt.Sprintf("包 %s 配置: %s", pkgName, mf.Description),
-			Source:         "package:" + pkgName,
-			RecordedAt:     time.Now().UTC(),
-			Confidence:     0.8,
-			Version:        1,
-			Layer:          LayerL2,
-		}
-		if err := backend.Upsert(ctx, m); err != nil {
-			return extracted, err
-		}
-		extracted++
-	case PkgService:
-		// 服务包：提取服务状态和配置
-		m := &Memory{
-			MemoryID:       newMemoryID(),
-			IdempotencyKey: "pkg:" + pkgName + ":status",
-			TenantID:       "system",
-			UserID:         "system",
-			MemoryKind:     KindFact,
-			Fact:           fmt.Sprintf("包 %s 服务状态: 已安装 v%s", pkgName, mf.Version),
-			Source:         "package:" + pkgName,
-			RecordedAt:     time.Now().UTC(),
-			Confidence:     0.9,
-			Version:        1,
-			Layer:          LayerL2,
-		}
-		if err := backend.Upsert(ctx, m); err != nil {
-			return extracted, err
-		}
-		extracted++
-	}
-
-	log.Printf("[package] extracted %d memories from %s", extracted, pkgName)
-	return extracted, nil
-}
+// ExtractPackageMemory 已迁移至 kernel/package_memory.go（R11-B 结构化包记忆抽取，含循环依赖检测的安装顺序见 package_order.go）。
+// 原有签名与语义保持：从包抽取记忆写入记忆库，返回抽取条数。
+// 见 package_memory.go 中的 ExtractPackageMemory（增强版：元数据 / 配置 / 变更记录三条结构化记忆）。
 
 // PackageDir 包目录路径
 func PackageDir(base string) string {
@@ -478,36 +427,4 @@ func hasString(slice []string, s string) bool {
 		}
 	}
 	return false
-}
-
-// 包安装顺序（拓扑排序）
-func InstallOrder(pkgs map[string]*PackageManifest) ([]string, error) {
-	visited := map[string]bool{}
-	order := []string{}
-
-	var dfs func(string) error
-	dfs = func(name string) error {
-		if visited[name] {
-			return nil
-		}
-		visited[name] = true
-		mf, ok := pkgs[name]
-		if !ok {
-			return fmt.Errorf("unknown package: %s", name)
-		}
-		for _, dep := range mf.Dependencies {
-			if err := dfs(dep); err != nil {
-				return err
-			}
-		}
-		order = append(order, name)
-		return nil
-	}
-
-	for name := range pkgs {
-		if err := dfs(name); err != nil {
-			return nil, err
-		}
-	}
-	return order, nil
 }

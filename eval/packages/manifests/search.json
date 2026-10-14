@@ -1,0 +1,13 @@
+{
+  "name": "search",
+  "version": "1.0.0",
+  "description": "BM25 全文检索",
+  "author": "lightmem",
+  "trust": "official",
+  "type": "service",
+  "entrypoint": "bin/search",
+  "config": {"index_dir": "/var/db/lims/search", "top_k_default": 10},
+  "permissions": ["read:pkg"],
+  "memory_types": ["fact"],
+  "dependencies": ["registry"]
+}
