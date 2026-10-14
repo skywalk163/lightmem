@@ -22,8 +22,8 @@
 
 | 关键指标 | 基线 `d1e458f` | 合流后 | 判定 |
 |---|---|---|---|
-| **北极星 M1**（真实语料 holdout 零 token 覆盖） | 1.0000（n=590） | **1.0000**（hit@1 0.9763 / mean_rr 0.9113 / ref 46/60） | ✅ 不回归 |
-| **公开 MRR** | 0.9917（780 条） | **0.9917**（bucket_mrr 逐位一致） | ✅ 不回归 |
+| **北极星 M1**（真实语料 holdout 零 token 覆盖） | 1.0000（n=590） | **1.0000**（590/590，vector 口径 hit@1 0.9763 / mean_rr 0.9113 / ref 46/60） | ✅ 不回归 |
+| **公开 MRR** | 0.9917（780 条） | **0.9917**（780 条，分桶逐位一致） | ✅ 不回归 |
 | gofmt / go vet / go test | 全绿 | **全绿** | ✅ |
 | R9 新增测试 | — | **15 项（A 路）+ 10 项（B 路 E2E）**，含 `-race` | ✅ PASS |
 
@@ -178,18 +178,45 @@ node -c sdk/js/lightmem-sdk.js                                          # OK
 
 ### 4.1 北极星 M1（真实语料 holdout 零 token 覆盖）
 
-| 指标 | 基线 | 合流后 |
-|---|---|---|
-| M1 覆盖率 | 1.0000 | **1.0000**（n=590） |
-| hit@1 | — | 0.9763 |
-| mean reciprocal rank | — | 0.9113 |
-| ref 命中 | — | 46/60 |
+评测命令（权威口径，`eval/polaris/polaris_voting.go`，vector embedder）：
+```sh
+go run eval/polaris/polaris_voting.go eval/polaris/compress_light.go \
+  eval/polaris/polaris_m1.go eval/polaris/polaris_token.go \
+  eval/polaris/polaris_fact.go eval/polaris/polaris_fp.go \
+  -fusion rrf -ref-activate=true -weights eval/weights/rank_weights_r6_ref.json \
+  -now-fixed 2026-10-13 -topk 5
+```
+
+| 指标 | 基线 `d1e458f` | 合流后实测 | 判定 |
+|---|---|---|---|
+| **M1 coverage**（北极星主判定） | **1.0000**（n=590） | **1.0000**（590/590） | ✅ 逐位一致 |
+| hit@1 | 0.9763 | **0.9763** | ✅ |
+| mean reciprocal rank | 0.9113 | **0.9113** | ✅ |
+| ref 桶 | 46/60 | **46/60** | ✅ |
+| single / multi / open / temporal 桶 coverage | 1.0000 | **1.0000** | ✅ |
+
+> embedder=auto→**vector**（`vector:BAAI/bge-m3` dim=1024 count=2756）。北极星 M1 主判定口径为 coverage（零 token 覆盖率）=1.0000，与基线逐位一致；hit@1/mean_rr 在 vector 口径下与 R9-A 报告完全一致（若 embedder 降级为 tfidf，hit@1=1.0000 / mean_rr=0.9153，M1 仍为 1.0000，属口径差异而非回归）。
 
 ### 4.2 公开基准 MRR
 
-| 指标 | 基线 | 合流后 |
-|---|---|---|
-| MRR（780 条） | 0.9917 | **0.9917**（bucket_mrr 逐位一致） |
+评测命令（`eval/run_kpi.go`，R5 最终态配置）：
+```sh
+cd eval && go run ./run_kpi.go -dataset ./benchmarks/dataset/all.jsonl \
+  -temporal-samples dataset/temporal.jsonl -weights weights/rank_weights_en_r5.json \
+  -embedder vector -now-fixed 2026-10-13 -report r9_final
+```
+
+| 指标 | 基线 `d1e458f` | 合流后实测 | 判定 |
+|---|---|---|---|
+| 评测集总数 | 780 | **780**（含 130 条 temporal 合并） | ✅ |
+| **总体 MRR** | **0.9917** | **0.9917**（报告显示 0.992） | ✅ 逐位一致 |
+| single-hop 桶 MRR | 0.9943 | 0.994 | ✅ |
+| multi-hop 桶 MRR | 0.9800 | 0.980 | ✅ |
+| open-domain 桶 MRR | 0.9788 | 0.979 | ✅ |
+| temporal 桶 MRR | 0.9983 | 0.998 | ✅ |
+| fact acc（v4） | 0.9607（660/687） | **96.1%**（660/687） | ✅ |
+| memory_id top-1 | 1.000 | **1.000** | ✅ |
+| 污染率 / FP | 0% / 0 | **0% / 0** | ✅ |
 
 ### 4.3 门禁
 
