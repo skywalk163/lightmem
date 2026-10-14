@@ -1,0 +1,1229 @@
+openapi: 3.0.3
+
+info:
+  title: LightMem API
+  description: |
+    光明记忆（LightMem, LIMS）RESTful HTTP API。
+
+    覆盖记忆的**创建、检索、召回、更新、删除**全生命周期，以及 **GDPR 合规**端点。
+
+    本文档与 `kernel/router.go` 路由表逐位对齐，不臆造端点。
+
+    对应章节：§4.4（API 骨架）、§3.1/§3.4（召回与融合）、§7.3/§7.4/§7.5（GDPR 合规）。
+  version: 0.2.0
+  contact:
+    name: LightMem Team
+  license:
+    name: Apache 2.0
+
+servers:
+  - url: http://localhost:8080
+    description: 默认开发服务器（骨架模式）
+
+# ---------------------------------------------------------------------------
+# 安全
+# ---------------------------------------------------------------------------
+# LightMem 不依赖外部认证框架，采用租户隔离 + 用户可见性双层权限模型。
+# 认证通过请求体中的 tenant_id / user_id / viewer 字段实现。
+security: []
+
+# ---------------------------------------------------------------------------
+# 路径
+# ---------------------------------------------------------------------------
+paths:
+
+  # ========== 健康与配置 ==========
+
+  /health:
+    get:
+      summary: 服务探活
+      description: 不检查后端连通性，仅返回服务状态。
+      responses:
+        '200':
+          description: 服务正常
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: 后端不可达
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /healthz:
+    get:
+      summary: 生产级健康检查（R9-A）
+      description: |
+        检查后端连通性（Ping）与 embedder 状态，返回最近一次后台整合（consolidate）时间戳。
+
+        - 由 `main.go` 外层 mux 挂载（非 `router.go` 骨架端点）。
+        - 后端不可达时返回 503 + `status: degraded`。
+      responses:
+        '200':
+          description: 服务正常
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthzResponse'
+        '503':
+          description: 后端不可达
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /profile:
+    get:
+      summary: 获取当前 profile 配置
+      description: 返回当前加载的 profile 配置（JSON 格式）。
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileResponse'
+
+  # ========== 记忆 CRUD ==========
+
+  /memories:
+    post:
+      summary: 创建 / 幂等写入一条记忆
+      description: |
+        创建或幂等写入一条记忆。
+
+        - 不提供 `memory_id` 时自动生成。
+        - 提供 `memory_id` 且已存在时返回 200（幂等重复）。
+        - 更新使用 `POST /tools/memory/update`（追加新版本，不覆盖）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemoryRequest'
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryCreatedResponse'
+        '200':
+          description: 幂等重复（已存在）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryCreatedResponse'
+        '400':
+          description: 请求体 JSON 格式错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: 业务校验失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /search:
+    get:
+      summary: 文本检索
+      description: 基于文本的记忆检索，支持可见性过滤和类型过滤。
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: 查询文本
+          schema:
+            type: string
+            minLength: 1
+        - name: tenant_id
+          in: query
+          required: true
+          description: 租户 ID（硬隔离边界）
+          schema:
+            type: string
+            minLength: 1
+        - name: viewer
+          in: query
+          required: false
+          description: 可见性过滤的观察者 ID
+          schema:
+            type: string
+        - name: top_k
+          in: query
+          required: false
+          description: 返回条数
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: kind
+          in: query
+          required: false
+          description: 记忆类型过滤（逗号分隔，如 fact,preference）
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 检索成功
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Memory'
+        '400':
+          description: 缺少 tenant_id 或 q
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 后端错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /search/trace:
+    get:
+      summary: 检索 trace
+      description: 返回最近一次检索的 trace（P3 retrieval_trace）。
+      parameters:
+        - name: text
+          in: query
+          required: true
+          description: 查询文本
+          schema:
+            type: string
+            minLength: 1
+        - name: tenant_id
+          in: query
+          required: false
+          description: 租户 ID
+          schema:
+            type: string
+        - name: user_id
+          in: query
+          required: false
+          description: 用户 ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchTraceResponse'
+        '400':
+          description: 缺少 text 参数
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ========== 向量检索 ==========
+
+  /search/vector:
+    post:
+      summary: 向量检索
+      description: |
+        基于向量的记忆检索（需配置 embedder）。
+
+        - 可直接传入 `vector`，或通过 `query` 由 embedder 向量化。
+        - 失败时返回 503 并提示降级到文本检索。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VectorSearchRequest'
+      responses:
+        '200':
+          description: 检索成功
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Memory'
+        '400':
+          description: 请求体格式错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 向量检索失败（降级到文本检索）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /vector/backfill:
+    post:
+      summary: 手动触发向量补全
+      description: 手动触发一次向量补全（仅 pgvector 后端支持）。
+      responses:
+        '200':
+          description: 补全成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: backfilled
+        '503':
+          description: embedder 未配置或非 pgvector 后端
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ========== 记忆路由（P2 Agent 直连） ==========
+
+  /mem/router:
+    post:
+      summary: 记忆路由（多信号融合）
+      description: |
+        P2 Agent 直连接口：执行完整记忆路由链路（层选择 → 多信号打分 → rank fusion）。
+
+        - 字段对齐 `kernel.RouterContext`。
+        - 返回融合候选（`fused`）、分桶召回（`recalled`）与检索 trace（`trace`）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemRouterRequest'
+      responses:
+        '200':
+          description: 路由成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RouterResult'
+        '400':
+          description: tenant_id 缺失或 JSON 解析失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 检索后端不可用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ========== Agent 工具接口 ==========
+
+  /tools/memory/recall:
+    post:
+      summary: 跨层召回 + 多信号融合
+      description: Agent 工具接口：跨层召回 + 多信号融合（A1+A2）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecallRequest'
+      responses:
+        '200':
+          description: 召回成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecallResponse'
+        '400':
+          description: 请求体格式错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /tools/memory/save:
+    post:
+      summary: Agent 工具接口：保存记忆
+      description: 与 `POST /memories` 等价，为 Agent 工具接口别名。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemoryRequest'
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryCreatedResponse'
+        '200':
+          description: 幂等重复
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryCreatedResponse'
+
+  /tools/memory/update:
+    post:
+      summary: Agent 工具接口：编辑（追加新版本）
+      description: 编辑记忆，追加新版本，不覆盖原 fact。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateRequest'
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateResponse'
+        '400':
+          description: 请求体格式错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /tools/memory/feedback:
+    post:
+      summary: Agent 工具接口：用户反馈
+      description: 用户对检索结果的反馈（rejected_ids 记录）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - memory_id
+              properties:
+                memory_id:
+                  type: string
+                tenant_id:
+                  type: string
+                user_id:
+                  type: string
+                action:
+                  type: string
+                  enum: [reject, accept]
+      responses:
+        '200':
+          description: 反馈已记录
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: recorded
+
+  /tools/memory/forget:
+    post:
+      summary: Agent 工具接口：单条遗忘
+      description: 与 `POST /api/v1/gdpr/forget` 等价，为 Agent 工具接口别名。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForgetRequest'
+      responses:
+        '200':
+          description: 遗忘成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForgetResponse'
+
+  # ========== 生命周期 ==========
+
+  /lifecycle/run:
+    post:
+      summary: 手动触发分层生命周期扫描
+      description: 手动触发一次分层生命周期扫描（仅 pgvector 后端支持）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tenant_id:
+                  type: string
+                max:
+                  type: integer
+      responses:
+        '200':
+          description: 扫描完成
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  scanned:
+                    type: integer
+                  promoted:
+                    type: integer
+                  demoted:
+                    type: integer
+                  expired:
+                    type: integer
+        '503':
+          description: 非 pgvector 后端
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ========== 指标 ==========
+
+  /metrics:
+    get:
+      summary: Prometheus / JSON 指标
+      description: |
+        支持两种格式：
+        - JSON（默认）：返回结构化指标。
+        - Prometheus 文本格式（`?format=prometheus`）：返回 Prometheus 可解析的文本。
+      parameters:
+        - name: format
+          in: query
+          required: false
+          description: 输出格式
+          schema:
+            type: string
+            enum: [json, prometheus]
+            default: json
+      responses:
+        '200':
+          description: 指标数据
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsResponse'
+            text/plain:
+              schema:
+                type: string
+                example: |
+                  # HELP http_requests_total Total HTTP requests
+                  # TYPE http_requests_total counter
+                  http_requests_total{method="GET",path="/search",status="200"} 12345
+
+  /metrics/kinds:
+    get:
+      summary: 各类型记忆计数
+      description: 返回各类型（event / fact / preference / procedure / goal）的记忆计数。
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          description: 租户 ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: integer
+                example:
+                  event: 10
+                  fact: 100
+                  preference: 5
+                  procedure: 2
+                  goal: 1
+        '400':
+          description: 缺少 tenant_id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /metrics/layers:
+    get:
+      summary: 各层记忆计数
+      description: 返回各层（L0 / L1 / L2 / L3）的记忆计数。
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          description: 租户 ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: integer
+                example:
+                  L0: 200
+                  L1: 10000
+                  L2: 500
+                  L3: 50
+                  total: 10750
+        '400':
+          description: 缺少 tenant_id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 非 pgvector 后端
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ========== 审计 ==========
+
+  /audit/{memory_id}:
+    get:
+      summary: 单条记忆审计日志
+      description: 返回指定记忆的操作历史。
+      parameters:
+        - name: memory_id
+          in: path
+          required: true
+          description: 记忆 ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditResponse'
+        '400':
+          description: 缺少 memory_id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /audit:
+    get:
+      summary: 审计日志列表
+      description: 返回审计日志列表，支持按租户过滤。
+      parameters:
+        - name: tenant_id
+          in: query
+          required: false
+          description: 按租户过滤（不填则返回全部）
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          description: 返回条数（默认 100，最大 1000）
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditListResponse'
+
+  # ========== GDPR 合规 ==========
+
+  /api/v1/gdpr/export:
+    post:
+      summary: 数据可携导出
+      description: §7.4 数据可携导出：返回该 (tenant, user) 作用域全部记忆。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GDPRExportRequest'
+      responses:
+        '200':
+          description: 导出成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GDPRExportResponse'
+        '400':
+          description: 请求体格式错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/gdpr/cascade-delete:
+    post:
+      summary: 级联删除
+      description: §7.3 级联删除：删除该 (tenant, user) 作用域全部记忆。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GDPRCascadeDeleteRequest'
+      responses:
+        '200':
+          description: 删除成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GDPRCascadeDeleteResponse'
+        '400':
+          description: 请求体格式错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/gdpr/forget:
+    post:
+      summary: 被遗忘权
+      description: §7.5 被遗忘权：彻底移除单条记忆 + 匿名化（不保留 trace）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForgetRequest'
+      responses:
+        '200':
+          description: 遗忘成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForgetResponse'
+        '400':
+          description: 请求体格式错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+# ---------------------------------------------------------------------------
+# 组件
+# ---------------------------------------------------------------------------
+components:
+
+  schemas:
+    # ----- 通用 -----
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: 错误描述信息
+
+    HealthResponse:
+      type: object
+      required:
+        - status
+        - profile
+        - backend
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        profile:
+          type: string
+        backend:
+          type: string
+        error:
+          type: string
+
+    HealthzResponse:
+      type: object
+      required:
+        - status
+        - backend
+        - embedder
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        profile:
+          type: string
+        backend:
+          type: string
+        embedder:
+          type: string
+        last_consolidate:
+          type: string
+          nullable: true
+          description: 最近一次后台整合时间（UTC，RFC3339）；从未执行时为空字符串
+        error:
+          type: string
+
+    ProfileResponse:
+      type: object
+      additionalProperties:
+        type: any
+
+    # ----- 记忆 -----
+
+    MemoryRequest:
+      type: object
+      required:
+        - tenant_id
+        - user_id
+        - fact
+      properties:
+        memory_id:
+          type: string
+          description: 记忆 ID（不填则自动生成）
+        tenant_id:
+          type: string
+          minLength: 1
+        user_id:
+          type: string
+          minLength: 1
+        memory_kind:
+          type: string
+          enum: [event, fact, preference, procedure, goal]
+          default: fact
+        fact:
+          type: string
+          minLength: 1
+        visibility:
+          type: string
+          enum: [private, shared, public]
+          default: private
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+          default: 0
+        permission:
+          type: object
+          additionalProperties:
+            type: any
+        layer:
+          type: string
+          enum: [L0, L1, L2, L3]
+        tags:
+          type: array
+          items:
+            type: string
+        metadata:
+          type: object
+          additionalProperties:
+            type: any
+
+    MemRouterRequest:
+      type: object
+      required:
+        - text
+        - tenant_id
+      properties:
+        text:
+          type: string
+          minLength: 1
+        tenant_id:
+          type: string
+          minLength: 1
+        user_id:
+          type: string
+        project_id:
+          type: string
+        agent_id:
+          type: string
+        scene:
+          type: string
+        task:
+          type: string
+        entity:
+          type: string
+        include_archived:
+          type: boolean
+          default: false
+        top_k:
+          type: integer
+          default: 10
+        as_of:
+          type: string
+          description: 回溯时间（YYYY-MM-DD）
+        memory_kinds:
+          type: array
+          items:
+            type: string
+        visibility:
+          type: array
+          items:
+            type: string
+        compose_expand:
+          type: boolean
+          default: false
+          description: 组合记忆子事实展开（R6-B）
+
+    RouterCandidate:
+      type: object
+      properties:
+        memory_id:
+          type: string
+        fact:
+          type: string
+        score:
+          type: number
+        signals:
+          type: object
+          additionalProperties:
+            type: number
+
+    RouterRecalledLayer:
+      type: object
+      properties:
+        layer:
+          type: string
+        candidates:
+          type: array
+          items:
+            $ref: '#/components/schemas/RouterCandidate'
+        count:
+          type: integer
+        skipped:
+          type: boolean
+        note:
+          type: string
+
+    RouterResult:
+      type: object
+      properties:
+        intent:
+          type: object
+          additionalProperties:
+            type: any
+        recalled:
+          type: array
+          items:
+            $ref: '#/components/schemas/RouterRecalledLayer'
+        fusion_scores:
+          type: object
+          nullable: true
+          additionalProperties:
+            type: any
+        fused:
+          type: array
+          items:
+            $ref: '#/components/schemas/RouterCandidate'
+        mode:
+          type: string
+        trace:
+          type: object
+          nullable: true
+          additionalProperties:
+            type: any
+
+    Memory:
+      type: object
+      required:
+        - memory_id
+        - fact
+        - tenant_id
+      properties:
+        memory_id:
+          type: string
+        fact:
+          type: string
+        tenant_id:
+          type: string
+        user_id:
+          type: string
+        memory_kind:
+          type: string
+        layer:
+          type: string
+        version:
+          type: integer
+        score:
+          type: number
+        visibility:
+          type: string
+        confidence:
+          type: number
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    MemoryCreatedResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [created, idempotent_noop]
+        memory:
+          $ref: '#/components/schemas/Memory'
+
+    # ----- 检索 -----
+
+    VectorSearchRequest:
+      type: object
+      required:
+        - tenant_id
+      properties:
+        query:
+          type: string
+          description: 查询文本（与 vector 二选一）
+        vector:
+          type: array
+          items:
+            type: number
+            format: float
+          description: 直接传入向量（与 query 二选一）
+        tenant_id:
+          type: string
+        viewer:
+          type: string
+        top_k:
+          type: integer
+          default: 10
+
+    RecallRequest:
+      type: object
+      required:
+        - text
+        - tenant_id
+      properties:
+        text:
+          type: string
+          minLength: 1
+        tenant_id:
+          type: string
+        user_id:
+          type: string
+        viewer:
+          type: string
+        top_k:
+          type: integer
+          default: 10
+
+    RecallResponse:
+      type: object
+      properties:
+        fused:
+          type: array
+          items:
+            $ref: '#/components/schemas/Memory'
+        trace:
+          type: object
+          additionalProperties:
+            type: any
+
+    SearchTraceResponse:
+      type: object
+      properties:
+        trace:
+          type: object
+          additionalProperties:
+            type: any
+
+    # ----- 更新 -----
+
+    UpdateRequest:
+      type: object
+      required:
+        - memory_id
+        - fact
+        - tenant_id
+      properties:
+        memory_id:
+          type: string
+        fact:
+          type: string
+        tenant_id:
+          type: string
+        viewer:
+          type: string
+        user_id:
+          type: string
+        confidence:
+          type: number
+
+    UpdateResponse:
+      type: object
+      properties:
+        memory_id:
+          type: string
+        version:
+          type: integer
+        fact:
+          type: string
+
+    # ----- 删除 / GDPR -----
+
+    ForgetRequest:
+      type: object
+      required:
+        - memory_id
+      properties:
+        memory_id:
+          type: string
+        actor:
+          type: string
+          default: sdk
+
+    ForgetResponse:
+      type: object
+      properties:
+        memory_id:
+          type: string
+        deleted:
+          type: boolean
+        trace_kept:
+          type: boolean
+
+    GDPRExportRequest:
+      type: object
+      required:
+        - tenant_id
+        - user_id
+      properties:
+        tenant_id:
+          type: string
+        user_id:
+          type: string
+
+    GDPRExportResponse:
+      type: object
+      properties:
+        tenant_id:
+          type: string
+        user_id:
+          type: string
+        exported:
+          type: integer
+        memories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Memory'
+
+    GDPRCascadeDeleteRequest:
+      type: object
+      required:
+        - tenant_id
+        - user_id
+      properties:
+        tenant_id:
+          type: string
+        user_id:
+          type: string
+        actor:
+          type: string
+          default: sdk
+
+    GDPRCascadeDeleteResponse:
+      type: object
+      properties:
+        tenant_id:
+          type: string
+        user_id:
+          type: string
+        deleted_memory_ids:
+          type: array
+          items:
+            type: string
+        deleted_count:
+          type: integer
+
+    # ----- 指标 -----
+
+    MetricsResponse:
+      type: object
+      properties:
+        lims_recall_latency_ms:
+          type: number
+        lims_hit_rate:
+          type: number
+        lims_pollution_rate:
+          type: number
+        lims_layer_counts:
+          type: object
+          additionalProperties:
+            type: integer
+        lims_total_memories:
+          type: integer
+        lims_total_queries:
+          type: integer
+        lims_signal_latencies_ms:
+          type: object
+          additionalProperties:
+            type: number
+        lims_feedback_stats:
+          type: object
+          additionalProperties:
+            type: any
+        lims_lifecycle_stats:
+          type: object
+          additionalProperties:
+            type: any
+
+    # ----- 审计 -----
+
+    AuditEntry:
+      type: object
+      properties:
+        action:
+          type: string
+        ts:
+          type: string
+          format: date-time
+        actor:
+          type: string
+        details:
+          type: object
+          additionalProperties:
+            type: any
+
+    AuditResponse:
+      type: object
+      properties:
+        memory_id:
+          type: string
+        rejected:
+          type: boolean
+        audit_log:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEntry'
+        audit_count:
+          type: integer
+
+    AuditListResponse:
+      type: object
+      properties:
+        audit_log:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEntry'
+        audit_count:
+          type: integer
