@@ -1,0 +1,73 @@
+# ============================================================
+# 光明记忆（LIMS）Family 档 pf 防火墙规则
+# ============================================================
+# 对应任务：R11 C.2
+# 对应文档：manuals/p1-freebsd-zfs-setup.md §6
+# 对应架构：lightmem.md §5.7「网络隔离」+ §5.5「集合体」
+# 适用平台：FreeBSD 15.1-RELEASE-p1（0.88 实机）
+# ============================================================
+#
+# 设计原则：
+#   1. 默认拒绝所有外部入站
+#   2. 仅网关（lims-router jail）暴露 443/8443
+#   3. SSH 仅管理网段（192.168.1.0/24）可达
+#   4. jail vnet 内网（10.0.10.0/24）全放行（组件间通信）
+#   5. 外发流量全放行（update / pkg install 等）
+#
+# 用法：
+#   1. 语法校验（必做，否则可能锁死 SSH）：
+#      pfctl -vnf /etc/pf.conf
+#   2. 应用规则：
+#      pfctl -f /etc/pf.conf
+#   3. 验证：
+#      pfctl -s rules    # 查看规则
+#      pfctl -s states   # 查看状态表
+#      pfctl -s Interfaces  # 查看接口统计
+#
+# 回滚：
+#   本地控制台执行：pfctl -d（禁用 pf）
+# ============================================================
+
+# ---- 接口定义 ----
+ext_if = "em0"          # 宿主机外网接口，按实机调整
+int_if = "bridge0"      # jail vnet 桥接接口
+
+# ---- 表定义 ----
+# jail vnet 内网 IP（与 profile network.components 一致）
+table <lims_jails> { 10.0.10.10, 10.0.10.20, 10.0.10.30, 10.0.10.40, 10.0.10.50 }
+
+# 管理网段（SSH 来源）
+table <management_net> { 192.168.1.0/24 }
+
+# ---- 全局设置 ----
+set block-policy return
+set skip on lo0
+
+# ---- 默认策略 ----
+# 外部入站默认拒绝
+block in on $ext_if all
+block out on $ext_if all
+
+# ---- 内网放行 ----
+# jail vnet 桥接：组件间全放行
+pass in on $int_if from 10.0.10.0/24 to any keep state
+pass out on $int_if from any to 10.0.10.0/24 keep state
+
+# ---- 对外暴露 ----
+# HTTPS（nginx 网关）：443 + 8443
+pass in on $ext_if proto tcp from any to ($ext_if) port { 443, 8443 } flags S/SA keep state
+
+# SSH 管理：仅管理网段
+pass in on $ext_if proto tcp from <management_net> to ($ext_if) port 22 flags S/SA keep state
+
+# ---- 外发全放行 ----
+# 系统更新、pkg install、DNS 查询等
+pass out all keep state
+
+# ---- 拒绝其他外部入站 ----
+block in on $ext_if all
+
+# ---- 日志（可选，调试用）----
+# 在 block/pass 行末尾加 log 可开启日志
+# 例：block in on $ext_if all log
+# 查看：tcpdump -ni pflog0

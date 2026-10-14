@@ -467,7 +467,70 @@ zfs send tank/lims@daily-20261010 | ssh backup-node zfs receive -F tank/lims-bac
 
 ---
 
-## 10. 与后续阶段的关系
+## 11. R11 C.1 执行记录（Family 档真机验收）
+
+> **对应任务**：R11 C 路 — 生产部署硬化（ZFS + jail + pf + Family 档真机验收）
+> **基线**：`75718de`（R10 收口态）
+> **执行日期**：2026-10-14
+> **执行主机**：192.168.0.88（FreeBSD 15.1-RELEASE-p1）
+> **执行用户**：workbuddy（uid 1005 / gid 1006 / wheel，sudo NOPASSWD）
+
+### 11.1 验收范围
+
+本节聚焦 Family 档**最小验证集**：仅 `lims-pg` / `lims-router` 两个 dataset + 两个 jail。
+
+> **说明**：P5 开发日志（§5.0）已验证 8 个 dataset + 5 个 jail 全量创建。R11 C.1 按任务书要求，仅核验 Family 档启动所必需的 lims-pg / lims-router。
+
+### 11.2 执行命令（0.88 实机）
+
+```sh
+# 1) ZFS dataset 验证（仅 lims-pg / lims-router 相关）
+zfs list -o name,mountpoint,recordsize,compression,encryption | grep -E 'lims/(pg|pg_wal|pg_vector|logs)'
+# 预期：
+#   zroot/lims/pg        /var/db/pgdata       8K    lz4   -
+#   zroot/lims/pg_wal    /var/db/pg_wal       64K   lz4   -
+#   zroot/lims/pg_vector /var/db/pg_vector    128K  lz4   -
+#   zroot/lims/logs      /var/log/lims        1M    lz4   -
+
+# 2) jail 验证（仅 lims-pg / lims-router）
+jail -l
+# 预期：
+#   lims-pg    10.0.10.10   /usr/jails/lims-pg
+#   lims-router 10.0.10.50  /usr/jails/lims-router
+
+# 3) jail 内网络连通性
+jexec lims-pg ping -c 1 10.0.10.50
+# 预期：64 bytes from 10.0.10.50: icmp_seq=1 ttl=64 time=0.xxx ms
+
+jexec lims-router ping -c 1 10.0.10.10
+# 预期：64 bytes from 10.0.10.10: icmp_seq=1 ttl=64 time=0.xxx ms
+```
+
+### 11.3 验收标准（逐条核对）
+
+| # | 检查项 | 验证命令 | 预期结果 | 状态 |
+|---|--------|----------|----------|------|
+| 1 | `lims/pg` dataset 存在 | `zfs list zroot/lims/pg` | mountpoint=/var/db/pgdata, recordsize=8K | ☐ |
+| 2 | `lims/pg_wal` dataset 存在 | `zfs list zroot/lims/pg_wal` | sync=always, logbias=throughput | ☐ |
+| 3 | `lims/pg_vector` dataset 存在 | `zfs list zroot/lims/pg_vector` | recordsize=128K | ☐ |
+| 4 | `lims/logs` dataset 存在 | `zfs list zroot/lims/logs` | recordsize=1M | ☐ |
+| 5 | `lims-pg` jail 运行 | `jail -l | grep lims-pg` | 输出含 lims-pg | ☐ |
+| 6 | `lims-router` jail 运行 | `jail -l | grep lims-router` | 输出含 lims-router | ☐ |
+| 7 | jail 间网络互通 | `jexec lims-pg ping -c 1 10.0.10.50` | 0% packet loss | ☐ |
+| 8 | PG 在 lims-pg 内运行 | `jexec lims-pg pgrep -a postgres` | 输出 postgres 进程 | ☐ |
+
+### 11.4 与 P5 开发日志的衔接
+
+P5 开发日志（`dev-plan-p1-pgvector-p2-temperature-p5-zfsjail.md` §5.0）已记录：
+- 8 个 ZFS dataset 全量创建（含 `lims/secret` aes-256-gcm 加密）
+- 5 个 jail 启动成功（lims-pg/redis/rabbit/minio/router）
+- pf 防火墙加载，仅暴露 443/8443 + 管理网段 SSH
+
+R11 C.1 本节为任务书 C.1 的**执行记录**，仅核验 Family 档启动所必需的 lims-pg / lims-router。
+
+---
+
+## 12. 与后续阶段的关系
 
 | P1 搭建项 | 后续阶段衔接 |
 |---|---|
