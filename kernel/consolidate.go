@@ -40,6 +40,8 @@ type Consolidator struct {
 	interval time.Duration
 	maxScan  int
 	logf     func(string, ...any)
+	// R9-A：每轮整合完成后的回调（nil 表示忽略）。
+	onRunOnce OnRunOnce
 }
 
 // NewConsolidator 构造整合 worker（默认间隔 5 分钟）。
@@ -49,6 +51,13 @@ func NewConsolidator(b StorageBackend) *Consolidator {
 
 // SetInterval 设置扫描间隔（测试可用短间隔）。
 func (c *Consolidator) SetInterval(d time.Duration) { c.interval = d }
+
+// OnRunOnce 是每轮整合完成后的回调（R9-A 新增，只增不改）：
+// 用于外部（如 main.go 的 ServerMetrics）记录最近一次整合时间戳。
+type OnRunOnce func(ConsolidationReport)
+
+// SetOnRunOnce 注入每轮整合完成后的回调；nil 表示忽略（默认无回调）。
+func (c *Consolidator) SetOnRunOnce(fn OnRunOnce) { c.onRunOnce = fn }
 
 // RunOnce 执行一轮整合。
 func (c *Consolidator) RunOnce(ctx context.Context) (ConsolidationReport, error) {
@@ -245,6 +254,9 @@ func (c *Consolidator) RunOnce(ctx context.Context) (ConsolidationReport, error)
 	}
 
 	rep.DurationMS = time.Since(start).Milliseconds()
+	if c.onRunOnce != nil {
+		c.onRunOnce(rep)
+	}
 	return rep, nil
 }
 
