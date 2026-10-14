@@ -232,31 +232,31 @@ func (s *APIServer) RecallAndFuse(ctx context.Context, rc RouterContext) (Router
 	for _, l := range res.Recalled {
 		for _, c := range l.Candidates {
 			if c != nil && c.Memory != nil {
-				// 过滤已拒绝的记忆
-				rejected := false
-				for _, rid := range s.rejectedIDs {
-					if c.Memory.MemoryID == rid {
-						rejected = true
-						break
-					}
-				}
-				if !rejected {
+				// 过滤已拒绝的记忆（R10-A：加锁读）
+				if !s.isRejectedID(c.Memory.MemoryID) {
 					flat = append(flat, *c)
 				}
 			}
 		}
 	}
 	rf := s.fusion
+	var nowVal time.Time
+	// R10-A：并发安全加固。修复前直接写共享 rf 的 Now/AsOf/QueryFrame
+	// （本行原逻辑），并发请求下构成跨 goroutine 数据竞争（生产 main.go
+	// SetRankFusion(DefaultRankFusion()) 后所有请求共享同一实例）。现改为
+	// 构造请求级实例：配置（权重/常量/embedder）继承模板，请求状态独立。
+	// 融合算法与逐位输出不回归（Fuse 未动；Now/AsOf/QueryFrame 值语义不变）。
 	if rf == nil {
 		rf = DefaultRankFusion()
 	}
 	// 确定性：仅当注入方未显式设置 Now 时才用当前时刻。
 	// 评测集跑批时由 run_kpi.go 固定 Now，避免逐条 freshness 抖动。
 	if rf.Now.IsZero() {
-		rf.Now = time.Now().UTC()
+		nowVal = time.Now().UTC()
+	} else {
+		nowVal = rf.Now
 	}
-	rf.AsOf = rc.AsOf
-	rf.QueryFrame = rc.frame()
+	rf = rf.ForRequest(nowVal, rc.AsOf, rc.frame())
 	fused := rf.Fuse(ctx, rc.Text, flat)
 	// R4-A：二次 hop 证据重排（hop 链式推理 + 上下文增强）。
 	// 仅当调用方显式开启（APIServer.SetMultiHopConfig / RecallAndFuseMultiHop）时生效；

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -20,7 +21,10 @@ type APIServer struct {
 	fusion   *RankFusion                     // 多信号 rank 融合引擎（§3.4）；nil 时用 DefaultRankFusion()
 	policy   *WritePolicyRegistry            // 写策略注册表（§3.15）；nil 时用内置默认策略
 	// FeedbackLoop：rejected_ids 记录用户拒绝的记忆，后续检索时过滤。
-	rejectedIDs []string
+	// R10-A：原为裸 []string（router_tools.go append / router_mem.go、router.go 遍历读），
+	// 生产并发 feedback + recall 下构成数据竞争。现加 sync.RWMutex 保护，读写均受同一把锁。
+	rejectedIDs   []string
+	rejectedIDsMu sync.RWMutex
 	// R4-A：multi-hop 二次 hop 证据重排配置。默认零值 = Enabled:false，
 	// 即 RecallAndFuse 逐位保持既有单跳行为（见 kernel/multihop.go）。
 	multiHop MultiHopConfig
@@ -48,6 +52,25 @@ func (s *APIServer) SetRankFusion(rf *RankFusion) {
 // SetWritePolicyRegistry 注入写策略注册表（§3.15）。
 func (s *APIServer) SetWritePolicyRegistry(r *WritePolicyRegistry) {
 	s.policy = r
+}
+
+// addRejectedID 记录一条被拒绝的记忆 id（R10-A：加锁写，替代裸 append）。
+func (s *APIServer) addRejectedID(id string) {
+	s.rejectedIDsMu.Lock()
+	s.rejectedIDs = append(s.rejectedIDs, id)
+	s.rejectedIDsMu.Unlock()
+}
+
+// isRejectedID 判断某记忆 id 是否在拒绝列表（R10-A：加锁读）。
+func (s *APIServer) isRejectedID(id string) bool {
+	s.rejectedIDsMu.RLock()
+	defer s.rejectedIDsMu.RUnlock()
+	for _, rid := range s.rejectedIDs {
+		if rid == id {
+			return true
+		}
+	}
+	return false
 }
 
 // Handler 返回 http.Handler（可直接挂到 http.ListenAndServe）
@@ -387,14 +410,8 @@ func (s *APIServer) handleAudit(w http.ResponseWriter, r *http.Request) {
 	audit := GetAuditLogger()
 	entries := audit.GetEntries(memoryID)
 
-	// 检查是否在 rejectedIDs 中
-	rejected := false
-	for _, rid := range s.rejectedIDs {
-		if rid == memoryID {
-			rejected = true
-			break
-		}
-	}
+	// 检查是否在 rejectedIDs 中（R10-A：加锁读）
+	rejected := s.isRejectedID(memoryID)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"memory_id":   memoryID,

@@ -199,6 +199,66 @@ func (rf *RankFusion) SetEmbedder(f func(string) ([]float32, error)) {
 // 两者互斥：后调用者覆盖前者；传 nil 清除已注入的向量化器。
 func (rf *RankFusion) SetEmbedderImpl(e Embedder) { rf.embedder = e }
 
+// ForRequest 构造一个「配置继承、请求状态独立」的请求级实例（R10-A）。
+//
+// 背景（根因）：生产 main.go 调 SetRankFusion(DefaultRankFusion()) 后，所有并发请求
+// 共享同一个 *RankFusion，而 RecallAndFuse 每次请求直接写 rf.Now / rf.AsOf /
+// rf.QueryFrame（router_mem.go），与信号闭包读取这些字段构成跨 goroutine 数据竞争
+// （go test -race 报告）。本方法把模板拷贝为请求级副本，使写入只落在副本上。
+//
+// 配置继承：AbsoluteFloor / ProximityRatio / HalfLife / RRFK / FusionMode /
+// VoteTopK / SemanticRedundant / SemanticAblatePath / Weights / embedder 全部继承
+// 模板值（只读共享，不改语义）。
+//
+// 请求状态独立：Now / AsOf / QueryFrame 落在副本上，与模板及其它请求副本互不影响。
+//
+// 关键：Signals 里的部分信号是「方法值」闭包（rf.signalSemantic / signalFreshness /
+// signalReferenceFrame / signalFeedbackHistory），在 DefaultRankFusion 创建时就捕获了
+// 模板的 rf 指针。若只做结构体浅拷贝，副本的 Signals 仍指向模板字段，导致副本的
+// Now/QueryFrame 不生效（写入副本、读取模板，结果错误且仍是竞争）。因此本方法必须
+// 把这些信号重建为绑定到「副本 rf」的闭包，keyword/entity/value/source_trust 四个
+// 包级函数无接收者，可原样复用。
+//
+// 融合算法逐位不回归：Fuse / rrfRank / consensusVoteRank 全部沿用既有实现，本方法
+// 不触碰 RRF/vote 权重、AbsoluteFloor、ProximityRatio、HalfLife、RRFK 语义。
+func (rf *RankFusion) ForRequest(now time.Time, asOf *string, qf *ReferenceFrame) *RankFusion {
+	cp := &RankFusion{
+		Signals:            nil,        // 下方重建
+		Weights:            rf.Weights, // 只读共享
+		AbsoluteFloor:      rf.AbsoluteFloor,
+		ProximityRatio:     rf.ProximityRatio,
+		HalfLife:           rf.HalfLife,
+		RRFK:               rf.RRFK,
+		Now:                now,
+		AsOf:               asOf,
+		QueryFrame:         qf,
+		FusionMode:         rf.FusionMode,
+		VoteTopK:           rf.VoteTopK,
+		SemanticRedundant:  rf.SemanticRedundant,
+		SemanticAblatePath: rf.SemanticAblatePath,
+		embedder:           rf.embedder, // 只读共享
+	}
+	// 重建信号：绑定到副本 cp，使 Now/AsOf/QueryFrame 读取落在请求级状态上。
+	cp.Signals = make([]NamedSignal, len(rf.Signals))
+	for i, s := range rf.Signals {
+		cp.Signals[i] = NamedSignal{Name: s.Name, Weight: s.Weight, Type: s.Type}
+		switch s.Name {
+		case "semantic":
+			cp.Signals[i].Fn = cp.signalSemantic
+		case "freshness":
+			cp.Signals[i].Fn = cp.signalFreshness
+		case "reference_frame":
+			cp.Signals[i].Fn = cp.signalReferenceFrame
+		case "feedback":
+			cp.Signals[i].Fn = cp.signalFeedbackHistory
+		default:
+			// keyword / entity / value / source_trust 为包级函数，无接收者，可复用。
+			cp.Signals[i].Fn = s.Fn
+		}
+	}
+	return cp
+}
+
 // DefaultWeightsJSON 返回默认权重的 JSON 表示（供落盘参考 / 校准加载）。
 func DefaultWeightsJSON() []byte {
 	doc := map[string]any{
