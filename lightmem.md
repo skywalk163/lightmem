@@ -24,6 +24,8 @@
 >
 > **v2.4（吸收《千脑智能》优秀基因，R13）** 在 v2.3 基础上**只增不改**，落地《千脑智能》（Thousand Brains Project，MIT 许可）精读给出的三条高价值改造建议：① 新增 **§3.2.1 记忆位移边**——把参考系从"扁平坐标"升级为"带位移边的记忆图"（节点=记忆、边=displacement），四类关系 `causal/temporal/task-flow/entity-alias`，仅 L2 长期记忆建边，边只用于软排序与多跳召回、不跨越 §3.2 硬过滤边界，跳数上限 N=2 并按 `0.5^hop` 衰减；写入三元组幂等、淘汰软删可审计（`kernel/displacement_edge.go` / `kernel/multihop_monty.go`）。② 新增 **§3.2.2 跨 Agent 参考系对齐**——跨 Agent 融合前强制实体消解，未对齐只并列展示、禁止融合与互相覆盖（`kernel/entity_align.go`，默认路径不调用）。③ 新增 **§3.4.1 只加不减与相对容差**——明确各信号只贡献正向名次分、缺失与超容差记 0 不扣分，`20%` 显式定义为相对容差 `tolerance`（默认 0.2），保留 lightmem 独有的绝对下限 `top1 ≥ 0.6`（`kernel/rank_fusion_monty.go`，默认融合路径与 `FusionMode=rrf` 不变）。三条建议均以**新增模式/新增函数**落地，默认 Rank 融合路径、既有 Schema 语义与对外格式不变；北极星 M1=1.0000（holdout_v2 800 条，vector 口径）逐位复现。**不改变既有架构结论。**
 
+> **v2.4.1（R14 收口：漂移衰减 / L0→L1 落库 / 位移边持久化 + 统一门禁，只增不改）** 在 v2.4 基础上继续**只增不改**，把《千脑智能》精读（`lightmem/monty.md`）里剩余三条建议中价值最高、风险最低的三条落地为可评测代码，并首次引入一条统一门禁。主标题版本号仍为 **v2.4**，本条目为修订号。① 新增 **§5.3.1 参考系漂移衰减**——排序期对 `reference_frame` 与查询在 entity / scene / task 三轴上漂移的记忆做**乘性衰减**（保守缺省 `Floor=0.15`、`Partial=0.60`、`Neutral=1.00`），**只衰减不加分**、**缺失即中性**、单轴漂移即下沉、永不低于地板绝不归零，作为**旁路算子**由调用方显式调用，不进默认 RRF / 投票路径，结果不落库（`kernel/forgetting_drift.go`）。② 新增 **§3.5.1 L0→L1 落库边界**——把 Monty 的 STM/LTM 双缓冲收敛为 lightmem 的显式 flush 边界，四类触发（会话结束 / 话题切换 / 任务完成 / L0 容量），**纯决策不写入**：只产出 `FlushPlan`，不碰 `StorageBackend`、无 I/O、无随机、观测时刻由调用方注入（`kernel/flush.go`）。③ 新增 **§5.4.1 位移边持久化**——补齐 R13 遗留的"`EdgeStore` 仅进程内、重启即丢"，JSON 落盘 + 同目录临时文件 + `os.Rename` 原子替换（标准库无 `os.Replace`）、三元组字典序输出保证**重复 Save 逐字节一致**、`created_at`/`invalidated_at` 两端规整 UTC 后按 unix ns 逐位保真、DDL 只含 `CREATE` 绝不含 `ALTER`（`kernel/edge_persist.go`）。④ 新增统一门禁 `scripts/gate.sh`（8 项：版本 / gofmt 增量 / gofmt 全仓 / vet / build / test -count=1 / -race / 覆盖阈值，外加"只增不改白名单"逐文件 diff），并新增**附录 D** 记录门禁矩阵与北极星复现。三项实现全部以**新增文件**落地，默认检索 / 融合 / 写入路径与既有 Schema 语义不变；"只增不改白名单"7 文件与 R13 基线**逐文件 diff 一致**，北极星 M1=1.0000（800/800，hit@1=1.0000，四桶全 1.0）与 R13 基线在**同一环境、同一命令**下 M1 与 M2 逐位一致。**不改变既有架构结论。**
+
 ---
 
 ## 1. 项目概述
@@ -464,6 +466,31 @@ Enterprise（集合体 Coordinator/Worker/Archive/Gateway）
   ]
 }
 ```
+
+### 3.5.1 L0→L1 落库边界（Flush 决策，v2.4.1）
+
+**职责：** 给 L0（工作记忆）与 L1（长期记忆）之间一条**显式的落库边界**——在明确的触发点上，决定哪些 L0 记忆应当沉淀进 L1、哪些继续留在 L0。
+
+**依据：** Monty 的短期记忆（STM）只在 episode 结束时**一次性** flush 进长期记忆（LTM），两层之间有清晰的边界。lightmem 此前是"持续捕获 → 压缩 → 整合"，L0 与 L1 之间没有显式边界，L1 被 L0 的持续写入稀释——结果是"沉淀"这件事既不可观测、也不可复现。
+
+**四类触发（`FlushReason`）：**
+
+| 触发 | 判定条件 |
+|---|---|
+| `session_end` | 会话结束信号置位 |
+| `topic_switch` | 当前 query 与上一次的话题指纹 Jaccard 相似度 ≤ `TopicSwitchOverlap`（默认 0.35） |
+| `task_done` | 任务完成信号置位 |
+| `l0_capacity` | L0 条数 ≥ `L0Limit`（默认 64） |
+
+**规则：**
+
+- **纯决策，不写入：** `DecideFlush` 只产出 `FlushPlan`（待落库 id 列表、触发理由、留在 L0 的 id、诊断计数），**不调用 `StorageBackend`、不产生任何 I/O**。是否真正落库由调用方决定——把"决定"与"执行"分离，使 L0→L1 迁移可以被单独审计、单独回放。
+- **可解释：** `FlushPlan.Reasons` 按 `FlushReason` 枚举序稳定输出，日志能直接回答"为什么此刻 flush"。
+- **确定性：** 无随机、无 `time.Now()`（观测时刻由调用方注入 `sig.Now`，本决策本身不使用时间）、无并发依赖、无共享可变状态；同一输入多次调用返回结构完全一致。
+- **话题指纹：** `TopicFingerprintOverlap` 以词元集合的 Jaccard 相似度度量话题切换，阈值可配；`KeepRecent`（默认 3）控制话题切换时保留在 L0 的最近条数，`0` 是合法值（语义为"不保留"，**不**回落到 3）。
+- **保守回落：** `L0Limit` / `TopicSwitchOverlap` ≤ 0 回落缺省；`KeepRecent` < 0 视为 0。
+
+**与既有机制的关系（只增不改）：** 本节不修改 §3.5 的任何字段语义、不新增 `Memory` 字段、不改动 `MemoryLifecycleManager` 的晋升 / 降级路径；`FlushPlan` 是计算期结构，**不落库**、**不进默认写入路径**。实现：`kernel/flush.go`。
 
 ### 3.6 静态记忆存储（StaticMemoryStore, L2）
 
@@ -976,6 +1003,31 @@ L1 接近上限时依次执行：压缩合并 → 低价值降级 L3 → 过时/
 - **半衰期作用域边界（v1.6）：** §5.3 V 公式的时效半衰期（L1=30 天）与 §3.4 的时效新鲜度**只**影响固有价值 V 与查询排序权重，**不**自动把 `valid_until` 置为到期。有效期仅由显式 `superseded_by` / `valid_until` 决定；`valid_until=null` 的记忆即使时效衰减到 0，仍按"当前有效"参与查询。
 - V 持续下降 → L1 降 L3；V 持续上升 → L0 升 L1，经人工确认或长期稳定后沉淀 L2；`goal`、长期偏好、企业制度即使访问少也不轻易遗忘（白名单保护）；临时事实过期自动失效。
 
+### 5.3.1 参考系漂移衰减（Reference-Frame Drift Decay，v2.4.1）
+
+**职责：** 在**排序期**判断"这条记忆此刻是否还相关"——当记忆的 `reference_frame` 与查询参考系在实体 / 场景 / 任务三轴上显著不同时，即使这条记忆"很新"、访问频繁，也应快速下沉。
+
+**与 §5.3 的分工（只增不改）：** §5.3 的固有价值 V 回答"该记多久"，与查询无关；本节回答"此刻该不该沉下去"，只在排序期做乘性衰减。两者互不覆盖：本节**不写回任何字段**、不改 V、不改 `superseded_by`，也不改动检索期既有的 `signalReferenceFrame` 信号权重与默认 RRF / consensus 投票路径。
+
+**依据：** 反向吸收《千脑智能》自承的一条痛点——Monty 的 evidence 默认无界累积、不遗忘，其文档承认"换物体时旧证据应失效，有界更合理"。lightmem 的对应问题是：只有时间与访问在驱动衰减，参考系已经换过（客户换了、场景换了、任务换了）的记忆仍因"新"而排在前面。
+
+**三轴判定（保守缺省，先定后调）：**
+
+| 轴 | 字段 | 判定 |
+|---|---|---|
+| entity | `reference_frame.entity` | 归一化后相等 = `equal`；一方包含另一方 = `partial`；均非空且无包含 = `drift` |
+| scene | `reference_frame.scene` | 同上 |
+| task | `reference_frame.task` | 同上 |
+
+- **缺失即中性：** 查询或记忆缺某轴字段时该轴记为 `neutral`（系数 1.00），**不算漂移**——避免误伤未标注参考系的历史存量数据。这是本节最保守的一条默认。
+- **乘性单调：** 衰减因子 = 各轴分量之积，clamp 到 `[Floor, 1.0]`。**单轴漂移即足以下沉**，不要求三轴同时漂移；且因子永不低于地板、**绝不归零**——漂移不是淘汰，只是下沉。
+- **保守缺省：** `Floor = 0.15`（单轴漂移最低把分压到 15%）、`Partial = 0.60`（包含关系但不相等按 60% 计）、`Neutral = 1.00`（缺失不衰减）。三值均可通过 `DriftConfig` 覆盖。`Floor` / `Partial` / `Neutral` 的 `0` 值一律视为"未设置"并回落到缺省——Go 零值无法区分"未设置"与"显式传 0"，此处取保守侧，理由见实现注释。
+- **只衰减不加分：** `DriftAwareRank` 在既有分数上**乘**因子，不引入新信号、不改权重、不覆盖默认融合结果；返回结构与默认路径的 `FusedResult` 一致，因此可与默认结果逐位对比、随时并回。
+- **可解释：** `DriftReport` 为单条记忆输出一行文本判决（含各轴 verdict），审计时能直接回答"为什么这条记忆下沉"。
+- **确定性：** 无随机、无 `time.Now()`、无 I/O、不调用 LLM；归一化只做小写化与空白 / 标点剔除，零新依赖。
+
+**边界：** 本节是纯排序规则，不触碰 §3.2 硬过滤、§4 双时态与 §7 安全边界。衰减结果**不落库**——同一记忆在不同查询下可以有不同的衰减因子，这与 §5.3"固有价值与查询无关"不冲突，因为 V 始终未被改写。实现：`kernel/forgetting_drift.go`（旁路算子，由调用方显式调用，默认路径不调用）。
+
 ### 5.4 存储后端可插拔（挂接主流数据库，v1.8）
 
 **需求：** 光明记忆不锁定单一数据库，可通过后端抽象挂接当今主流的多种数据库系统。
@@ -1007,6 +1059,37 @@ StorageBackend (接口)
 **挂接协议（v1.8）：** 所有后端均以 SQL/HTTP/gRPC 接入，Router 层只感知 `StorageBackend` 接口；不同后端间**不共享 Schema 语义变更**，只共享 §4.1 统一 Schema JSON。新增后端无需改动 Router / VoteFusion / Lifecycle。
 
 **与 §4.2 一致性骨架的关系：** `vector_status`（§4.2）与对账任务是后端无关的——无论选哪个后端，写入路径仍是"元数据为事实源、向量异步补全"，只是"向量"可能落在 Qdrant 而非 pgvector。
+
+### 5.4.1 位移边持久化（Edge Persistence，v2.4.1）
+
+**职责：** 补齐 §3.2.1 位移边在**重启即丢**的问题——边需要像记忆一样能被持久化、能被幂等重建、能被审计。
+
+**承接的遗留事项：** R13（v2.4）落地了 §3.2.1 的建边、软删与容量治理，但 `EdgeStore` 是进程内 map，进程重启即清空，"边"这一层因此无法形成跨会话的长期结构。本节补齐这一层。
+
+**契约（`EdgePersistence` 接口）：**
+
+| 方法 | 语义 |
+|---|---|
+| `Load(ctx)` | 读出并重建 `EdgeStore`；文件不存在时返回**空 store 且不报错**（幂等启动） |
+| `Save(ctx, store)` | 全量写盘；并发安全（mutex 串行化），重复调用**幂等且逐字节一致** |
+| `DDL()` | 返回建表语句文本（静态文本，本实现不执行） |
+
+**实现口径（如实登记，非掩盖）：**
+
+- 落盘格式为 JSON（stdlib，零新依赖）。写盘走**临时文件 + 原子替换**（同目录 `.tmp` + `os.Rename`）：POSIX rename 在同一文件系统内是原子覆盖，崩溃时的最坏情况是残留一个 `.tmp` 文件，目标文件始终是完整的旧内容，**不会出现半写状态**。Go 标准库没有 `os.Replace`，原子替换统一走 `os.Rename`。
+- 本仓库的 `kernel/backend_sqlite.go` 是**内存骨架**（文件头注释自述"最小可运行骨架：内存表结构"），并无真实 `database/sql` 驱动。因此本节提供的是**文件落盘的真实往返**，**不是** SQLite 真库往返——这一点在交付报告中单独登记。
+- 仍导出 SQLite / PostgreSQL 两段 DDL 文本（静态、不执行），作为未来接入真实数据库的落表依据；PG 真机往返留 R15。
+
+**保真与确定性规则：**
+
+- **时间逐位保真：** `created_at` / `invalidated_at` 统一按 unix nanosecond 存 `int64`，且**序列化与反序列化两端都规整为 UTC**。这一步是必要的：`time.Time` 的 location 字段参与 `==` / `DeepEqual` 比较，若取本机时区，跨时区机器上同一条边会序列化成不同的字面量，直接破坏"同输入 → 同输出"。
+- **软删双向保真：** `invalidated_at` 非空时双向保留，**永不物理删除**，与 §3.2.1 的"软删可审计"一致。
+- **输出确定性：** 记录按 `(from, to, relation)` 三元组字典序输出，重复 `Save` 产出**逐字节相同**的文件，可 diff、可断言幂等。
+- **容量治理延续：** `max_out` 随文件一起持久化，重建后沿用同一出边上限，避免重启后治理策略漂移。
+
+**DDL 约束（新表不 ALTER）：** 两段 DDL 只含 `CREATE TABLE` / `CREATE UNIQUE INDEX` / `CREATE INDEX`，**绝不含 `ALTER`**；三元组唯一索引建在**有效边**上（`WHERE invalidated_at IS NULL`），软删行可累积、不占用唯一性。这与 §5.4"不同后端间不共享 Schema 语义变更"保持一致——边表是 §3.2.1 的扩展表，不是 §4.1 统一 Schema 的一部分。
+
+**边界：** 本节为新增持久化层，不修改 `kernel/displacement_edge.go` 的任何符号语义，不改动默认检索 / 融合 / 写入路径；JSON 落盘不进入 §4.1 统一 Schema。实现：`kernel/edge_persist.go`。
 
 ### 5.5 单节点与集合体部署形态（v1.8）
 
@@ -1462,7 +1545,9 @@ accton /var/account/acct
 | v2.1 | 2026-10-10 | 应用包生态与差异化定位：① 新增 **§6.2 应用包生态（LIMS App Package）**——借鉴 NAS（Synology 套件中心 / TrueNAS Apps）引入包机制：`manifest.yaml` 自描述、包生命周期（install/configure/enable/health/upgrade/disable/uninstall）、来源信任分级（builtin/official/community）、类型分层（service/connector/skill/policy/pack/scheduler）、`can_modify_core` 恒 false 的扩展契约；② **必备包清单两批**（首批 gitea / git-connector / registry / backup / search / llm-gateway / mesh-sync / webui；第二批按触发条件启用且默认关闭）；③ **AI 协同**——包成为被记忆的一等实体（装包/配包/用包/沉淀包经验四环节，经验经 §3.13 提炼为 `procedure`）；④ **差异化定位六条**（主特色 1：低 token 长期运行 = 数据面架构 + 控制面光明语言双重压缩；主特色 2：省 token 使 AI 协同在经济上可持续）；⑤ 新增 M1–M10 评测口径（含独有指标"控制面 token 占比" M2）；⑥ 配套交付物 `docs/光明记忆应用包生态与差异化定位_v1.0.md`。**不改变既有架构结论**，并明确"低 token"在 M2/M4 落数字前仅为设计主张 |
 | v2.2 | 2026-10-10 | profile 配置落地：① 将 §2.6 四档装配档位落地为 `lightmem/profiles/` 目录——`lims-solo.profile.yaml` / `lims-family.profile.yaml` / `lims-smb.profile.yaml` / `lims-enterprise.profile.yaml`（每份含存储、缓存、队列、网络、安全、功能、扩容七段完整配置，字段名与 §2.6 一致；Family 档含 ZFS dataset 布局与 jail vnet IP 规划，SMB 含 Qdrant 迁移触发阈值，Enterprise 含 Coordinator/Worker/Archive/Gateway 节点角色与分片路由）；② 配 `README.md` 说明档位选择、启用（复制为 `lims.profile.yaml`）与升档方法；③ 文档内交叉引用该目录。**不改变既有架构结论** |
 | v2.3 | 2026-10-10 | 评审勘误与口径统一（仅文档，不改架构）：① 修正 §4.1 记忆对象样例——主键真源字段应为 `fact`，`content` 仅作 L2 兼容别名；② 统一检索延迟口径——§9 P95 目标针对内核记忆检索链路，§4.6 外部连接器同步的 300ms 为单次外部调用软超时/背压触发线，二者非同一指标；③ 修复 §6.1 悬空引用（移除对不存在的"实现语言选型说明"文档的指向）；④ 版本历史按时间序整理并补齐本条目。**不改变既有架构结论** |
-| v2.4 | 2026-10-15 | 吸收《千脑智能》（Thousand Brains Project）优秀基因（R13，**只增不改**）：① 新增 **§3.2.1 记忆位移边**——参考系由"扁平坐标"升级为"带位移边的记忆图"，四类关系（`causal` / `temporal` / `task-flow` / `entity-alias`），仅 L2 建边、边只用于软排序与多跳召回、跳数上限 N=2 且按 `0.5^hop` 衰减，三元组幂等写入 + 软删除可审计；② 新增 **§3.2.2 跨 Agent 参考系对齐**——跨 Agent 融合前强制实体消解，未对齐只并列展示、禁止融合与互相覆盖，坐标缺失降级为待人工确认；③ 新增 **§3.4.1 只加不减与相对容差**——信号只贡献正向名次分，缺失/超容差记 0 不扣分，`20%` 显式定义为相对容差 `tolerance`（默认 0.2），保留绝对下限 `top1 ≥ 0.6`。三条均以新增文件/函数落地（`kernel/displacement_edge.go`、`kernel/multihop_monty.go`、`kernel/entity_align.go`、`kernel/rank_fusion_monty.go`），**默认 Rank 融合路径、既有 Schema 语义、既有 SQL 与对外格式均不变**；北极星 M1=1.0000（holdout_v2 800 条，vector 口径）逐位复现。**不改变既有架构结论。** |
+| v2.4 | 2026-10-15 | 吸收《千脑智能》（Thousand Brains Project）优秀基因（R13，**只增不改**）：① 新增 **§3.2.1 记忆位移边**——参考系由"扁平坐标"升级为"带位移边的记忆图"，四类关系（`causal` / `temporal` / `task-flow` / `entity-alias`），仅 L2 建边、边只用于软排序与多跳召回、跳数上限 N=2 且按 `0.5^hop` 衰减，三元组幂等写入 + 软删除可审计；② 新增 **§3.2.2 跨 Agent 参考系对齐**——跨 Agent 融合前强制实体消解，未对齐只并列展示、禁止融合与互相覆盖，坐标缺失降级为待人工确认；③ 新增 **§3.4.1 只加不减与相对容差**——信号只贡献正向名次分，缺失/超容差记 0 不扣分，`20%` 显式定义为相对容差 `tolerance`（默认 0.2），保留绝对下限 `top1 ≥ 0.6`。三条均以新增文件/函数落地（`kernel/displacement_edge.go`、`kernel/multihop_monty.go`、`kernel/entity_align.go`、`kernel/rank_fusion_monty.go`），**默认 Rank 融合路径、既有 Schema 语义、既有 SQL 与对外格式均不变**；北极星 M1=1.0000（holdout_v2 800 条，vector 口径）逐位复现。**不改变既有架构结论。**
+
+| v2.4.1 | 2026-10-15 | R14 收口（**只增不改**，主标题版本号仍为 v2.4，本条为修订号）：① 新增 **§5.3.1 参考系漂移衰减**——排序期对参考系三轴（entity/scene/task）漂移做乘性衰减，保守缺省 `Floor=0.15`/`Partial=0.60`/`Neutral=1.00`，只衰减不加分、缺失即中性、单轴漂移即下沉、永不归零，旁路算子由调用方显式调用，结果不落库；② 新增 **§3.5.1 L0→L1 落库边界**——四类触发（会话结束/话题切换/任务完成/L0 容量），纯决策不写入，只产出 `FlushPlan`，无 I/O、无随机、观测时刻由调用方注入；③ 新增 **§5.4.1 位移边持久化**——JSON 落盘 + 同目录临时文件 + `os.Rename` 原子替换、三元组字典序输出保证重复 Save 逐字节一致、时间两端规整 UTC 后按 unix ns 逐位保真、软删双向保真永不物理删除、DDL 只含 `CREATE` 绝不含 `ALTER`；④ 新增统一门禁 `scripts/gate.sh`（8 项 + "只增不改白名单"逐文件 diff）与 **附录 D**（门禁矩阵与北极星复现）。三项均以新增文件落地（`kernel/forgetting_drift.go`、`kernel/flush.go`、`kernel/edge_persist.go`），默认检索/融合/写入路径与既有 Schema 语义不变；白名单 7 文件与 R13 基线逐文件 diff 一致；M1=1.0000（800/800）与 R13 同环境同命令逐位一致。**不改变既有架构结论。** |
 
 ## 附录 C：参考文档
 | 参考 | 链接 |
@@ -1479,4 +1564,105 @@ accton /var/account/acct
 | Zep 企业规模成本（S&P Global Market Intelligence / 451 Research，2026-04） | https://www.getzep.com/research/sp-global-market-intelligence-zep-coverage/ |
 | Synology 套件中心（信任等级 / 社区套件来源 / 发布者证书） | https://kb.synology.cn/zh-cn/DSM/help/DSM/PkgManApp/PackageCenter_desc |
 | TrueNAS SCALE 24.10 Apps（Docker 化、catalog 迁移策略、应用维护独立于系统版本） | https://www.truenas.com/docs/scale/24.10/gettingstarted/printview/ |
+| 配套交付物（本文档之外） | `docs/光明记忆应用包生态与差异化定位_v1.0.md`（包生态设计 + 竞品对照 + M1–M10 口径） |
+
+## 附录 D：R14 门禁与北极星复现（v2.4.1）
+
+**运行环境：** FreeBSD 15.1-RELEASE-p1，go1.25.14。门禁入口：`scripts/gate.sh`（一行跑完全部门禁，末行汇总 `PASS / FAIL / SKIP / module 数`）。
+
+### D.1 门禁矩阵（一次运行的实际输出）
+
+| # | 门禁项 | 结果 | 备注 |
+|---|---|---|---|
+| [0] | Go 版本 ≥ 1.25 | PASS | go1.25.14 |
+| [1] | `gofmt -l` 本轮新增文件 | PASS | 0 文件待格式化 |
+| [1b] | `gofmt -l` 全仓 | INFO | 4 个**既有**文件待格式化，只报告不计 FAIL |
+| [2] | `go vet ./...`（逐 module） | PASS | 2/2 通过 |
+| [3] | `go build ./...`（逐 module） | PASS | 2/2 通过 |
+| [4] | `go test -count=1 ./...`（逐 module） | PASS | 2/2 通过，禁用测试缓存 |
+| [5] | `go test -count=1 -race ./...`（kernel） | PASS | 无竞态 |
+| [6] | 新增文件测试函数数 ≥ 12 | PASS | forgetting_drift / flush / edge_persist |
+| [7] | 只增不改白名单逐文件 diff | PASS | 基线 `/tmp/r13/lightmem`，12 文件逐文件一致 |
+
+**汇总：PASS 8 / FAIL 0 / SKIP 0 / module 2。**
+
+白名单文件（§3 各节与既有 Schema 的默认路径）：任务书 G8 的 10 个受保护文件 `kernel/multihop.go`、`kernel/rank_fusion.go`、`kernel/lifecycle.go`、`kernel/voting.go`、`kernel/model.go`、`kernel/goal.go`、`kernel/embedder.go`、`kernel/storage.go`、`kernel/backend_sqlite.go`、`kernel/backend_pg.go`，另加 C1/A 路的 `kernel/displacement_edge.go`、`kernel/router.go`——共 12 文件，逐文件 `diff -q` 一致。`eval/holdout/holdout_v2.jsonl` 与 `eval/vectors/` 亦未改动。
+
+### D.2 门禁里的两个反直觉坑（已修，供后续复用）
+
+1. **`go test` 必须带 `-count=1`。** 不带时输出 `ok ... (cached)`——看着是绿的，实际一行测试都没跑。
+2. **不能只跑根 module。** 本仓库是两个 module（根 `lightmem` + 子 `github.com/lightmem/kernel`）。只跑根 module 时，kernel 的 `go vet` / `go test` **完全不会执行**；失败信息会以 `FAIL ... [build failed]` 出现在根 module 的输出里，极易误判成"eval 目录的问题"。门禁脚本自动发现所有 `go.mod` 并逐 module 执行，堵住这条路径。
+
+### D.3 北极星复现（R14 收口态，正式口径 `holdout-official`）
+
+| 指标 | 值 | 口径 |
+|---|---|---|
+| M1 零 token 覆盖 | **1.0000**（北极星红线） | 800/800，hit@1=1.0000，mean_rr=1.0000；holdout_v2，`vector:BAAI/bge-m3`，topk=5 |
+| by_bucket | 4 桶全 1.0000 | single-hop 149 / temporal 165 / open-domain 224 / multi-hop 262 |
+| M2 控制面占比 | 0.2498 | control=43126，data=129537（数据面压缩后），total=172663 |
+| 数据面压缩 | 35.33% | 200295 → 129537（saved=70758） |
+| FP 审计 | vetoed=0 | v4_hits=800，否定一致性 + 碎片化复核后 residual_fp=800，无一条被否 |
+
+复现命令（`-now-fixed` 固定基准日期，确定性保证，勿用 `time.Now`）。
+**必须显式列出库文件**：`polaris_holdout.go` 带 `//go:build ignore`，不进 `go build ./...`，
+单文件运行会报一串 `undefined: NewM1Accumulator`：
+
+```text
+cd lightmem
+go run ./eval/polaris/polaris_holdout.go \
+  ./eval/polaris/polaris_fact.go ./eval/polaris/polaris_m1.go \
+  ./eval/polaris/polaris_m2.go ./eval/polaris/polaris_token.go \
+  ./eval/polaris/compress_light.go ./eval/polaris/polaris_fp.go \
+  -holdout eval/holdout/holdout_v2.jsonl \
+  -weights eval/weights/rank_weights_en_r5.json -embedder vector -topk 5 \
+  -now-fixed 2026-10-14 -report r14_final_holdout -reports-dir eval/reports
+```
+
+与 R13 收口态在**同一台验证机、同一命令**下对照：`mode`、`m1`、`m2`、
+`data_plane_compression`、`fp_audit` 五节**逐字段相同**，800 条 `details` 的 sha256
+也相同——R14 的三项新增（漂移衰减 / flush 决策 / 位移边持久化）没有动过任何北极星判分输入。
+
+### D.4 一个口径误判的更正（如实登记：本附录初版写错，已更正）
+
+本附录初版把 R14 的 M2 记为 **0.1772**，并归因为"评测向量集快照变更（`eval/vectors/` 4595 条）"。
+**该归因错误，此处更正。** 实测证据链（同一台验证机，`-now-fixed 2026-10-14`）：
+
+1. 仓库里有**两个北极星入口**：`eval/polaris/polaris_eval.go`（`-mode eval`，M2 的 `data`
+   按 fact **原文**计数）与 `eval/polaris/polaris_holdout.go`（R13 起为正式入口，M2 的
+   `data` 按 `CompressDataFact` **压缩后**计数，并单列 `data_plane_compression` 节）。
+2. 用 `polaris_eval -mode eval` 跑 R14 得 M2=**0.1772**（control=43126，data=**200295**）；
+   用 `polaris_holdout` 跑 R14 得 M2=**0.2498**（control=43126，data=**129537**）。
+   `control` 逐位相同，`data` 的差值正是数据面压缩量 70758——是**入口口径**不同，不是数据变了。
+3. 排除向量快照假设：r13 与 r14 两棵基线工作树的 `eval/vectors/` **逐文件一致**
+   （`diff -rq` 仅 r14 多 4 个生成脚本），且**在 R13 基线工作树**上用
+   `polaris_eval -mode eval` 复跑同样得 M1=1.0000 / M2=0.1772 / data=200295
+   ——0.1772 是 eval 入口的固有口径值，与 R14 代码无关。
+
+结论：北极星正式口径取 `polaris_holdout`（mode=`holdout-official`）。R14 与 R13 在正式口径下
+M1=1.0000、M2=0.2498、压缩 35.33%、FP vetoed=0 **逐项一致**；`polaris_eval` 的 0.1772 只用于
+控制面压缩验证，**不参与北极星横向对比**（同一指标必须固定同一入口，否则不可比）。
+报告文件：`eval/reports/r14_final_20261015.json`（R14 正式 holdout；原始时间戳副本 `r14_final_holdout_20261015-105651.json` 一并入库）、
+`eval/reports/r14_polaris_final_20261015.json`（eval 入口对照）、
+`eval/reports/r13_recheck_r14env_20261015.json`（R13 树上 eval 入口复跑）。
+
+### D.5 本轮由门禁抓出的实现缺陷（如实登记，非掩盖）
+
+| 文件 | 缺陷 | 修复 |
+|---|---|---|
+| `kernel/edge_persist.go` | 调用了标准库中**不存在**的 `os.Replace`，导致整个 kernel 模块无法编译（`undefined: os.Replace`） | 改用同目录 `.tmp` + `os.Rename`（POSIX rename 原子覆盖） |
+| `kernel/edge_persist_test.go` | 调用不存在的 `EdgeStore.EdgeSummary()`，实际 API 为 `Summarize()` | 改为 `Summarize()` |
+| `kernel/forgetting_drift_test.go` | 类型误用（`[]DriftAxis` 按 string 迭代）、`if` 语句块内声明的变量在块外使用、`Fuse` 调用漏传 `context.Context` | 逐一修正 |
+| `kernel/forgetting_drift.go` | `effectiveDriftCfg` 用 `< 0` 判断，零值不回落到缺省，导致 `Neutral=0` 把缺失轴打成地板 | 改为 `<= 0` 回落，并把"0 视为未设置"的契约写进注释 |
+| `kernel/edge_persist.go` | 时间取本机时区，跨时区机器上同一边序列化成不同字面量（确定性破坏） | 序列化与反序列化两端统一规整 UTC |
+| `kernel/edge_persist_test.go` | DDL 断言用 `Contains("ALTER")`，把注释里的"禁止 ALTER"字样误判为改了既有表 | 先剥离注释行再判定，并扩展禁用词清单 |
+| `kernel/edge_persist_test.go` | 输出稳定性用例用递增时钟，两个 store 的时间戳天然不同，用例必然失败 | 改用固定时钟 |
+| `scripts/gate.sh` | BSD sed 的 BRE 不支持 `\+`，版本号抽取为空，把 go1.25 误判为不达标（假 FAIL） | 改用 awk 做主/次版本比较 |
+| `scripts/gate.sh` | [7] 红线抽查在无 git 的工作树上永远跳过（形同虚设） | 支持目录基线，逐文件 `diff -q` |
+
+另有一项**测试断言自相矛盾**：两处测试对 `Neutral = 0` 的要求相反——一处要求回落到缺省 1.00，另一处要求按地板 0.15 衰减。按保守契约取前者：参考系缺失不得惩罚记忆，否则历史无参考系的存量记忆会被集体打到地板，直接威胁 M1。
+
+### D.6 未闭环事项（留 R15）
+
+- §5.4.1 的 PostgreSQL 真机往返未做：本仓库 `kernel/backend_sqlite.go` 是内存骨架、无真实 `database/sql` 驱动，本轮只交付 JSON 落盘的真实往返；DDL 文本已就位，真库落表留 R15。
+- 门禁 [1b] 报出的 4 个既有文件待 gofmt（`eval/packages/cmd/package-family/main.go`、`eval/e2e/pg/pg_e2e_test.go`、`eval/e2e/pg/pg_bench_test.go`、`eval/e2e/packages/package_e2e_test.go`），属既有噪音，本轮不顺手改，避免扩大 diff。
 | 配套交付物 | `docs/光明记忆应用包生态与差异化定位_v1.0.md`（包生态设计 + 竞品对照 + M1–M10 口径） |
