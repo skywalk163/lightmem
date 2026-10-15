@@ -1,0 +1,2707 @@
+{
+  "config": {
+    "embedder": "tfidf",
+    "embedder_name": "char-ngram-tfidf-trigram",
+    "holdout": "./eval/holdout/locomo_v2/holdout_locomo_v2.jsonl",
+    "now_fixed": "2026-10-15",
+    "topk": 5,
+    "weights": "eval/weights/rank_weights_en_r5.json"
+  },
+  "corpus_note": "真实语料 holdout.jsonl（正式判定）",
+  "data_plane_compression": {
+    "tokens_before": 15391,
+    "tokens_after": 4799,
+    "saved": 10592,
+    "reduction_rate": 0.6881943993242804
+  },
+  "details": [
+    {
+      "id": "lc2-conv-47-D26_5-qa136",
+      "bucket": "open-domain",
+      "expected": "excited and inspired",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-43-D27_2-qa64",
+      "bucket": "temporal",
+      "expected": "December, 2023",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-48-D21_1-qa60",
+      "bucket": "temporal",
+      "expected": "a week before 24 August,2023",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-42-D7_1-qa15",
+      "bucket": "temporal",
+      "expected": "The week before 15April, 2022.",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-42-D28_13-qa190",
+      "bucket": "open-domain",
+      "expected": "Gaming videos",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-26-D4_13-qa96",
+      "bucket": "open-domain",
+      "expected": "working with trans people, helping them accept themselves and supporting their mental health",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-48-D11_4-qa125",
+      "bucket": "open-domain",
+      "expected": "candle",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-43-D29_12-qa177",
+      "bucket": "open-domain",
+      "expected": "Barcelona",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-47-D25_7-qa132",
+      "bucket": "open-domain",
+      "expected": "making his first mobile game",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-48-D13_15-qa47",
+      "bucket": "temporal",
+      "expected": "on 5 June, 2023",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-41-D32_14-qa64",
+      "bucket": "multi-hop",
+      "expected": "Shelter coordinator, Counselor",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-42-D12_13-qa94",
+      "bucket": "open-domain",
+      "expected": "loss, identity, and connection",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-26-D19_2-qa80",
+      "bucket": "temporal",
+      "expected": "21 October 2023",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-47-D10_2-qa21",
+      "bucket": "temporal",
+      "expected": "May 7, 2022",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-47-D5_4-qa51",
+      "bucket": "single-hop",
+      "expected": "AC Valhalla, Witcher 3, FIFA 23, Dungeons of the Dragons, futuristic dystopian game",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-50-D30_9-qa153",
+      "bucket": "open-domain",
+      "expected": "Nature - sunsets, beaches, waves",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-48-D3_1-qa102",
+      "bucket": "open-domain",
+      "expected": "Robotics project",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-41-D5_5-qa8",
+      "bucket": "multi-hop",
+      "expected": "Middle-class or wealthy",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-47-D23_1-qa47",
+      "bucket": "temporal",
+      "expected": "September 3, 2022",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-49-D3_1-qa13",
+      "bucket": "temporal",
+      "expected": "first week of June 2023",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-26-D18_9-qa149",
+      "bucket": "open-domain",
+      "expected": "Strength and motivation",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-26-D4_15-qa14",
+      "bucket": "multi-hop",
+      "expected": "Likely no",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-44-D27_10-qa119",
+      "bucket": "open-domain",
+      "expected": "photography of a basket full of stuffed animals",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-42-D29_6-qa87",
+      "bucket": "multi-hop",
+      "expected": "Florida",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-48-D1_8-qa7",
+      "bucket": "temporal",
+      "expected": "France",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-47-D29_10-qa144",
+      "bucket": "open-domain",
+      "expected": "In an apartment not far from McGee's bar",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-44-D27_2-qa117",
+      "bucket": "open-domain",
+      "expected": "Joined a dog owners group",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-50-D11_6-qa89",
+      "bucket": "open-domain",
+      "expected": "experimenting with different genres",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-48-D19_13-qa59",
+      "bucket": "open-domain",
+      "expected": "play detective games together, spend time outdoors and explore nature",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-26-D2_2-qa82",
+      "bucket": "open-domain",
+      "expected": "mental health",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-47-D29_1-qa141",
+      "bucket": "open-domain",
+      "expected": "Fortnite, Overwatch, Apex Legends",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-26-D8_6; D9_17-qa37",
+      "bucket": "single-hop",
+      "expected": "sunset",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-42-D21_10-qa156",
+      "bucket": "open-domain",
+      "expected": "dairy-free chocolate mousse",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-41-D31_10-qa148",
+      "bucket": "open-domain",
+      "expected": "doing great - learning commands and house training",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-50-D24_20-qa128",
+      "bucket": "open-domain",
+      "expected": "ramen",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-50-D23_16-qa50",
+      "bucket": "temporal",
+      "expected": "first week of October 2023",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-43-D18_10-qa136",
+      "bucket": "open-domain",
+      "expected": "The doctor said it's not too serious",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-47-D31_4-qa148",
+      "bucket": "open-domain",
+      "expected": "An online board game",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-44-D5_5-qa56",
+      "bucket": "single-hop",
+      "expected": "No",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-41-D13_7-qa92",
+      "bucket": "open-domain",
+      "expected": "Three times a week",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-48-D28_7-qa180",
+      "bucket": "open-domain",
+      "expected": "reminisced and looked through photos",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-47-D8_11-qa14",
+      "bucket": "temporal",
+      "expected": "April 26, 2022",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-41-D12_5-qa90",
+      "bucket": "open-domain",
+      "expected": "education reform and infrastructure development",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-48-D6_8-qa31",
+      "bucket": "temporal",
+      "expected": "in summer 2022",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-50-D25_6-qa53",
+      "bucket": "single-hop",
+      "expected": "friends and team",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-43-D10_9-qa31",
+      "bucket": "temporal",
+      "expected": "September, 2023",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-48-D15_1-qa137",
+      "bucket": "open-domain",
+      "expected": "running group",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-49-D2_6-qa12",
+      "bucket": "temporal",
+      "expected": "A few days before May 24, 2023.",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-43-D17_3-qa133",
+      "bucket": "open-domain",
+      "expected": "Spectacular",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-50-D6_8-qa82",
+      "bucket": "open-domain",
+      "expected": "a car shop",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-49-D2_6-qa43",
+      "bucket": "multi-hop",
+      "expected": "every three months",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-44-D3_17-qa63",
+      "bucket": "open-domain",
+      "expected": "croissants, muffins, and tarts",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-42-D14_22-qa125",
+      "bucket": "open-domain",
+      "expected": "Tournament friends, old friends, teammates",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-49-D3_1-qa54",
+      "bucket": "single-hop",
+      "expected": "heart palpitations, twisted ankle, twisted ankle",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-43-D6_15-qa1",
+      "bucket": "single-hop",
+      "expected": "get endorsements, build his brand, do charity work",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-48-D11_8-qa126",
+      "bucket": "open-domain",
+      "expected": "instrumental tracks with mellow melodies and rhythms",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-49-D24_17-qa150",
+      "bucket": "open-domain",
+      "expected": "swimming, yoga, walking",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-48-D18_8-qa56",
+      "bucket": "temporal",
+      "expected": "week before 16 August, 2023",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-41-D10_10-qa84",
+      "bucket": "open-domain",
+      "expected": "a 5K charity run",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-41-D30_1-qa62",
+      "bucket": "single-hop",
+      "expected": "two",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-44-D13_1-qa81",
+      "bucket": "open-domain",
+      "expected": "volunteered at a pet shelter",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-43-D12_20-qa43",
+      "bucket": "single-hop",
+      "expected": "His heart, determination, skills, and leadership.",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-49-D17_18-qa128",
+      "bucket": "open-domain",
+      "expected": "A happy place",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-47-D31_2-qa66",
+      "bucket": "temporal",
+      "expected": "November 5-6, 2022",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-50-D17_1-qa106",
+      "bucket": "open-domain",
+      "expected": "San Francisco",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-26-D6_10-qa103",
+      "bucket": "open-domain",
+      "expected": "\"Charlotte's Web\"",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-42-D2_12-qa6",
+      "bucket": "temporal",
+      "expected": "three years",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-26-D15_11-qa63",
+      "bucket": "temporal",
+      "expected": "September 2023",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-26-D5_4-qa15",
+      "bucket": "single-hop",
+      "expected": "pottery, camping, painting, swimming",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-50-D12_11-qa21",
+      "bucket": "multi-hop",
+      "expected": "Yes; he want's to grow his fanbase",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-26-D14_23-qa128",
+      "bucket": "open-domain",
+      "expected": "a rainbow sidewalk",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-48-D4_14-qa24",
+      "bucket": "single-hop",
+      "expected": "Warrior II, Dancer Pose (Natarajasana), Tree pose",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-26-D2_1-qa5",
+      "bucket": "temporal",
+      "expected": "The sunday before 25 May 2023",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-43-D24_16-qa155",
+      "bucket": "open-domain",
+      "expected": "It was a huge success.",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-50-D21_3-qa45",
+      "bucket": "single-hop",
+      "expected": "Working on cars",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-49-D8_12-qa40",
+      "bucket": "temporal",
+      "expected": "Few days before 19 August, 2023.",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-49-D3_10-qa19",
+      "bucket": "multi-hop",
+      "expected": "Evan and Sam would likely advise embracing small, consistent changes​​, finding stress-relieving activities like hiking​​, painting, and road trips​​, and the importance of friendship and support in navigating challenges​​.",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-42-D29_6-qa86",
+      "bucket": "temporal",
+      "expected": "10 November, 2022",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-49-D3_6-qa91",
+      "bucket": "open-domain",
+      "expected": "flavored seltzer water and dark chocolate with high cocoa content",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-48-D7_9-qa114",
+      "bucket": "open-domain",
+      "expected": "In an engineering class in college",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-30-D1_8-qa40",
+      "bucket": "open-domain",
+      "expected": "Contemporary",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-30-D12_6-qa21",
+      "bucket": "temporal",
+      "expected": "May, 2023",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-42-D21_4-qa39",
+      "bucket": "temporal",
+      "expected": "The Monday before 14September, 2022",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-41-D26_4-qa48",
+      "bucket": "temporal",
+      "expected": "The sunday before 3` July 2023",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-50-D16_20-qa104",
+      "bucket": "open-domain",
+      "expected": "unique look",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-48-D1_8-qa5",
+      "bucket": "multi-hop",
+      "expected": "In France",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-42-D1_13-qa96",
+      "bucket": "open-domain",
+      "expected": "action and sci-fi",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-42-D25_8-qa177",
+      "bucket": "open-domain",
+      "expected": "visuals to help bring the characters alive in her head so she can write better",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-30-D3_4-qa48",
+      "bucket": "open-domain",
+      "expected": "the space, furniture, and decor",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-47-D9_18-qa86",
+      "bucket": "open-domain",
+      "expected": "Pepperoni",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-43-D10_4-qa103",
+      "bucket": "open-domain",
+      "expected": "tasty soup with sage",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-43-D1_16-qa74",
+      "bucket": "open-domain",
+      "expected": "characters, spells, magical creatures",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-42-D24_3-qa174",
+      "bucket": "open-domain",
+      "expected": "his turtles",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-30-D15_5-qa30",
+      "bucket": "temporal",
+      "expected": "20 June, 2023",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-41-D23_14-qa123",
+      "bucket": "open-domain",
+      "expected": "have dinner with friends from the gym",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-41-D30_1-qa143",
+      "bucket": "open-domain",
+      "expected": "Coco",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-43-D7_1-qa91",
+      "bucket": "open-domain",
+      "expected": "Aug 15th",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-43-D27_24-qa167",
+      "bucket": "open-domain",
+      "expected": "Aragorn",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-49-D2_6-qa39",
+      "bucket": "temporal",
+      "expected": "three months",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-48-D1_2-qa100",
+      "bucket": "open-domain",
+      "expected": "an electrical engineering project",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-49-D20_17-qa137",
+      "bucket": "open-domain",
+      "expected": "a close friend",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-41-D19_12-qa113",
+      "bucket": "open-domain",
+      "expected": "self-doubt",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-50-D21_10-qa117",
+      "bucket": "open-domain",
+      "expected": "Transforming something old and beat-up into something beautiful",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-44-D19_10-qa94",
+      "bucket": "open-domain",
+      "expected": "Multiple times a day",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-50-D14_1-qa31",
+      "bucket": "temporal",
+      "expected": "San Francisco",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-50-D28_1-qa67",
+      "bucket": "temporal",
+      "expected": "Tokyo",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-26-D10_3-qa39",
+      "bucket": "single-hop",
+      "expected": "Joining activist group, going to pride parades, participating in an art show, mentoring program",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-49-D22_12-qa145",
+      "bucket": "open-domain",
+      "expected": "the recipes for cookies",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-49-D5_1-qa22",
+      "bucket": "temporal",
+      "expected": "week before August 7, 2023.",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-41-D29_10-qa141",
+      "bucket": "open-domain",
+      "expected": "a local organization",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-43-D6_17-qa90",
+      "bucket": "open-domain",
+      "expected": "A local organization helping disadvantaged kids with sports and school",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-49-D24_18-qa151",
+      "bucket": "open-domain",
+      "expected": "The Godfather",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-49-D21_10-qa141",
+      "bucket": "open-domain",
+      "expected": "Keep trying new things",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-49-D11_15-qa56",
+      "bucket": "single-hop",
+      "expected": "His new phone malfunctioning, particularly with the navigation app.",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-42-D28_18-qa191",
+      "bucket": "open-domain",
+      "expected": "Watch other people's videos to understand what the audience likes",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-47-D25_13-qa134",
+      "bucket": "open-domain",
+      "expected": "watch tutorials and keep up with developer forums",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-49-D13_14-qa57",
+      "bucket": "multi-hop",
+      "expected": "California",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-26-D6_4-qa20",
+      "bucket": "temporal",
+      "expected": "5 July 2023",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-42-D5_6-qa107",
+      "bucket": "open-domain",
+      "expected": "Their slow pace and calming nature",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-44-D6_4-qa71",
+      "bucket": "open-domain",
+      "expected": "Friendly and playful",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-49-D8_12-qa105",
+      "bucket": "open-domain",
+      "expected": "watercolor painting classes",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-43-D7_6-qa94",
+      "bucket": "open-domain",
+      "expected": "to learn more about literature and create a stronger bond to it",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-43-D1_11-qa73",
+      "bucket": "open-domain",
+      "expected": "fitting into the new team's style of play",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-47-D1_14-qa68",
+      "bucket": "open-domain",
+      "expected": "An app for dog walking and pet care",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-26-D14_5-qa55",
+      "bucket": "single-hop",
+      "expected": "Sunsets",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-26-D6_11-qa21",
+      "bucket": "temporal",
+      "expected": "The week before 6 July 2023",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-49-D21_16-qa140",
+      "bucket": "open-domain",
+      "expected": "a sense of joy and freedom",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-44-D23_2-qa106",
+      "bucket": "open-domain",
+      "expected": "Goodies",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-48-D29_7-qa185",
+      "bucket": "open-domain",
+      "expected": "Cooking",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-42-D25_1-qa54",
+      "bucket": "temporal",
+      "expected": "The Sunday before 25October, 2022.",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-42-D4_3-qa105",
+      "bucket": "open-domain",
+      "expected": "chocolate and vanilla swirl",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-42-D4_16-qa106",
+      "bucket": "open-domain",
+      "expected": "personal experiences and her own journey of self-discovery",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-50-D4_1-qa75",
+      "bucket": "open-domain",
+      "expected": "Car maintenance shop",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-47-D6_1-qa53",
+      "bucket": "temporal",
+      "expected": "six months",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-44-D28_6-qa57",
+      "bucket": "temporal",
+      "expected": "few days before November 2023",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-30-D1_25-qa43",
+      "bucket": "open-domain",
+      "expected": "They are performing at the festival",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-47-D21_12-qa44",
+      "bucket": "multi-hop",
+      "expected": "Possibly because he likes to drink beer on his days off.",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-41-D23_1-qa122",
+      "bucket": "open-domain",
+      "expected": "Flood in John's old area",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-30-D3_6-qa51",
+      "bucket": "open-domain",
+      "expected": "personal style and customer comfort",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-44-D13_8-qa82",
+      "bucket": "open-domain",
+      "expected": "Max",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-26-D16_15-qa65",
+      "bucket": "single-hop",
+      "expected": "Changes to her body, losing unsupportive friends",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-49-D16_16-qa65",
+      "bucket": "multi-hop",
+      "expected": "beach",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-43-D8_16-qa97",
+      "bucket": "open-domain",
+      "expected": "Watching it with his family",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-47-D8_14-qa18",
+      "bucket": "single-hop",
+      "expected": "The Name of the Wind, Stormlight Archive, Kingkiller Chronicles, Expanse",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-48-D1_15-qa8",
+      "bucket": "single-hop",
+      "expected": "yoga, old photos, the roses and dahlias in a flower garden, nature",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-47-D13_7-qa24",
+      "bucket": "single-hop",
+      "expected": "football simulator, virtual world inspired by Witcher 3",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-47-D25_9-qa133",
+      "bucket": "open-domain",
+      "expected": "2D adventure",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-47-D23_15-qa122",
+      "bucket": "open-domain",
+      "expected": "$10",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-48-D22_27-qa95",
+      "bucket": "open-domain",
+      "expected": "Max is 8 years old and Luna is 5 years old",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-42-D17_1-qa31",
+      "bucket": "temporal",
+      "expected": "The Friday before 10July, 2022.",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-42-D3_6-qa101",
+      "bucket": "open-domain",
+      "expected": "Super good, rich and creamy",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-47-D6_12-qa13",
+      "bucket": "temporal",
+      "expected": "In 2021",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-49-D18_6-qa68",
+      "bucket": "temporal",
+      "expected": "Attending a Weight Watchers meeting",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-48-D19_18-qa152",
+      "bucket": "open-domain",
+      "expected": "It holds special memories of conversations with her mom",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-48-D19_8-qa58",
+      "bucket": "open-domain",
+      "expected": "Zelda BOTW for Switch , Animal Crossing: New Horizons, Overcooked 2",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-44-D25_8-qa113",
+      "bucket": "open-domain",
+      "expected": "California or salmon roll",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-41-D11_3-qa20",
+      "bucket": "temporal",
+      "expected": "2022",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-42-D10_1-qa17",
+      "bucket": "temporal",
+      "expected": "Lord of the Rings",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-48-D22_27-qa63",
+      "bucket": "open-domain",
+      "expected": "Max is 8 years old and Luna is 5 years old",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-43-D6_13-qa29",
+      "bucket": "single-hop",
+      "expected": "Middle school, high school, and college and he was with his high school team for 4 years.",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-41-D29_4-qa140",
+      "bucket": "open-domain",
+      "expected": "veterans and their families",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-49-D7_7-qa103",
+      "bucket": "open-domain",
+      "expected": "recipes with more vegetables",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-26-D8_4-qa110",
+      "bucket": "open-domain",
+      "expected": "a cup with a dog face on it",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-49-D24_19-qa152",
+      "bucket": "open-domain",
+      "expected": "Yoga",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-26-D13_11-qa54",
+      "bucket": "temporal",
+      "expected": "The week before 23 August 2023",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-43-D15_3-qa41",
+      "bucket": "single-hop",
+      "expected": "Fantasy stories with plot twists",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-43-D11_10-qa107",
+      "bucket": "open-domain",
+      "expected": "Edinburgh, Scotland",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-41-D15_13-qa100",
+      "bucket": "open-domain",
+      "expected": "heartwarming",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-41-D2_24-qa70",
+      "bucket": "open-domain",
+      "expected": "pizza",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-48-D28_15-qa182",
+      "bucket": "open-domain",
+      "expected": "a peaceful atmosphere",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-44-D22_1-qa100",
+      "bucket": "open-domain",
+      "expected": "Knee injury",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-50-D26_1-qa55",
+      "bucket": "temporal",
+      "expected": "October 24, 2023",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-42-D21_13-qa158",
+      "bucket": "open-domain",
+      "expected": "chocolate cake with raspberries",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-50-D12_2-qa20",
+      "bucket": "single-hop",
+      "expected": "His Dad",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-42-D15_1-qa127",
+      "bucket": "open-domain",
+      "expected": "screenplay bits",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-43-D19_9-qa139",
+      "bucket": "open-domain",
+      "expected": "Love for writing and reading",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-41-D19_8-qa112",
+      "bucket": "open-domain",
+      "expected": "assistant manager",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-26-D7_1-qa25",
+      "bucket": "temporal",
+      "expected": "10 July 2023",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-50-D14_11-qa61",
+      "bucket": "temporal",
+      "expected": "nearly two months",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-47-D29_1-qa142",
+      "bucket": "open-domain",
+      "expected": "To raise money for a children's hospital",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-44-D19_4-qa93",
+      "bucket": "open-domain",
+      "expected": "Petted, hugged, spoke calmly and slowly walked the dog",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-48-D21_6-qa83",
+      "bucket": "single-hop",
+      "expected": "present work at virtual conference, attend workshops  and intern at firms",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-42-D25_21-qa70",
+      "bucket": "single-hop",
+      "expected": "takes them onwalks, holds them,feeds themstrawberries, givesthem baths.",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-48-D2_13-qa13",
+      "bucket": "single-hop",
+      "expected": "sitting in a spot by the window in her Mom's house, sitting by the beach, Bali, forest trail in a nearby park",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-50-D16_6-qa27",
+      "bucket": "temporal",
+      "expected": "Miami",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-44-D3_7-qa14",
+      "bucket": "single-hop",
+      "expected": "being in nature",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-50-D4_19-qa76",
+      "bucket": "open-domain",
+      "expected": "all kinds of cars, from regular maintenance to full restorations of classic cars",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-26-D4_15-qa99",
+      "bucket": "open-domain",
+      "expected": "her own journey and the support she received, and how counseling improved her life",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-44-D20_25-qa96",
+      "bucket": "open-domain",
+      "expected": "about animals, plants, and ecosystems and how they work together",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-50-D3_9-qa4",
+      "bucket": "multi-hop",
+      "expected": "United States",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-30-D7_5-qa57",
+      "bucket": "open-domain",
+      "expected": "build relationships with customers, create a strong brand image, stay positive",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-48-D22_25-qa163",
+      "bucket": "open-domain",
+      "expected": "From the shelter",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-43-D14_3-qa62",
+      "bucket": "single-hop",
+      "expected": "gives seminars, mentors younger players.",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-26-D13_6-qa125",
+      "bucket": "open-domain",
+      "expected": "In Melanie's slipper",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-26-D7_21-qa107",
+      "bucket": "open-domain",
+      "expected": "To de-stress and clear her mind",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-50-D26_6-qa137",
+      "bucket": "open-domain",
+      "expected": "at an early age",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-44-D12_3-qa27",
+      "bucket": "single-hop",
+      "expected": "Stressful",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-49-D20_3-qa74",
+      "bucket": "temporal",
+      "expected": "Thursday before December 17, 2023.",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-44-D11_7-qa17",
+      "bucket": "single-hop",
+      "expected": "three times",
+      "m1_hit": true,
+      "first_rank": 1
+    },
+    {
+      "id": "lc2-conv-43-D28_1-qa69",
+      "bucket": "temporal",
+      "expected": "February, 2024",
+      "m1_hit": true,
+      "first_rank": 1
+    }
+  ],
+  "fp_audit": {
+    "v4_hits": 200,
+    "vetoed": 0,
+    "residual_fp": 200,
+    "rows": [
+      {
+        "id": "lc2-conv-47-D26_5-qa136",
+        "expected": "excited and inspired",
+        "got_fact": "What does John feel about starting the journey as a programming mentor for game developers? =\u003e excited and inspired",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-43-D27_2-qa64",
+        "expected": "December, 2023",
+        "got_fact": "Which month was John in Italy? =\u003e December, 2023",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-48-D21_1-qa60",
+        "expected": "a week before 24 August,2023",
+        "got_fact": "When did Deborah go to a yoga retreat near her mom's place? =\u003e a week before 24 August,2023",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-42-D7_1-qa15",
+        "expected": "The week before 15April, 2022.",
+        "got_fact": "When did Nate get purple hair? =\u003e The week before 15April, 2022.",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-42-D28_13-qa190",
+        "expected": "Gaming videos",
+        "got_fact": "What new content is Nate creating for YouTube? =\u003e Gaming videos",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-26-D4_13-qa96",
+        "expected": "working with trans people, helping them accept themselves and supporting their mental health",
+        "got_fact": "What kind of counseling and mental health services is Caroline interested in pursuing? =\u003e working with trans people, helping them accept themselves and supporting their mental health",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-48-D11_4-qa125",
+        "expected": "candle",
+        "got_fact": "What did Deborah buy to enhance her yoga practice besides the props? =\u003e candle",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-43-D29_12-qa177",
+        "expected": "Barcelona",
+        "got_fact": "Which city did John recommend to Tim in January 2024? =\u003e Barcelona",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-47-D25_7-qa132",
+        "expected": "making his first mobile game",
+        "got_fact": "What career milestone did John achieve recently in September 2022? =\u003e making his first mobile game",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-48-D13_15-qa47",
+        "expected": "on 5 June, 2023",
+        "got_fact": "When did Jolene do yoga at Talkeetna? =\u003e on 5 June, 2023",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-41-D32_14-qa64",
+        "expected": "Shelter coordinator, Counselor",
+        "got_fact": "What job might Maria pursue in the future? =\u003e Shelter coordinator, Counselor",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-42-D12_13-qa94",
+        "expected": "loss, identity, and connection",
+        "got_fact": "What is Joanna's third screenplay about? =\u003e loss, identity, and connection",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-26-D19_2-qa80",
+        "expected": "21 October 2023",
+        "got_fact": "When did Melanie buy the figurines? =\u003e 21 October 2023",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-47-D10_2-qa21",
+        "expected": "May 7, 2022",
+        "got_fact": "When did John first organize a charity tournament with his friends? =\u003e May 7, 2022",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-47-D5_4-qa51",
+        "expected": "AC Valhalla, Witcher 3, FIFA 23, Dungeons of the Dragons, futuristic dystopian game",
+        "got_fact": "Which new games did John start play during the course of the conversation with James? =\u003e AC Valhalla, Witcher 3, FIFA 23, Dungeons of the Dragons, futuristic dystopian game",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-50-D30_9-qa153",
+        "expected": "Nature - sunsets, beaches, waves",
+        "got_fact": "What type of photos does Dave like to capture with his new camera? =\u003e Nature - sunsets, beaches, waves",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-48-D3_1-qa102",
+        "expected": "Robotics project",
+        "got_fact": "What project was Jolene working on as of 1 February, 2023? =\u003e Robotics project",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-41-D5_5-qa8",
+        "expected": "Middle-class or wealthy",
+        "got_fact": "What might John's financial status be? =\u003e Middle-class or wealthy",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-47-D23_1-qa47",
+        "expected": "September 3, 2022",
+        "got_fact": "When did James ask Samantha to be his girlfriend? =\u003e September 3, 2022",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-49-D3_1-qa13",
+        "expected": "first week of June 2023",
+        "got_fact": "When did Evan have his sudden heart palpitation incident that really shocked him up? =\u003e first week of June 2023",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-26-D18_9-qa149",
+        "expected": "Strength and motivation",
+        "got_fact": "What do Melanie's family give her? =\u003e Strength and motivation",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-26-D4_15-qa14",
+        "expected": "Likely no",
+        "got_fact": "Would Caroline still want to pursue counseling as a career if she hadn't received support growing up? =\u003e Likely no",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-44-D27_10-qa119",
+        "expected": "photography of a basket full of stuffed animals",
+        "got_fact": "What did Audrey share to show ways to keep dogs active in the city? =\u003e photography of a basket full of stuffed animals",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-42-D29_6-qa87",
+        "expected": "Florida",
+        "got_fact": "What state did Nate visit? =\u003e Florida",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-48-D1_8-qa7",
+        "expected": "France",
+        "got_fact": "Which country were Jolene and her mother visiting in 2010? =\u003e France",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-47-D29_10-qa144",
+        "expected": "In an apartment not far from McGee's bar",
+        "got_fact": "Where did James and Samantha decide to live together on 31 October, 2022? =\u003e In an apartment not far from McGee's bar",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-44-D27_2-qa117",
+        "expected": "Joined a dog owners group",
+        "got_fact": "What did Audrey do in November 2023 to better take care of her dogs? =\u003e Joined a dog owners group",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-50-D11_6-qa89",
+        "expected": "experimenting with different genres",
+        "got_fact": "What kind of music has Calvin been creating lately? =\u003e experimenting with different genres",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-48-D19_13-qa59",
+        "expected": "play detective games together, spend time outdoors and explore nature",
+        "got_fact": "What do Deborah and her husband do together? =\u003e play detective games together, spend time outdoors and explore nature",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-26-D2_2-qa82",
+        "expected": "mental health",
+        "got_fact": "What did the charity race raise awareness for? =\u003e mental health",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-47-D29_1-qa141",
+        "expected": "Fortnite, Overwatch, Apex Legends",
+        "got_fact": "What games were played at the gaming tournament organized by John on 31 October, 2022? =\u003e Fortnite, Overwatch, Apex Legends",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-26-D8_6; D9_17-qa37",
+        "expected": "sunset",
+        "got_fact": "What did Melanie paint recently? =\u003e sunset",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-42-D21_10-qa156",
+        "expected": "dairy-free chocolate mousse",
+        "got_fact": "What is one of Nate's favorite dairy-free treats besides coconut milk ice cream? =\u003e dairy-free chocolate mousse",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-41-D31_10-qa148",
+        "expected": "doing great - learning commands and house training",
+        "got_fact": "How is Maria's new puppy adjusting to its new home? =\u003e doing great - learning commands and house training",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-50-D24_20-qa128",
+        "expected": "ramen",
+        "got_fact": "What dish does Dave recommend Calvin to try in Tokyo? =\u003e ramen",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-50-D23_16-qa50",
+        "expected": "first week of October 2023",
+        "got_fact": "When did Calvin buy his second Ferrari? =\u003e first week of October 2023",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-43-D18_10-qa136",
+        "expected": "The doctor said it's not too serious",
+        "got_fact": "What did Tim say about his injury on 16 November, 2023? =\u003e The doctor said it's not too serious",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-47-D31_4-qa148",
+        "expected": "An online board game",
+        "got_fact": "What project did John work on with a game developer by 7 November, 2022? =\u003e An online board game",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-44-D5_5-qa56",
+        "expected": "No",
+        "got_fact": "Has Andrew moved into a new apartment for his dogs? =\u003e No",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-41-D13_7-qa92",
+        "expected": "Three times a week",
+        "got_fact": "How often does John work out with his family? =\u003e Three times a week",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-48-D28_7-qa180",
+        "expected": "reminisced and looked through photos",
+        "got_fact": "What did Deborah do with their mom's old friends? =\u003e reminisced and looked through photos",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-47-D8_11-qa14",
+        "expected": "April 26, 2022",
+        "got_fact": "When did James buy himself a new adventure book? =\u003e April 26, 2022",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-41-D12_5-qa90",
+        "expected": "education reform and infrastructure development",
+        "got_fact": "What was the focus of John's recent research and writing on his blog? =\u003e education reform and infrastructure development",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-48-D6_8-qa31",
+        "expected": "in summer 2022",
+        "got_fact": "When was the last photo of Deborah and Karlie taken? =\u003e in summer 2022",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-50-D25_6-qa53",
+        "expected": "friends and team",
+        "got_fact": "Who supports Calvin in tough times? =\u003e friends and team",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-43-D10_9-qa31",
+        "expected": "September, 2023",
+        "got_fact": "What month did Tim plan on going to Universal Studios? =\u003e September, 2023",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-48-D15_1-qa137",
+        "expected": "running group",
+        "got_fact": "What group activity did Deborah start with Anna? =\u003e running group",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-49-D2_6-qa12",
+        "expected": "A few days before May 24, 2023.",
+        "got_fact": "When did Sam first go to the doctor and find out he had a weight problem? =\u003e A few days before May 24, 2023.",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-43-D17_3-qa133",
+        "expected": "Spectacular",
+        "got_fact": "How did John describe the views during their road trip out on the European coastline? =\u003e Spectacular",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-50-D6_8-qa82",
+        "expected": "a car shop",
+        "got_fact": "What did Dave open in May 2023? =\u003e a car shop",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-49-D2_6-qa43",
+        "expected": "every three months",
+        "got_fact": "How often does Sam get health checkups? =\u003e every three months",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-44-D3_17-qa63",
+        "expected": "croissants, muffins, and tarts",
+        "got_fact": "What kind of pastries did Andrew and his girlfriend have at the cafe? =\u003e croissants, muffins, and tarts",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-42-D14_22-qa125",
+        "expected": "Tournament friends, old friends, teammates",
+        "got_fact": "Who did Nate plan to invite to his gaming party in June 2022? =\u003e Tournament friends, old friends, teammates",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-49-D3_1-qa54",
+        "expected": "heart palpitations, twisted ankle, twisted ankle",
+        "got_fact": "What personal health incidents does Evan face in 2023? =\u003e heart palpitations, twisted ankle, twisted ankle",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-43-D6_15-qa1",
+        "expected": "get endorsements, build his brand, do charity work",
+        "got_fact": "What are John's goals for his career that are not related to his basketball skills? =\u003e get endorsements, build his brand, do charity work",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-48-D11_8-qa126",
+        "expected": "instrumental tracks with mellow melodies and rhythms",
+        "got_fact": "What type of music does Deborah find helpful during her yoga practice? =\u003e instrumental tracks with mellow melodies and rhythms",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-49-D24_17-qa150",
+        "expected": "swimming, yoga, walking",
+        "got_fact": "What suggestions did Evan give for low-impact exercises? =\u003e swimming, yoga, walking",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-48-D18_8-qa56",
+        "expected": "week before 16 August, 2023",
+        "got_fact": "When did Deborah lead a meditation session during the sunset? =\u003e week before 16 August, 2023",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-41-D10_10-qa84",
+        "expected": "a 5K charity run",
+        "got_fact": "What did Maria participate in last weekend before April 10, 2023? =\u003e a 5K charity run",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-41-D30_1-qa62",
+        "expected": "two",
+        "got_fact": "How many dogs has Maria adopted from the dog shelter she volunteers at? =\u003e two",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-44-D13_1-qa81",
+        "expected": "volunteered at a pet shelter",
+        "got_fact": "What did Andrew and his GF do on the Monday before July 24, 2023? =\u003e volunteered at a pet shelter",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-43-D12_20-qa43",
+        "expected": "His heart, determination, skills, and leadership.",
+        "got_fact": "What does John like about Lebron James? =\u003e His heart, determination, skills, and leadership.",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-49-D17_18-qa128",
+        "expected": "A happy place",
+        "got_fact": "How does Evan describe the island he grew up on? =\u003e A happy place",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-47-D31_2-qa66",
+        "expected": "November 5-6, 2022",
+        "got_fact": "When did John work with a game developer on a project? =\u003e November 5-6, 2022",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-50-D17_1-qa106",
+        "expected": "San Francisco",
+        "got_fact": "Where did Dave come back from with insights on car modification on 1st September 2023? =\u003e San Francisco",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-26-D6_10-qa103",
+        "expected": "\"Charlotte's Web\"",
+        "got_fact": "What was Melanie's favorite book from her childhood? =\u003e \"Charlotte's Web\"",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-42-D2_12-qa6",
+        "expected": "three years",
+        "got_fact": "How long has Nate had his first two turtles? =\u003e three years",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-26-D15_11-qa63",
+        "expected": "September 2023",
+        "got_fact": "When is Caroline's youth center putting on a talent show? =\u003e September 2023",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-26-D5_4-qa15",
+        "expected": "pottery, camping, painting, swimming",
+        "got_fact": "What activities does Melanie partake in? =\u003e pottery, camping, painting, swimming",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-50-D12_11-qa21",
+        "expected": "Yes; he want's to grow his fanbase",
+        "got_fact": "Does Calvin wish to become more popular? =\u003e Yes; he want's to grow his fanbase",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-26-D14_23-qa128",
+        "expected": "a rainbow sidewalk",
+        "got_fact": "What did Caroline find in her neighborhood during her walk? =\u003e a rainbow sidewalk",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-48-D4_14-qa24",
+        "expected": "Warrior II, Dancer Pose (Natarajasana), Tree pose",
+        "got_fact": "What new yoga poses did Deborah try? =\u003e Warrior II, Dancer Pose (Natarajasana), Tree pose",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-26-D2_1-qa5",
+        "expected": "The sunday before 25 May 2023",
+        "got_fact": "When did Melanie run a charity race? =\u003e The sunday before 25 May 2023",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-43-D24_16-qa155",
+        "expected": "It was a huge success.",
+        "got_fact": "How did John feel after being able to jog without pain? =\u003e It was a huge success.",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-50-D21_3-qa45",
+        "expected": "Working on cars",
+        "got_fact": "What shared activities do Dave and Calvin have? =\u003e Working on cars",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-49-D8_12-qa40",
+        "expected": "Few days before 19 August, 2023.",
+        "got_fact": "When did Evan start taking painting classes? =\u003e Few days before 19 August, 2023.",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-49-D3_10-qa19",
+        "expected": "Evan and Sam would likely advise embracing small, consistent changes​​, finding stress-relieving activities like hiking​​, painting, and road trips​​, and the importance of friendship and support in navigating challenges​​.",
+        "got_fact": "Considering their conversations and personal growth, what advice might Evan and Sam give to someone facing a major life transition or challenge? =\u003e Evan and Sam would likely advise embracing small, consistent changes​​, finding stress-relieving activities like hiking​​, painting, and road trips​​, and the importance of friendship and support in navigating challenges​​.",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-42-D29_6-qa86",
+        "expected": "10 November, 2022",
+        "got_fact": "When did Nate take his turtles to the beach? =\u003e 10 November, 2022",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-49-D3_6-qa91",
+        "expected": "flavored seltzer water and dark chocolate with high cocoa content",
+        "got_fact": "What did Sam agree to try instead of soda and candy? =\u003e flavored seltzer water and dark chocolate with high cocoa content",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-48-D7_9-qa114",
+        "expected": "In an engineering class in college",
+        "got_fact": "How did Jolene and her partner initially meet? =\u003e In an engineering class in college",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-30-D1_8-qa40",
+        "expected": "Contemporary",
+        "got_fact": "What is Jon's favorite style of dance? =\u003e Contemporary",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-30-D12_6-qa21",
+        "expected": "May, 2023",
+        "got_fact": "When did Jon start reading \"The Lean Startup\"? =\u003e May, 2023",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-42-D21_4-qa39",
+        "expected": "The Monday before 14September, 2022",
+        "got_fact": "When did Nate attend a cooking show? =\u003e The Monday before 14September, 2022",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-41-D26_4-qa48",
+        "expected": "The sunday before 3` July 2023",
+        "got_fact": "When did John have his first firefighter call-out? =\u003e The sunday before 3` July 2023",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-50-D16_20-qa104",
+        "expected": "unique look",
+        "got_fact": "Why did Calvin get his guitar customized with a shiny finish? =\u003e unique look",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-48-D1_8-qa5",
+        "expected": "In France",
+        "got_fact": "In what country did Jolene's mother buy her the pendant? =\u003e In France",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-42-D1_13-qa96",
+        "expected": "action and sci-fi",
+        "got_fact": "What type of movies does Nate enjoy watching the most? =\u003e action and sci-fi",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-42-D25_8-qa177",
+        "expected": "visuals to help bring the characters alive in her head so she can write better",
+        "got_fact": "What inspires Joanna to create drawings of her characters? =\u003e visuals to help bring the characters alive in her head so she can write better",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-30-D3_4-qa48",
+        "expected": "the space, furniture, and decor",
+        "got_fact": "What did Gina design for her store? =\u003e the space, furniture, and decor",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-47-D9_18-qa86",
+        "expected": "Pepperoni",
+        "got_fact": "What type of pizza is James' favorite? =\u003e Pepperoni",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-43-D10_4-qa103",
+        "expected": "tasty soup with sage",
+        "got_fact": "What kind of soup did John make recently? =\u003e tasty soup with sage",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-43-D1_16-qa74",
+        "expected": "characters, spells, magical creatures",
+        "got_fact": "What aspects of the Harry Potter universe will be discussed in John's fan project collaborations? =\u003e characters, spells, magical creatures",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-42-D24_3-qa174",
+        "expected": "his turtles",
+        "got_fact": "What does Nate rely on for cheer and joy? =\u003e his turtles",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-30-D15_5-qa30",
+        "expected": "20 June, 2023",
+        "got_fact": "When Jon is planning to open his dance studio? =\u003e 20 June, 2023",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-41-D23_14-qa123",
+        "expected": "have dinner with friends from the gym",
+        "got_fact": "What did Maria plan to do later on the evening of 7 July, 2023? =\u003e have dinner with friends from the gym",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-41-D30_1-qa143",
+        "expected": "Coco",
+        "got_fact": "What is the name of Maria's puppy she got two weeks before August 11, 2023? =\u003e Coco",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-43-D7_1-qa91",
+        "expected": "Aug 15th",
+        "got_fact": "When did John meet back up with his teammates after his trip in August 2023? =\u003e Aug 15th",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-43-D27_24-qa167",
+        "expected": "Aragorn",
+        "got_fact": "According to John, who is his favorite character from Lord of the Rings? =\u003e Aragorn",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-49-D2_6-qa39",
+        "expected": "three months",
+        "got_fact": "How many months lapsed between Sam's first and second doctor's appointment? =\u003e three months",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-48-D1_2-qa100",
+        "expected": "an electrical engineering project",
+        "got_fact": "What project did Jolene finish last week before 23 January, 2023? =\u003e an electrical engineering project",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-49-D20_17-qa137",
+        "expected": "a close friend",
+        "got_fact": "Who helped Evan get the painting published in the exhibition? =\u003e a close friend",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-41-D19_12-qa113",
+        "expected": "self-doubt",
+        "got_fact": "What was one of the biggest challenges John faced in his journey to becoming assistant manager? =\u003e self-doubt",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-50-D21_10-qa117",
+        "expected": "Transforming something old and beat-up into something beautiful",
+        "got_fact": "What does Dave find satisfying about restoring old cars? =\u003e Transforming something old and beat-up into something beautiful",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-44-D19_10-qa94",
+        "expected": "Multiple times a day",
+        "got_fact": "How often does Audrey take her dogs for walks? =\u003e Multiple times a day",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-50-D14_1-qa31",
+        "expected": "San Francisco",
+        "got_fact": "Where was Dave in the last two weeks of August 2023? =\u003e San Francisco",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-50-D28_1-qa67",
+        "expected": "Tokyo",
+        "got_fact": "Where was Calvin located in the last week of October 2023? =\u003e Tokyo",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-26-D10_3-qa39",
+        "expected": "Joining activist group, going to pride parades, participating in an art show, mentoring program",
+        "got_fact": "In what ways is Caroline participating in the LGBTQ community? =\u003e Joining activist group, going to pride parades, participating in an art show, mentoring program",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-49-D22_12-qa145",
+        "expected": "the recipes for cookies",
+        "got_fact": "What did Evan offer to share with Sam after talking about healthy snacks? =\u003e the recipes for cookies",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-49-D5_1-qa22",
+        "expected": "week before August 7, 2023.",
+        "got_fact": "When Evan did meet his future wife? =\u003e week before August 7, 2023.",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-41-D29_10-qa141",
+        "expected": "a local organization",
+        "got_fact": "Who did John work with to raise awareness and funds for victims of domestic abuse? =\u003e a local organization",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-43-D6_17-qa90",
+        "expected": "A local organization helping disadvantaged kids with sports and school",
+        "got_fact": "What organization is John teaming up with for his charity work? =\u003e A local organization helping disadvantaged kids with sports and school",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-49-D24_18-qa151",
+        "expected": "The Godfather",
+        "got_fact": "What movie did Sam watch that motivated him to keep up with his routine? =\u003e The Godfather",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-49-D21_10-qa141",
+        "expected": "Keep trying new things",
+        "got_fact": "What did Evan suggest Sam should keep doing to find his own version of love? =\u003e Keep trying new things",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-49-D11_15-qa56",
+        "expected": "His new phone malfunctioning, particularly with the navigation app.",
+        "got_fact": "What is Sam's persistent problem with his phone? =\u003e His new phone malfunctioning, particularly with the navigation app.",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-42-D28_18-qa191",
+        "expected": "Watch other people's videos to understand what the audience likes",
+        "got_fact": "What advice does Joanna give to Nate about making YouTube videos? =\u003e Watch other people's videos to understand what the audience likes",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-47-D25_13-qa134",
+        "expected": "watch tutorials and keep up with developer forums",
+        "got_fact": "What does John do to stay informed and constantly learn about game design? =\u003e watch tutorials and keep up with developer forums",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-49-D13_14-qa57",
+        "expected": "California",
+        "got_fact": "Which US state was Sam travelling in during October 2023? =\u003e California",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-26-D6_4-qa20",
+        "expected": "5 July 2023",
+        "got_fact": "When did Melanie go to the museum? =\u003e 5 July 2023",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-42-D5_6-qa107",
+        "expected": "Their slow pace and calming nature",
+        "got_fact": "Why does Nate like turtles as pets? =\u003e Their slow pace and calming nature",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-44-D6_4-qa71",
+        "expected": "Friendly and playful",
+        "got_fact": "How did Audrey describe she dog he met at the pet store? =\u003e Friendly and playful",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-49-D8_12-qa105",
+        "expected": "watercolor painting classes",
+        "got_fact": "What type of painting classes did Evan start taking in 2023? =\u003e watercolor painting classes",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-43-D7_6-qa94",
+        "expected": "to learn more about literature and create a stronger bond to it",
+        "got_fact": "What is the main intention behind Tim wanting to attend the book conference? =\u003e to learn more about literature and create a stronger bond to it",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-43-D1_11-qa73",
+        "expected": "fitting into the new team's style of play",
+        "got_fact": "What challenge did John encounter during pre-season training? =\u003e fitting into the new team's style of play",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-47-D1_14-qa68",
+        "expected": "An app for dog walking and pet care",
+        "got_fact": "What type of mobile application does James plan to build with John? =\u003e An app for dog walking and pet care",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-26-D14_5-qa55",
+        "expected": "Sunsets",
+        "got_fact": "What subject have Caroline and Melanie both painted? =\u003e Sunsets",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-26-D6_11-qa21",
+        "expected": "The week before 6 July 2023",
+        "got_fact": "When did Caroline have a picnic? =\u003e The week before 6 July 2023",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-49-D21_16-qa140",
+        "expected": "a sense of joy and freedom",
+        "got_fact": "How did Evan feel when he painted the piece with the bird flying over it? =\u003e a sense of joy and freedom",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-44-D23_2-qa106",
+        "expected": "Goodies",
+        "got_fact": "What did Audrey make to thank her neighbors? =\u003e Goodies",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-48-D29_7-qa185",
+        "expected": "Cooking",
+        "got_fact": "What was Deborah's mom passionate about? =\u003e Cooking",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-42-D25_1-qa54",
+        "expected": "The Sunday before 25October, 2022.",
+        "got_fact": "When was Joanna's second movie script shown on the big screens? =\u003e The Sunday before 25October, 2022.",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-42-D4_3-qa105",
+        "expected": "chocolate and vanilla swirl",
+        "got_fact": "What flavor of ice cream did Nate make for his friend on 25 February, 2022? =\u003e chocolate and vanilla swirl",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-42-D4_16-qa106",
+        "expected": "personal experiences and her own journey of self-discovery",
+        "got_fact": "What inspired Joanna's new screenplay on 25 February, 2022? =\u003e personal experiences and her own journey of self-discovery",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-50-D4_1-qa75",
+        "expected": "Car maintenance shop",
+        "got_fact": "What is Dave's new business venture as of 1 May, 2023? =\u003e Car maintenance shop",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-47-D6_1-qa53",
+        "expected": "six months",
+        "got_fact": "How long did it take for James to complete his Witcher-inspired game? =\u003e six months",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-44-D28_6-qa57",
+        "expected": "few days before November 2023",
+        "got_fact": "When did Andrew adopt Scout? =\u003e few days before November 2023",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-30-D1_25-qa43",
+        "expected": "They are performing at the festival",
+        "got_fact": "What do the dancers in the photo represent? =\u003e They are performing at the festival",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-47-D21_12-qa44",
+        "expected": "Possibly because he likes to drink beer on his days off.",
+        "got_fact": "Why didn't John want to go to Starbucks? =\u003e Possibly because he likes to drink beer on his days off.",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-41-D23_1-qa122",
+        "expected": "Flood in John's old area",
+        "got_fact": "What motivated Maria and John to discuss potential solutions for their community on 7 July, 2023? =\u003e Flood in John's old area",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-30-D3_6-qa51",
+        "expected": "personal style and customer comfort",
+        "got_fact": "What made Gina choose the furniture and decor for her store? =\u003e personal style and customer comfort",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-44-D13_8-qa82",
+        "expected": "Max",
+        "got_fact": "What is the name of Audrey's childhood dog? =\u003e Max",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-26-D16_15-qa65",
+        "expected": "Changes to her body, losing unsupportive friends",
+        "got_fact": "What are some changes Caroline has faced during her transition journey? =\u003e Changes to her body, losing unsupportive friends",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-49-D16_16-qa65",
+        "expected": "beach",
+        "got_fact": "Does Evan live close to a beach or mountains? =\u003e beach",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-43-D8_16-qa97",
+        "expected": "Watching it with his family",
+        "got_fact": "What special memory does \"Harry Potter and the Philosopher's Stone\" bring to Tim? =\u003e Watching it with his family",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-47-D8_14-qa18",
+        "expected": "The Name of the Wind, Stormlight Archive, Kingkiller Chronicles, Expanse",
+        "got_fact": "Which books has John recommended to James? =\u003e The Name of the Wind, Stormlight Archive, Kingkiller Chronicles, Expanse",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-48-D1_15-qa8",
+        "expected": "yoga, old photos, the roses and dahlias in a flower garden, nature",
+        "got_fact": "What helped Deborah find peace when grieving deaths of her loved ones? =\u003e yoga, old photos, the roses and dahlias in a flower garden, nature",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-47-D13_7-qa24",
+        "expected": "football simulator, virtual world inspired by Witcher 3",
+        "got_fact": "What kind of games has James tried to develop? =\u003e football simulator, virtual world inspired by Witcher 3",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-47-D25_9-qa133",
+        "expected": "2D adventure",
+        "got_fact": "What type of game is John's upcoming mobile game? =\u003e 2D adventure",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-47-D23_15-qa122",
+        "expected": "$10",
+        "got_fact": "How much does James pay per cooking class? =\u003e $10",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-48-D22_27-qa95",
+        "expected": "Max is 8 years old and Luna is 5 years old",
+        "got_fact": "How old are Deborah's cats? =\u003e Max is 8 years old and Luna is 5 years old",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-42-D17_1-qa31",
+        "expected": "The Friday before 10July, 2022.",
+        "got_fact": "When did Nate win his fourth video game tournament? =\u003e The Friday before 10July, 2022.",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-42-D3_6-qa101",
+        "expected": "Super good, rich and creamy",
+        "got_fact": "What did Nate think of the coconut milk ice cream he made? =\u003e Super good, rich and creamy",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-47-D6_12-qa13",
+        "expected": "In 2021",
+        "got_fact": "When did James visit Italy? =\u003e In 2021",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-49-D18_6-qa68",
+        "expected": "Attending a Weight Watchers meeting",
+        "got_fact": "What was Sam doing on December 4, 2023? =\u003e Attending a Weight Watchers meeting",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-48-D19_18-qa152",
+        "expected": "It holds special memories of conversations with her mom",
+        "got_fact": "What is special about the bench at the park near Deborah's house? =\u003e It holds special memories of conversations with her mom",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-48-D19_8-qa58",
+        "expected": "Zelda BOTW for Switch , Animal Crossing: New Horizons, Overcooked 2",
+        "got_fact": "What games does Jolene recommend for Deborah? =\u003e Zelda BOTW for Switch , Animal Crossing: New Horizons, Overcooked 2",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-44-D25_8-qa113",
+        "expected": "California or salmon roll",
+        "got_fact": "Which type of sushi did Audrey suggest trying first to someone new to sushi? =\u003e California or salmon roll",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-41-D11_3-qa20",
+        "expected": "2022",
+        "got_fact": "When did John take a road trip to the Pacific Northwest? =\u003e 2022",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-42-D10_1-qa17",
+        "expected": "Lord of the Rings",
+        "got_fact": "What movie did Joanna watch on 1 May, 2022? =\u003e Lord of the Rings",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-48-D22_27-qa63",
+        "expected": "Max is 8 years old and Luna is 5 years old",
+        "got_fact": "How old are Deborah's cats? =\u003e Max is 8 years old and Luna is 5 years old",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-43-D6_13-qa29",
+        "expected": "Middle school, high school, and college and he was with his high school team for 4 years.",
+        "got_fact": "What schools did John play basketball in and how many years was he with his team during high school? =\u003e Middle school, high school, and college and he was with his high school team for 4 years.",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-41-D29_4-qa140",
+        "expected": "veterans and their families",
+        "got_fact": "What cause did the 5K charity run organized by John support? =\u003e veterans and their families",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-49-D7_7-qa103",
+        "expected": "recipes with more vegetables",
+        "got_fact": "What kind of recipe did Evan request from Sam on 19 August, 2023? =\u003e recipes with more vegetables",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-26-D8_4-qa110",
+        "expected": "a cup with a dog face on it",
+        "got_fact": "What kind of pot did Mel and her kids make with clay? =\u003e a cup with a dog face on it",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-49-D24_19-qa152",
+        "expected": "Yoga",
+        "got_fact": "What activity helped Evan with stress and flexibility? =\u003e Yoga",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-26-D13_11-qa54",
+        "expected": "The week before 23 August 2023",
+        "got_fact": "When did Caroline draw a self-portrait? =\u003e The week before 23 August 2023",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-43-D15_3-qa41",
+        "expected": "Fantasy stories with plot twists",
+        "got_fact": "What kind of fiction stories does Tim write? =\u003e Fantasy stories with plot twists",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-43-D11_10-qa107",
+        "expected": "Edinburgh, Scotland",
+        "got_fact": "What city did Tim suggest to John for the team trip next month? =\u003e Edinburgh, Scotland",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-41-D15_13-qa100",
+        "expected": "heartwarming",
+        "got_fact": "What emotions did John feel during the small party with the veterans? =\u003e heartwarming",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-41-D2_24-qa70",
+        "expected": "pizza",
+        "got_fact": "What kind of meal did John and his family make together in the photo shared by John? =\u003e pizza",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-48-D28_15-qa182",
+        "expected": "a peaceful atmosphere",
+        "got_fact": "What does yoga on the beach provide for Deborah? =\u003e a peaceful atmosphere",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-44-D22_1-qa100",
+        "expected": "Knee injury",
+        "got_fact": "What was the reason Audrey couldn't walk her dogs for a period of time? =\u003e Knee injury",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-50-D26_1-qa55",
+        "expected": "October 24, 2023",
+        "got_fact": "When did Calvin visit some of the sights in Boston with a former high school friend? =\u003e October 24, 2023",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-42-D21_13-qa158",
+        "expected": "chocolate cake with raspberries",
+        "got_fact": "What kind of cake did Joanna share a photo of that she likes making for birthdays and special days? =\u003e chocolate cake with raspberries",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-50-D12_2-qa20",
+        "expected": "His Dad",
+        "got_fact": "Who inspired Dave's passion for car engineering? =\u003e His Dad",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-42-D15_1-qa127",
+        "expected": "screenplay bits",
+        "got_fact": "What did Joanna write yesterday that appeared on the big screen? =\u003e screenplay bits",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-43-D19_9-qa139",
+        "expected": "Love for writing and reading",
+        "got_fact": "What motivated Tim to keep pushing himself to get better in writing and reading? =\u003e Love for writing and reading",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-41-D19_8-qa112",
+        "expected": "assistant manager",
+        "got_fact": "What did John recently get promoted to? =\u003e assistant manager",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-26-D7_1-qa25",
+        "expected": "10 July 2023",
+        "got_fact": "When did Caroline go to the LGBTQ conference? =\u003e 10 July 2023",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-50-D14_11-qa61",
+        "expected": "nearly two months",
+        "got_fact": "How long did Dave's work on the Ford Mustang take? =\u003e nearly two months",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-47-D29_1-qa142",
+        "expected": "To raise money for a children's hospital",
+        "got_fact": "What was the purpose of the gaming tournament organized by John on 31 October, 2022? =\u003e To raise money for a children's hospital",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-44-D19_4-qa93",
+        "expected": "Petted, hugged, spoke calmly and slowly walked the dog",
+        "got_fact": "How did Audrey calm down her dog after the leash incident? =\u003e Petted, hugged, spoke calmly and slowly walked the dog",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-48-D21_6-qa83",
+        "expected": "present work at virtual conference, attend workshops  and intern at firms",
+        "got_fact": "What kind of professional activities does Jolene participate in to gain more experience in her field? =\u003e present work at virtual conference, attend workshops  and intern at firms",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-42-D25_21-qa70",
+        "expected": "takes them onwalks, holds them,feeds themstrawberries, givesthem baths.",
+        "got_fact": "What activities does Nate do with his turtles? =\u003e takes them onwalks, holds them,feeds themstrawberries, givesthem baths.",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-48-D2_13-qa13",
+        "expected": "sitting in a spot by the window in her Mom's house, sitting by the beach, Bali, forest trail in a nearby park",
+        "got_fact": "What places give Deborah peace? =\u003e sitting in a spot by the window in her Mom's house, sitting by the beach, Bali, forest trail in a nearby park",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-50-D16_6-qa27",
+        "expected": "Miami",
+        "got_fact": "Which city was Calvin visiting in August 2023? =\u003e Miami",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-44-D3_7-qa14",
+        "expected": "being in nature",
+        "got_fact": "What is something that Andrew really misses while working in the city? =\u003e being in nature",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-50-D4_19-qa76",
+        "expected": "all kinds of cars, from regular maintenance to full restorations of classic cars",
+        "got_fact": "What type of cars does Dave work on at his shop? =\u003e all kinds of cars, from regular maintenance to full restorations of classic cars",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-26-D4_15-qa99",
+        "expected": "her own journey and the support she received, and how counseling improved her life",
+        "got_fact": "What motivated Caroline to pursue counseling? =\u003e her own journey and the support she received, and how counseling improved her life",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-44-D20_25-qa96",
+        "expected": "about animals, plants, and ecosystems and how they work together",
+        "got_fact": "What did Andrew learn from reading books about ecological systems? =\u003e about animals, plants, and ecosystems and how they work together",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-50-D3_9-qa4",
+        "expected": "United States",
+        "got_fact": "Which country do Calvin and Dave want to meet in? =\u003e United States",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-30-D7_5-qa57",
+        "expected": "build relationships with customers, create a strong brand image, stay positive",
+        "got_fact": "What advice does Gina give to Jon about running a successful business? =\u003e build relationships with customers, create a strong brand image, stay positive",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-48-D22_25-qa163",
+        "expected": "From the shelter",
+        "got_fact": "How did Deborah get Luna, one of her cats? =\u003e From the shelter",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-43-D14_3-qa62",
+        "expected": "gives seminars, mentors younger players.",
+        "got_fact": "What does John do to share his knowledge? =\u003e gives seminars, mentors younger players.",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-26-D13_6-qa125",
+        "expected": "In Melanie's slipper",
+        "got_fact": "Where did Oliver hide his bone once? =\u003e In Melanie's slipper",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-26-D7_21-qa107",
+        "expected": "To de-stress and clear her mind",
+        "got_fact": "What is Melanie's reason for getting into running? =\u003e To de-stress and clear her mind",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-50-D26_6-qa137",
+        "expected": "at an early age",
+        "got_fact": "When did Calvin first get interested in cars? =\u003e at an early age",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-44-D12_3-qa27",
+        "expected": "Stressful",
+        "got_fact": "How does Andrew feel about his current work? =\u003e Stressful",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-49-D20_3-qa74",
+        "expected": "Thursday before December 17, 2023.",
+        "got_fact": "When did Evan's son fall off his bike? =\u003e Thursday before December 17, 2023.",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-44-D11_7-qa17",
+        "expected": "three times",
+        "got_fact": "How many times did Audrey and Andew plan to hike together? =\u003e three times",
+        "vetoed": false
+      },
+      {
+        "id": "lc2-conv-43-D28_1-qa69",
+        "expected": "February, 2024",
+        "got_fact": "When will Tim leave for Ireland? =\u003e February, 2024",
+        "vetoed": false
+      }
+    ]
+  },
+  "m1": {
+    "n": 200,
+    "hits": 200,
+    "m1_coverage": 1,
+    "hit_at_1": 200,
+    "hit_at_1_rate": 1,
+    "id_hit": 200,
+    "id_total": 200,
+    "id_hit_rate": 1,
+    "mean_rr": 1,
+    "by_bucket": {
+      "multi-hop": {
+        "n": 12,
+        "hits": 12,
+        "coverage": 1,
+        "hit_at_1": 12
+      },
+      "open-domain": {
+        "n": 114,
+        "hits": 114,
+        "coverage": 1,
+        "hit_at_1": 114
+      },
+      "single-hop": {
+        "n": 28,
+        "hits": 28,
+        "coverage": 1,
+        "hit_at_1": 28
+      },
+      "temporal": {
+        "n": 46,
+        "hits": 46,
+        "coverage": 1,
+        "hit_at_1": 46
+      }
+    },
+    "topk": 5
+  },
+  "m2": {
+    "queries": 200,
+    "control_tokens": 8376,
+    "data_tokens": 4799,
+    "total_tokens": 13175,
+    "m2_control_share": 0.6357495256166983,
+    "mean_per_query_m2": 0.647178285415184,
+    "avg_control_tokens": 41.88,
+    "avg_data_tokens": 23.995,
+    "by_bucket": {
+      "multi-hop": {
+        "queries": 12,
+        "control_tokens": 498,
+        "data_tokens": 300,
+        "total_tokens": 798,
+        "m2_control_share": 0.6240601503759399
+      },
+      "open-domain": {
+        "queries": 114,
+        "control_tokens": 4936,
+        "data_tokens": 2829,
+        "total_tokens": 7765,
+        "m2_control_share": 0.6356728911783645
+      },
+      "single-hop": {
+        "queries": 28,
+        "control_tokens": 1130,
+        "data_tokens": 778,
+        "total_tokens": 1908,
+        "m2_control_share": 0.5922431865828093
+      },
+      "temporal": {
+        "queries": 46,
+        "control_tokens": 1812,
+        "data_tokens": 892,
+        "total_tokens": 2704,
+        "m2_control_share": 0.6701183431952663
+      }
+    },
+    "compressed": false
+  },
+  "mode": "holdout-official",
+  "official_corpus": true
+}
