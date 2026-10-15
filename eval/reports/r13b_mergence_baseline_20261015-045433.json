@@ -1,0 +1,16 @@
+{
+  "report": "r13b_mergence_baseline",
+  "generated_at": "2026-10-14T00:00:00Z",
+  "holdout_path": "./eval/holdout/holdout_v2.jsonl",
+  "total_memories": 800,
+  "l2_memories": 0,
+  "l1_memories": 800,
+  "edges_total_rows": 0,
+  "edges_alive": 0,
+  "edges_invalidated": 0,
+  "mean_edges_per_memory": 0,
+  "memories_with_entity": 0,
+  "entity_groups": 0,
+  "mean_memories_per_entity": 0,
+  "note": "R13-B 首次基线：BuildEdgesHeuristic 实际新增 0 边；holdout 多为 L1 且无 entity/task，mean_edges_per_memory 分母(L2)=0、非空实体组数=0，作为后续建边质量对照。"
+}

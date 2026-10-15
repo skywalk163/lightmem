@@ -56,9 +56,9 @@ func TestInstallOrder_ValidDAG(t *testing.T) {
 
 func TestInstallOrder_SimpleChain(t *testing.T) {
 	pkgs := map[string]*PackageManifest{
-		"webui":       mkPkg("webui", "registry"),
-		"registry":    mkPkg("registry", "gitea"),
-		"gitea":       mkPkg("gitea"),
+		"webui":    mkPkg("webui", "registry"),
+		"registry": mkPkg("registry", "gitea"),
+		"gitea":    mkPkg("gitea"),
 	}
 	order, err := InstallOrder(pkgs)
 	if err != nil {

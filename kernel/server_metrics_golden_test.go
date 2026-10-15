@@ -12,9 +12,8 @@
 package kernel
 
 import (
-	"bytes"
 	"flag"
-	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -119,8 +118,8 @@ func TestPrometheusText_Compliance(t *testing.T) {
 	if !strings.Contains(out, "http_request_duration_ms_sum ") {
 		t.Errorf("missing http_request_duration_ms_sum")
 	}
-	if !strings.Contains(out, "http_request_duration_ms_count 4") { // 4 个 2xx 请求
-		t.Errorf("missing http_request_duration_ms_count 4, got:\n%s", out)
+	if !strings.Contains(out, "http_request_duration_ms_count 5") { // 5 次请求（含 1 次 4xx）均计入延迟直方图
+		t.Errorf("missing http_request_duration_ms_count 5, got:\n%s", out)
 	}
 
 	// 4) 标签字典序：http_requests_total 的 key 按字典序排列
@@ -152,8 +151,8 @@ func TestPrometheusText_Compliance(t *testing.T) {
 	if !strings.Contains(out, "memories_saved_total 1") { // 仅 201 的 /memories 计入
 		t.Errorf("memories_saved_total should be 1, got:\n%s", out)
 	}
-	if !strings.Contains(out, "memories_recalled_total 2") { // /search 两次 200
-		t.Errorf("memories_recalled_total should be 2, got:\n%s", out)
+	if !strings.Contains(out, "memories_recalled_total 1") { // 仅 GET|/search|200 一次命中检索端点
+		t.Errorf("memories_recalled_total should be 1, got:\n%s", out)
 	}
 
 	// 7) 指标名合法性：只含小写字母、下划线、数字
@@ -236,7 +235,7 @@ func TestPrometheusText_LabelEscaping(t *testing.T) {
 func TestPrometheusText_NoScientificNotation(t *testing.T) {
 	m := NewServerMetrics()
 	// 用小数值触发 formatFloat 的 'g' 格式
-	m.ObserveHTTP(http.MethodGet, "/test", http.StatusOK, 0.001) // 0.001ms
+	m.ObserveHTTP(http.MethodGet, "/test", http.StatusOK, 0.001)     // 0.001ms
 	m.ObserveHTTP(http.MethodGet, "/test", http.StatusOK, 1000000.0) // 1000000ms
 
 	out := m.PrometheusText()

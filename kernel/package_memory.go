@@ -33,6 +33,12 @@ func ExtractPackageMemory(ctx context.Context, backend StorageBackend, pkgName s
 
 // ExtractPackageMemoryFromManifest 从任意 PackageManifest 抽取包记忆。
 // 适用于家族档 8 包及后续社区包。返回写入/幂等命中的记忆条数。
+//
+// R13-A 修复（R12 遗留缺陷）：幂等依赖 (tenant,user,idempotency_key) 三元组。
+// 原实现每次调用都生成新 MemoryID，SQLite 的 Upsert 幂等分支（同 MemoryID 且
+// 同 idempotency_key 才复用）永不命中，重复抽取会不断新增行。此处按代码库
+// 既有先例（§4.3 写策略 / router_tools 写入路径）先用 IdempotencyLookup 探测，
+// 命中则复用既有 MemoryID，使 Upsert 走 version 递增分支而不新增行。
 func ExtractPackageMemoryFromManifest(ctx context.Context, backend StorageBackend, mf *PackageManifest) (int, error) {
 	if mf == nil {
 		return 0, fmt.Errorf("nil package manifest")
@@ -46,6 +52,7 @@ func ExtractPackageMemoryFromManifest(ctx context.Context, backend StorageBacken
 
 	now := time.Now().UTC()
 	total := 0
+	lk, hasLookup := backend.(IdempotencyLookup)
 
 	memories := []*Memory{
 		// 元数据：包是什么、用途、类型、信任级
@@ -66,6 +73,13 @@ func ExtractPackageMemoryFromManifest(ctx context.Context, backend StorageBacken
 	}
 
 	for _, m := range memories {
+		// 幂等：命中既有 (tenant,user,idem_key) 则复用其 MemoryID，
+		// 使 Upsert 走「同 ID + 同幂等键 → version 递增」分支，不新增行。
+		if hasLookup {
+			if ex, err := lk.FindByIdempotencyKey(ctx, m.TenantID, m.UserID, m.IdempotencyKey); err == nil && ex != nil {
+				m.MemoryID = ex.MemoryID
+			}
+		}
 		if err := backend.Upsert(ctx, m); err != nil {
 			// 幂等命中不计为失败：返回已成功条数
 			return total, fmt.Errorf("extract %s: %w", m.IdempotencyKey, err)

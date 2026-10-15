@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -244,11 +245,25 @@ func splitKey(k string) (method, path, status string) {
 	return method, path, status
 }
 
+// formatFloat 输出 Prometheus 数值文本。
+// R13-A 修复（R12 遗留缺陷）：原实现用 'g' 格式，大数会退化成科学计数法
+// （如 1000000.001 → "1.000000001e+06"），而 Prometheus 文本格式与
+// TestPrometheusText_NoScientificNotation 均要求**禁用科学计数法**。
+// 改用 'f'（定点、-1 精度）+ 去尾零，保证既有小数值输出（如 3.2）逐字节不变。
 func formatFloat(v float64) string {
 	if v == float64(int64(v)) {
 		return strconv.FormatInt(int64(v), 10)
 	}
-	return strconv.FormatFloat(v, 'g', -1, 64)
+	s := strconv.FormatFloat(v, 'f', -1, 64)
+	// 'f' 格式不会产出科学计数法；仅需去掉定点可能留下的尾随零（如 "3.20" → "3.2"）。
+	if strings.Contains(s, ".") {
+		s = strings.TrimRight(s, "0")
+		s = strings.TrimRight(s, ".")
+	}
+	if s == "" || s == "-" {
+		return "0"
+	}
+	return s
 }
 
 // ------------------------------------------------------------------

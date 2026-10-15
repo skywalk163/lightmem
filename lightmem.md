@@ -1,7 +1,7 @@
-# LIMS v2.3 光明记忆系统架构设计文档
+# LIMS v2.4 光明记忆系统架构设计文档
 
 **项目名称：** Light Intelligent Memory System（LIMS / lightmem，光明记忆系统，简称"光明记忆"）
-**版本：** v2.3
+**版本：** v2.4
 **文档类型：** 架构设计文档
 
 > v1.5 在 v1.4（只增+读时融合、双时态、pgvector 单库）基础上，闭合架构评审遗留项（多信号检索、反馈/遗忘契约、核心记忆块、Agent 主动记忆、权限三元组、记忆投毒防护、评测分桶、架构收敛），并完成统一 Schema 的语义一致性收敛（见 §4.7 Q1–Q6）；v1.7 追加 Q7 完成字段/流程层面的收口（见 §4.7）。不改变 v1.4 已确立的三大决策方向。
@@ -21,6 +21,8 @@
 > **v2.2（profile 配置落地）** 在 v2.1 基础上：将 §2.6 的四档装配档位从"示例 YAML"落地为 **`lightmem/profiles/` 目录**——`lims-solo.profile.yaml` / `lims-family.profile.yaml` / `lims-smb.profile.yaml` / `lims-enterprise.profile.yaml`（每份含存储、缓存、队列、网络、安全、功能、扩容七段完整配置，字段名与 §2.6 一致），并配 `README.md` 说明选择/启用/升档方法；文档内交叉引用该目录。**不改变既有架构结论。**
 >
 > **v2.3（评审勘误与口径统一）** 在 v2.2 基础上仅做文档勘误，不改变架构结论：① 修正 §4.1 记忆对象样例——主键真源字段应为 `fact`，`content` 仅作 L2 兼容别名（此前样例误写为 `content`）；② 统一检索延迟口径——§9 明确 P95 目标针对**内核记忆检索链路**，§4.6 外部连接器（如 Git）同步的 300ms 为**单次外部调用软超时/背压触发线**，二者非同一指标；③ 修复 §6.1 悬空引用（移除对不存在的"实现语言选型说明"文档的指向）；④ 版本历史按时间序整理，并补齐本版本条目。**不改变既有架构结论。**
+>
+> **v2.4（吸收《千脑智能》优秀基因，R13）** 在 v2.3 基础上**只增不改**，落地《千脑智能》（Thousand Brains Project，MIT 许可）精读给出的三条高价值改造建议：① 新增 **§3.2.1 记忆位移边**——把参考系从"扁平坐标"升级为"带位移边的记忆图"（节点=记忆、边=displacement），四类关系 `causal/temporal/task-flow/entity-alias`，仅 L2 长期记忆建边，边只用于软排序与多跳召回、不跨越 §3.2 硬过滤边界，跳数上限 N=2 并按 `0.5^hop` 衰减；写入三元组幂等、淘汰软删可审计（`kernel/displacement_edge.go` / `kernel/multihop_monty.go`）。② 新增 **§3.2.2 跨 Agent 参考系对齐**——跨 Agent 融合前强制实体消解，未对齐只并列展示、禁止融合与互相覆盖（`kernel/entity_align.go`，默认路径不调用）。③ 新增 **§3.4.1 只加不减与相对容差**——明确各信号只贡献正向名次分、缺失与超容差记 0 不扣分，`20%` 显式定义为相对容差 `tolerance`（默认 0.2），保留 lightmem 独有的绝对下限 `top1 ≥ 0.6`（`kernel/rank_fusion_monty.go`，默认融合路径与 `FusionMode=rrf` 不变）。三条建议均以**新增模式/新增函数**落地，默认 Rank 融合路径、既有 Schema 语义与对外格式不变；北极星 M1=1.0000（holdout_v2 800 条，vector 口径）逐位复现。**不改变既有架构结论。**
 
 ---
 
@@ -298,6 +300,67 @@ Enterprise（集合体 Coordinator/Worker/Archive/Gateway）
 
 **参考系业务键（reference_frame_business_key，v1.6 定义）：** 用于幂等键（§4.3）的参考系归一化串，定义为规范化拼接 `entity + scene + task + category`（实体/场景/任务/分类，空值以固定占位符 `nil` 填充），供同一业务事实在不同参考系片段下仍能被去重。
 
+### 3.2.1 记忆位移边（Memory Displacement Edges，v2.4）
+
+**职责：** 在扁平参考系坐标之外，为记忆之间建立**带类型、带权重的位移边**，让记忆可沿关系"跳转"，支撑多跳召回与关系推理（此前多跳只能靠向量相似度近似）。
+
+**依据：** 吸收《千脑智能》（Thousand Brains Project，MIT 许可）参考系思想——Monty 物体图中节点是"特征@姿态"，**边是 displacement**（从 A 到 B 需要的关系/动作）。落地实现：`kernel/displacement_edge.go`（存储与建边）、`kernel/multihop_monty.go`（位移式召回）。
+
+**边字段（单一真源，新增扩展表，不改既有 Schema）：**
+
+| 字段 | 说明 |
+|---|---|
+| `from_memory_id` / `to_memory_id` | 边的两端（ULID），方向 from → to |
+| `relation` | `causal` / `temporal` / `task-flow` / `entity-alias` |
+| `weight` | `[0,1]`，进入软排序（不回灌主融合分） |
+| `created_at` | 边建立时间（只增） |
+| `invalidated_at` | 软删除时间戳，默认 NULL；淘汰不物理删除，保留可审计 |
+
+**关系类型与初始权重（纯启发式建边，不调 LLM）：**
+
+| relation | 触发规则（仅 L2 长期记忆建边） | 初始 weight |
+|---|---|---|
+| `entity-alias` | 两条记忆 `entity` 归一化（小写去标点）后相同且非空 | 0.8 |
+| `task-flow` | 两条记忆挂同一非空 `task`，按 `recorded_at` 先后 | 0.4 |
+| `causal` | 同 user 下，前条 `entity` 非空，后条 `fact` 出现指代词（它/该/这个/it…） | 0.5 |
+| `temporal` | 两条 `recorded_at` 均非零、间隔 ≤ 7 天，且同 `task` 或同 `scene` | 0.3 |
+
+**写入与容量治理：**
+- **幂等**：`(from_memory_id, to_memory_id, relation)` 三元组唯一，重复写入不新增行、不更新权重；
+- **软删除**：淘汰边置 `invalidated_at`，行保留在表中可审计，不物理删除；
+- **出边上**：单条记忆有效出边默认上限 16；超限软删 `weight` 最低、权重相同则 `created_at` 最旧的边。
+
+**安全边界（硬性）：**
+- 位移边**只用于软排序与多跳召回，不跨越 §3.2 硬过滤边界**——`tenant/user/project/visibility` 不匹配的候选一律剪枝，边不提供绕过硬过滤的通道；
+- 位移式召回采用 **DisplacementLM 纪律**：硬条件不一致即剪枝，不累积置信度、不修改原信号分；保留候选仅按 `weight × 0.5^hop` 做软排序，**跳数上限 N=2**；
+- **L1 默认不建边，仅 L2 长期记忆建边**；默认检索路径不启用，由调用方显式开启，既有 Rank 融合逐位不变。
+
+**合并度监控：** 见 `eval/polaris/polaris_mergence.go`，基线指标 `mean_edges_per_memory`（边数/L2 记忆数）与 `mean_memories_per_entity`（归一化实体分组均值），作为后续建边质量对照。
+
+### 3.2.2 跨 Agent 参考系对齐（强制前置，v2.4）
+
+**职责：** 跨 Agent 共享的记忆在**融合之前**，强制先做"参考系对齐"（实体消解），防止同一实体在不同 Agent 的语境下被误合并、误覆盖。
+
+**依据：** 吸收《千脑智能》投票机制——Monty 中 vote 是"相对发送者身体"的，接收方必须把票变换到**自己**的参考系；且投票依赖特征在世界的相对排布，**不是 bag-of-features**。落地实现：`kernel/entity_align.go` 的 `AlignCrossAgentFusion`。
+
+**规则：**
+
+- 凡 `visibility ∈ {shared_user, tenant, cross_tenant}` 的**跨 Agent 融合**，必须先经本节对齐；`private`（单 Agent 自有记忆）不涉及跨源指代，无需强制。
+- 对齐判定按 §3.2 的软排序坐标 `entity / scene / task`（默认要求三者一致；`category` 粒度较粗，默认不参与）。判定用**归一化比对**（小写、去标点与空白），`"客户A"` 与 `" 客户a "` 视为同一实体。
+- **未对齐的记忆只并列展示，禁止融合、禁止互相覆盖**；对齐失败（关键坐标缺失，如 `entity` 为空）一律降级为"待人工确认"，**不静默放行**。
+- 对齐结论是**计算期结构，不落库**：不新增、不改动 §4.1 统一 Schema 字段。
+
+**两种模式：**
+
+| 模式 | 触发 | 语义 |
+|---|---|---|
+| 参考系模式（推荐） | 传入接收方自己的 `ReferenceFrame` | 逐维与接收方参考系比对；不一致者进"未对齐"清单，附差异维度说明 |
+| 自分组模式 | 参考系传 `nil` | 按各记忆自身坐标分组，同键同组；不同实体/场景天然隔离，但只能识别"坐标缺失"型未对齐 |
+
+**边界（与 §3.2 硬过滤的关系）：** 本节只解决"都已可见之后，**能不能融合**"这一步；`tenant/user/project/visibility` 的硬过滤仍由既有查询层与 `canView` 负责，**本节不参与、不放松任何权限判定**。
+
+**开关与默认：** 本前置**默认路径不调用**——既有 `Rank` / `Fuse` / `VoteFusion` 行为逐位不变；仅在跨 Agent 融合场景由调用方显式调用（`kernel/entity_align.go`），保证北极星 M1 不受影响。
+
 ### 3.3 记忆提取器（MemoryExtractor）
 
 **职责：** 从对话、文档、工具结果、外部系统同步数据中，自动抽取结构化记忆条目。
@@ -340,6 +403,23 @@ Enterprise（集合体 Coordinator/Worker/Archive/Gateway）
 - **接近融合（含绝对分下限，v1.5）：** 仅当**同时满足**相对条件 `(top1 - top2) / top1 < 20%` **且** 绝对条件 `top1 ≥ 绝对分下限（默认 0.6，可配置）` 时，才融合多条事实文本并附加各条来源说明；`top1` 低于绝对下限时**禁止融合**，返回单条最高分并标注低置信/弱匹配或触发澄清。
 - **冲突标记：** 无法融合时保留多条，标记"待人工确认"，不静默选一个。
 - **时效裁决（双时态，语义明确化，v1.5）：** 默认查询仅返回当前生效版本（`valid_from ≤ now < valid_until`，或 `valid_until = null`）；显式 `as_of` 回溯时返回覆盖该时刻的版本，若无覆盖则返回最接近的已失效版本并置 `is_historical=true`，同时回填其生效区间。禁止以未定义的"保留为历史标记"含糊表述。
+
+### 3.4.1 只加不减与相对容差（融合算子，v2.4）
+
+**职责：** 把各融合信号的**计分方向**与**容差语义**显式化，避免弱信号反向拖累整体，并为跨源融合提供一条与默认路径并存的独立算子。
+
+**依据：** 吸收 Monty 特征证据口径 `clip(tolerance − diff, 0, ∞) / tolerance`——**不匹配记 0，绝不给负分**；且搜索半径内**取 max 而非平均**。落地实现：`kernel/rank_fusion_monty.go` 的 `FuseMonotonic` 与 `MontyEvidenceScore`。
+
+**规则：**
+
+- **只加不减：** 每个融合信号只贡献**正向名次分**；信号缺失或不匹配时记 `0`，**不得记负分**。证据分恒 ∈ `[0,1]`，任何输入组合下都不会产生负证据。
+- **相对容差：** 把 §3.4"接近融合"中的 `20%` 显式定义为**相对容差 `tolerance`**（默认 `0.2`）。证据差值 `diff ≤ tolerance` 时线性得分 `(tolerance − diff) / tolerance`；`diff > tolerance` 时**记 0，而非扣分**。
+- **保留绝对下限：** `top1 ≥ 绝对分下限（默认 0.6）` 是融合硬门槛，低于下限**禁止融合**，返回单条并标低置信。此约束为 lightmem 独有（Monty 无），**明确保留**。
+- **分母口径：** 融合分 = `Σ(w × evidence) / Σw`，分母只含**有信息**的信号权重——弱信号缺失**既不稀释也不减分**。
+
+**与既有 §3.4 的关系（只增不改）：** 本节只是把 §3.4 已隐含的口径**显式化**，并另提供一条独立算子；`(top1 − top2) / top1 < 20%` 与 `top1 ≥ 0.6` 的既有语义**保持不变**。新算子**默认路径不调用**，`FusionMode` 仍默认 `rrf`，北极星 M1 逐位不受影响。
+
+**边界：** 本节为纯计分规则，不触碰 §3.2 硬过滤、§4 双时态与 §7 安全边界；证据明细（`MontyEvidence`）与判决（`MontyVerdict`）均为计算期结构，**不落库**。
 
 ### 3.5 动态记忆存储（DynamicMemoryStore, L1）
 
@@ -1382,6 +1462,7 @@ accton /var/account/acct
 | v2.1 | 2026-10-10 | 应用包生态与差异化定位：① 新增 **§6.2 应用包生态（LIMS App Package）**——借鉴 NAS（Synology 套件中心 / TrueNAS Apps）引入包机制：`manifest.yaml` 自描述、包生命周期（install/configure/enable/health/upgrade/disable/uninstall）、来源信任分级（builtin/official/community）、类型分层（service/connector/skill/policy/pack/scheduler）、`can_modify_core` 恒 false 的扩展契约；② **必备包清单两批**（首批 gitea / git-connector / registry / backup / search / llm-gateway / mesh-sync / webui；第二批按触发条件启用且默认关闭）；③ **AI 协同**——包成为被记忆的一等实体（装包/配包/用包/沉淀包经验四环节，经验经 §3.13 提炼为 `procedure`）；④ **差异化定位六条**（主特色 1：低 token 长期运行 = 数据面架构 + 控制面光明语言双重压缩；主特色 2：省 token 使 AI 协同在经济上可持续）；⑤ 新增 M1–M10 评测口径（含独有指标"控制面 token 占比" M2）；⑥ 配套交付物 `docs/光明记忆应用包生态与差异化定位_v1.0.md`。**不改变既有架构结论**，并明确"低 token"在 M2/M4 落数字前仅为设计主张 |
 | v2.2 | 2026-10-10 | profile 配置落地：① 将 §2.6 四档装配档位落地为 `lightmem/profiles/` 目录——`lims-solo.profile.yaml` / `lims-family.profile.yaml` / `lims-smb.profile.yaml` / `lims-enterprise.profile.yaml`（每份含存储、缓存、队列、网络、安全、功能、扩容七段完整配置，字段名与 §2.6 一致；Family 档含 ZFS dataset 布局与 jail vnet IP 规划，SMB 含 Qdrant 迁移触发阈值，Enterprise 含 Coordinator/Worker/Archive/Gateway 节点角色与分片路由）；② 配 `README.md` 说明档位选择、启用（复制为 `lims.profile.yaml`）与升档方法；③ 文档内交叉引用该目录。**不改变既有架构结论** |
 | v2.3 | 2026-10-10 | 评审勘误与口径统一（仅文档，不改架构）：① 修正 §4.1 记忆对象样例——主键真源字段应为 `fact`，`content` 仅作 L2 兼容别名；② 统一检索延迟口径——§9 P95 目标针对内核记忆检索链路，§4.6 外部连接器同步的 300ms 为单次外部调用软超时/背压触发线，二者非同一指标；③ 修复 §6.1 悬空引用（移除对不存在的"实现语言选型说明"文档的指向）；④ 版本历史按时间序整理并补齐本条目。**不改变既有架构结论** |
+| v2.4 | 2026-10-15 | 吸收《千脑智能》（Thousand Brains Project）优秀基因（R13，**只增不改**）：① 新增 **§3.2.1 记忆位移边**——参考系由"扁平坐标"升级为"带位移边的记忆图"，四类关系（`causal` / `temporal` / `task-flow` / `entity-alias`），仅 L2 建边、边只用于软排序与多跳召回、跳数上限 N=2 且按 `0.5^hop` 衰减，三元组幂等写入 + 软删除可审计；② 新增 **§3.2.2 跨 Agent 参考系对齐**——跨 Agent 融合前强制实体消解，未对齐只并列展示、禁止融合与互相覆盖，坐标缺失降级为待人工确认；③ 新增 **§3.4.1 只加不减与相对容差**——信号只贡献正向名次分，缺失/超容差记 0 不扣分，`20%` 显式定义为相对容差 `tolerance`（默认 0.2），保留绝对下限 `top1 ≥ 0.6`。三条均以新增文件/函数落地（`kernel/displacement_edge.go`、`kernel/multihop_monty.go`、`kernel/entity_align.go`、`kernel/rank_fusion_monty.go`），**默认 Rank 融合路径、既有 Schema 语义、既有 SQL 与对外格式均不变**；北极星 M1=1.0000（holdout_v2 800 条，vector 口径）逐位复现。**不改变既有架构结论。** |
 
 ## 附录 C：参考文档
 | 参考 | 链接 |
