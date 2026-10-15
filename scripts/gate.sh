@@ -5,9 +5,10 @@
 #       任一 FAIL 则以非零码退出（可直接接 CI）。
 #
 # 用法：
-#   sh scripts/gate.sh              # 全部门禁（12 项）
-#   sh scripts/gate.sh -n race      # 跳过 -race（调试期加速）
-#   sh scripts/gate.sh -q           # 只在 FAIL 时打印细节
+#   sh scripts/gate.sh              # 全部门禁（默认计分 13 项 + [1b] 报告行）
+#   sh scripts/gate.sh -S           # 严格模式：[1b] 全仓 gofmt 升级为硬门禁
+#   sh scripts/gate.sh -n           # 跳过 [5] -race（调试期加速，记 SKIP）
+#   sh scripts/gate.sh -q           # 只在 FAIL / SKIP 时打印（调试期）
 #
 # 设计要点：
 #   1. 双 module 各跑一遍：本仓库根 module 是 `lightmem`，
@@ -21,8 +22,14 @@
 #   4. 只读检查：不自动 gofmt -w、不改任何文件。发现问题只报告。
 #   5. 基线变量：R15_BASELINE 优先，R14_BASELINE 兼容读取。
 #      脚本必须从仓库内执行（ROOT 须含 go.mod），或用 GATE_ROOT 显式指定。
+#   6. [11] PG 真机往返的策略是「显式 SKIP / 配置后硬阻断」：
+#      未配置 PG 环境变量 → 明确输出 SKIP 并计入汇总（绝不静默当通过）；
+#      已配置 → 测试失败即 FAIL 阻断；已配置却 0 项执行 → 同样 FAIL
+#      （真机覆盖等于没做，不能算绿）。
+#   7. [1b] 全仓 gofmt 采用两步升级：默认 INFO + 阈值观测（GATE_FMT_MAX，默认 0），
+#      确认全仓持续归零且无合理例外后，用 -S / GATE_STRICT_FMT=1 翻成硬门禁。
 #
-# 退出码：0 = 全部门禁通过；1 = 至少一项 FAIL。
+# 退出码：0 = 全部门禁通过（SKIP 不阻断）；1 = 至少一项 FAIL。
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -37,11 +44,20 @@ if [ ! -f "$ROOT/go.mod" ]; then
 fi
 QUIET=0
 SKIP_RACE=0
+# 严格模式：[1b] 全仓 gofmt 由 INFO 升级为硬门禁（两步升级的第二步）。
+# 默认关——确认全仓持续归零且无合理例外后再翻。
+STRICT_FMT=0
+if [ "${GATE_STRICT_FMT:-0}" = "1" ]; then
+    STRICT_FMT=1
+fi
+# 全仓 gofmt 容忍阈值：观测期允许的上限（默认 0 = 期望全仓归零）。
+FMT_MAX="${GATE_FMT_MAX:-0}"
 for arg in "$@"; do
     case "$arg" in
         -q) QUIET=1 ;;
         -n) SKIP_RACE=1 ;;
-        *) printf '未知参数：%s（支持 -q / -n）\n' "$arg" >&2; exit 2 ;;
+        -S) STRICT_FMT=1 ;;
+        *) printf '未知参数：%s（支持 -q / -n / -S）\n' "$arg" >&2; exit 2 ;;
     esac
 done
 
@@ -50,13 +66,14 @@ FAIL=0
 SKIP=0
 DETAILS=""
 
-# 打印结论行：标题 + PASS/FAIL + 备注
+# 打印结论行：标题 + PASS/FAIL/SKIP + 备注
 row() {
     title="$1"
     state="$2"
     note="${3:-}"
-    # 安静模式只保留 FAIL；PASS 与 INFO 全部抑制
-    if [ $QUIET -eq 1 ] && [ "$state" != FAIL ]; then
+    # 安静模式只保留 FAIL 与 SKIP——SKIP 同样必须可见，
+    # 否则「没配环境变量」会被静默吞掉，与「SKIP 不得冒充 PASS」的红线冲突。
+    if [ $QUIET -eq 1 ] && [ "$state" != FAIL ] && [ "$state" != SKIP ]; then
         return 0
     fi
     printf '%-52s %s' "$title" "$state"
@@ -131,7 +148,10 @@ else
     FAIL=$((FAIL + 1))
 fi
 
-# [1b] 全仓 gofmt：仅报告既有噪音，不计 FAIL（也不计入 PASS）
+# [1b] 全仓 gofmt：两步升级。
+#   第一步（默认）：INFO + 阈值观测——报告实际数量，超过 GATE_FMT_MAX 时给出
+#     升级提示，但不阻断（避免一改就红一片、逼出绕过）。
+#   第二步（-S / GATE_STRICT_FMT=1）：硬门禁——任何新增违规即 FAIL 阻断。
 GOFILES="$(cd "$ROOT" && find . -name '*.go' -not -path './vendor/*' \
     -not -path './.*/*' -not -path '*/.*/*')"
 if [ -n "$GOFILES" ]; then
@@ -140,11 +160,29 @@ else
     FMT_ALL=""
 fi
 N_ALL="$(printf '%s' "$FMT_ALL" | grep -c '.' || true)"
-if [ -n "$FMT_ALL" ]; then
-    row '[1b] gofmt -l 全仓（既有噪音，仅报告）' INFO "${N_ALL:-0} 文件待格式化"
+[ -z "$N_ALL" ] && N_ALL=0
+if [ $STRICT_FMT -eq 1 ]; then
+    # 第二步：硬门禁
+    if [ "$N_ALL" -le "$FMT_MAX" ]; then
+        row '[1b] gofmt -l 全仓 (严格)' PASS "${N_ALL} 文件待格式化（阈值 ${FMT_MAX}）"
+        PASS=$((PASS + 1))
+    else
+        row '[1b] gofmt -l 全仓 (严格)' FAIL "${N_ALL} 文件待格式化（阈值 ${FMT_MAX}）"
+        printf '%s\n' "$FMT_ALL" | sed 's/^/       /'
+        record 'gofmt -l 全仓' "$FMT_ALL"
+        FAIL=$((FAIL + 1))
+    fi
+elif [ -n "$FMT_ALL" ]; then
+    # 第一步：观测期，只报告
+    if [ "$N_ALL" -gt "$FMT_MAX" ]; then
+        row '[1b] gofmt -l 全仓（观测期，超阈值）' INFO "${N_ALL} 文件待格式化 > 阈值 ${FMT_MAX}（-S 可升级为硬门禁）"
+    else
+        row '[1b] gofmt -l 全仓（观测期）' INFO "${N_ALL} 文件待格式化（阈值 ${FMT_MAX}）"
+    fi
     printf '%s\n' "$FMT_ALL" | sed 's/^/       /'
 else
-    row '[1b] gofmt -l 全仓' INFO '0 文件待格式化'
+    # 全仓归零：明确记为可升级状态
+    row '[1b] gofmt -l 全仓（观测期）' INFO "0 文件待格式化（已达硬门禁标准，下一步 -S 即可翻）"
 fi
 
 # ---------------------------------------------------------------------------
@@ -493,11 +531,61 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# [11] PG 真机往返：显式 SKIP / 配置后硬阻断。
+#     策略（用户裁定 2026-10-15）：
+#       - 未配置 PG 环境变量 → 明确输出 SKIP 并计入汇总，绝不静默当通过；
+#       - 已配置 → 测试失败即 FAIL 阻断；
+#       - 已配置却 0 项执行（全 SKIP）→ 同样 FAIL：真机覆盖等于没做。
+#     环境变量：LIGHTMEM_PG_HOST + (LIGHTMEM_PG_TEST_DB|LIGHTMEM_PG_DB)
+#     与 kernel/edge_persist_pg_test.go 的 loadPgEdgeTestConfigOrNil 同一判据。
+# ---------------------------------------------------------------------------
+PG_TEST_FILE="$ROOT/kernel/edge_persist_pg_test.go"
+PG_HOST="${LIGHTMEM_PG_HOST:-}"
+PG_DB="${LIGHTMEM_PG_TEST_DB:-${LIGHTMEM_PG_DB:-}}"
+if [ ! -f "$PG_TEST_FILE" ]; then
+    row '[11] PG 真机往返' SKIP 'edge_persist_pg_test.go 缺失（无真机覆盖）'
+    SKIP=$((SKIP + 1))
+elif [ -z "$PG_HOST" ] || [ -z "$PG_DB" ]; then
+    row '[11] PG 真机往返' SKIP 'SKIP: PG env not set（LIGHTMEM_PG_HOST / LIGHTMEM_PG_TEST_DB 未配置）'
+    SKIP=$((SKIP + 1))
+else
+    # -v 才能数出实际跑了几条；passfile 用 shell 重定向而非 sh -c，避免内层 sh 丢失脚本变量。
+    PG_LOG="$(mktemp -t r15_pg.XXXXXX 2>/dev/null || echo /tmp/r15_pg.$$)"
+    ( cd "$ROOT/kernel" && go test -run 'EdgePersistPg' -count=1 -v . ) > "$PG_LOG" 2>&1
+    PG_RC=$?
+    PG_PASS="$(grep -c '^--- PASS' "$PG_LOG" 2>/dev/null || true)"
+    PG_FAIL="$(grep -c '^--- FAIL' "$PG_LOG" 2>/dev/null || true)"
+    PG_SKIP="$(grep -c '^--- SKIP' "$PG_LOG" 2>/dev/null || true)"
+    [ -z "$PG_PASS" ] && PG_PASS=0
+    [ -z "$PG_FAIL" ] && PG_FAIL=0
+    [ -z "$PG_SKIP" ] && PG_SKIP=0
+    if [ $PG_RC -ne 0 ]; then
+        row '[11] PG 真机往返' FAIL "真机测试失败（PASS=$PG_PASS FAIL=$PG_FAIL）"
+        record 'PG 真机往返' "$(tail -40 "$PG_LOG")"
+        FAIL=$((FAIL + 1))
+    elif [ "$PG_PASS" -eq 0 ]; then
+        # 配置了环境却一条都没跑：连接不可用或判据不一致，按 FAIL 处理。
+        row '[11] PG 真机往返' FAIL "已配置 PG 但 0 项执行（SKIP=$PG_SKIP，检查连接与库名）"
+        record 'PG 真机往返' "$(tail -40 "$PG_LOG")"
+        FAIL=$((FAIL + 1))
+    else
+        row '[11] PG 真机往返' PASS "真机往返 ${PG_PASS} 项全 PASS（SKIP=$PG_SKIP）"
+        PASS=$((PASS + 1))
+    fi
+    rm -f "$PG_LOG" 2>/dev/null || true
+fi
+
+# ---------------------------------------------------------------------------
 # 汇总
 # ---------------------------------------------------------------------------
 printf '\n========== R15 门禁矩阵 ==========\n'
 printf 'PASS: %-4d  FAIL: %-4d  SKIP: %-3d  模块数: %s\n' \
     "$PASS" "$FAIL" "$SKIP" "$MOD_COUNT"
+if [ $STRICT_FMT -eq 1 ]; then
+    printf '[1b] 全仓 gofmt：严格模式（阈值 %s）\n' "$FMT_MAX"
+else
+    printf '[1b] 全仓 gofmt：观测期 INFO（阈值 %s；-S 升级为硬门禁）\n' "$FMT_MAX"
+fi
 printf '===================================\n'
 
 if [ -n "$DETAILS" ]; then

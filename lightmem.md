@@ -1631,6 +1631,8 @@ precision **1.0000**、false_positive_rate **0.0000**（0/300）。以上数字�
 
 | v2.4.2 | 2026-10-15 | R15 四路并行收口（**只增不改**，主标题版本号仍为 v2.4，本条为修订号）。① **§7.5.1 投毒检测与处置的两阶段（A 路）**——补上 R14 及以前"只有处置、没有检测"的缺口（`ProvInjectionSuspect` 全库无写入方，降权策略恒不触发）：新增 `kernel/poison_detect.go` 确定性检测器（16 条 RE2 规则 + 1 条零宽/等价字符变体检测，规则按 ID 字典序静态声明、全量扫描不截断、无时间无随机），`DetectInjection` 只出判定、`MarkSuspect` 只置标签并把高危 `confidence` 压到 0.3；检测器以 `WithInjectionDetection` **opt-in** 追加，`DefaultWritePolicies()` 仍为 6 条、`writepolicy_test.go` 未改。新增对抗语料 342 条 + 良性近似 300 条与独立入口 `eval/polaris/polaris_injection.go`（不进 holdout、不输出 M1/M2），实测 recall=1.0000 / precision=1.0000 / fpr=0.0000。② **§5.3.1.1 接线契约 + §3.5.1.1 结算后的语义映射（B 路）**——把 R14 交付但调用数为零的 `DriftAwareRank` 与 `DecideFlush` 接上电，新增 `kernel/drift_pipeline.go`（选路 + 委托分发器）与 `kernel/flush_pipeline.go`（`FlushPlan`→L1 映射定义，`recorded_at` 逐位保留、layer 走既有 `ClassifyLayer`、只映射不写入）；**默认关**（`DefaultDriftPipelineConfig().Mode == "default"`），只委托不重写第二套衰减/RRF/分层。③ **§3.2.3 合并度指标与语料要求（C 路）**——`mean_edges_per_memory` / `mean_memories_per_entity` 在 holdout_v2 上恒为 0 属"分母为 0 的死指标"；新增独立语料 `eval/holdout/holdout_v3.jsonl`（840 条，L2 144 条、实体分组 24 组、三轴非空率 100%）与自检 `check_holdout_v3.go` 激活指标（v3: `l2=144` / `mean_edges_per_memory=10.125` / `entity_groups=24`），**v2 仍为 0**（反向断言证明口径未被改坏）；`polaris_mergence.go` 仅新增 `edges_per_relation` / `entity_coverage` 两输出字段。④ **附录 D 更新为 R15 门禁矩阵（D 路）**——`gate.sh` 由 8 项扩到 **12 项**（新增 [7b] 受控修改审计、[8] 投毒检测、[9] 合并度激活、[10] 接线默认关；`R15_BASELINE` 优先、`R14_BASELINE` 兼容；入口加 ROOT 存在性断言防误扫全盘），补 D3 收掉 4 个既有 gofmt 噪音文件（全仓 `gofmt -l` 归零）、D1 位移边 **PostgreSQL 真机往返**（`kernel/edge_persist_pg_test.go` 13 项用例；时间列以 BIGINT 存 unix ns 保真、Save 取 scope 级 advisory lock 串行化并发）、D4 报告体积拆分约定（明细 `*.detail.jsonl` 不入库）。四路新增/修改文件与 12 文件"只增不改白名单"**逐文件 diff 一致**；`writepolicy.go` / `metrics.go` diff 为空；北极星 M1=1.0000（800/800，四桶全 1.0）与 R14 报告**逐字节一致**（832178 bytes）。**不改变既有架构结论。** |
 
+| v2.4.3 | 2026-10-15 | R15 收口两条门禁增强（**只增不改**，主标题版本号仍为 v2.4，本条为修订号）。① **`gate.sh [11] PG 真机往返`（新增）**——把 R15-D1 的 PostgreSQL 真机往返纳入门禁，策略为**「显式 SKIP / 配置后硬阻断」**：未配置 `LIGHTMEM_PG_HOST` / `LIGHTMEM_PG_TEST_DB` 时输出 `SKIP: PG env not set` 并**计入汇总**（绝不静默当通过）；已配置则测试失败即 `FAIL` 阻断；已配置却 0 项执行（连接不可用 / 库名不一致）同样 `FAIL`——真机覆盖等于没做，不能算绿。该套件**自包含**（`newPgEdgePersistence` 自带 `CREATE TABLE IF NOT EXISTS`），实测在**完全空的库**上跑通 13 项全 PASS。实测：无 PG 环境 → `PASS 12 / FAIL 0 / SKIP 1`；有 PG + 严格 → `[11] PASS (13 项)`。② **`[1b]` 全仓 gofmt 两步升级机制**——目标定为硬门禁，路径分两步：默认 `INFO` + 阈值观测（`GATE_FMT_MAX`，默认 0；超阈值时提示可升级，**不阻断**），确认全仓持续归零且无合理例外后用 `-S` / `GATE_STRICT_FMT=1` 翻成**硬门禁**（任何新增违规即 `FAIL` 阻断）。两侧均已实测：默认 `INFO (0 文件…下一步 -S 即可翻)`；`-S` 下 `[1b] PASS`、计分 13 项。**本轮不翻默认**，再观察一轮。③ `gate.sh` 头部同步更新用法与设计要点（含 `-S` 与 `[11]` 策略说明）。本轮另**如实登记一笔既有欠账**（非本轮引入，已在 R14 基线复现）：`eval/e2e/pg/pg_e2e_test.go` 的 `TestPg*` 在配置 PG 后失败，根因为 `confidence` 列 `real`(float32) 与 `model.Confidence` `float64` 精度不匹配、以及 `eval/scripts/r10_pg_setup.sh` 用 `$$` 生成库名致 `create`/`name` 两次调用不一致；故配置 PG 后 `[4]` 会 FAIL，属「配置后硬阻断」的正常告警。**不改变既有架构结论。** |
+
 ## 附录 C：参考文档
 | 参考 | 链接 |
 |---|---|
@@ -1669,14 +1671,51 @@ precision **1.0000**、false_positive_rate **0.0000**（0/300）。以上数字�
 | [8] | 投毒检测（Injection / Poison / MarkSuspect） | PASS | poison_detect_test.go 全 PASS；`polaris_injection` recall=1.0000 / fpr=0.0000 |
 | [9] | 合并度激活（v3 l2>0, mean_edges>0, entity_groups≥20；v2 仍为 0） | PASS | v3: `l2=144` / `edges=10.125` / `groups=24`；v2 三字段仍为 0（反向断言） |
 | [10] | 接线默认关（DriftPipeline / FlushPipeline） | PASS | 默认关态与 R14 基线逐位一致 |
+| [11] | PG 真机往返（**新增**） | SKIP / PASS | 未配置 PG 环境 → 显式 `SKIP`（计入汇总，不静默）；配置后 → 13 项全 PASS，失败即 FAIL 阻断 |
 
-**汇总：PASS 12 / FAIL 0 / SKIP 0 / module 2。**
+**汇总（默认，无 PG 环境）：PASS 12 / FAIL 0 / SKIP 1 / module 2。**
 
 合流工作树 `/tmp/r15/lightmem`（由 `/tmp/r14/lightmem` 复制后叠加四路），
 命令：`R15_BASELINE=/tmp/r14/lightmem sh scripts/gate.sh`。
-另有一项**独立于 gate.sh** 的真机验证：设置 `LIGHTMEM_PG_HOST` 等环境变量后
-`go test -run 'EdgePersistPg' -count=1 .` → **13 项全 PASS、0 SKIP**；
-不设环境变量时同样 13 项**全部 SKIP 且 `ok`**（红线 12：环境不具备不得冒充 PASS）。
+
+### D.1.1 [11] PG 真机门禁的策略与实测（v2.4.3）
+
+**策略（用户裁定 2026-10-15）：显式 SKIP / 配置后硬阻断。**
+
+| 场景 | 判定 | 实测 |
+|---|---|---|
+| `LIGHTMEM_PG_HOST` 或 `LIGHTMEM_PG_TEST_DB` 未配置 | **SKIP**（计入汇总，绝不隐式当通过） | `SKIP: PG env not set` → 汇总 `SKIP: 1`，退出码 0 |
+| 已配置且测试全 PASS | PASS | 空库（无任何表）上 13 项全 PASS |
+| 已配置但测试失败 | **FAIL 阻断** | 退出码 1 |
+| 已配置却 0 项执行（连接不可用 / 库名不一致） | **FAIL 阻断** | 「真机覆盖等于没做，不能算绿」 |
+
+**关键性质：`[11]` 自包含**——`newPgEdgePersistence` 自带 `CREATE TABLE IF NOT EXISTS`
+DDL，实测在**完全空的库**（`\dt` 无任何表）上也能跑通 13 项，不依赖 `memories` 表。
+
+**⚠ 配置 PG 后会连带激活 R10-B 既有 e2e 套件**：`eval/e2e/pg/pg_e2e_test.go` 的
+`TestPg*` 9 项同样由 `LIGHTMEM_PG_*` 触发，需要 `memories` 表（建表脚本为既有的
+`kernel/migrations/001_pgvector.up.sql` + `eval/scripts/r10_pg_setup.sh`）。
+实测结论：**该套件在 R14 基线上同样失败**（非本轮引入），已知两类问题——
+① `confidence` 列是 `real`(float32) 而 `model.Confidence` 是 `float64`，往返精度丢失
+（`0.8999999761581421` vs `0.9`）；② `r10_pg_setup.sh` 用 `$$`（PID）生成测试库名，
+`create` 与 `name` 两次调用拿到不同库名，无法串起「建库 → 测试」。故场景 B（有 PG + `-S`）
+会因 `[4]` 报 FAIL——这正是「配置后硬阻断」应有的告警，**不是 `[11]` 的缺陷**。
+修 R10-B 套件属另一笔欠账，见 D.6。
+
+### D.1.2 [1b] 全仓 gofmt 的两步升级（v2.4.3）
+
+**目标**：硬门禁。**路径**：分两步，避免「一改就红一片、逼出绕过」。
+
+| 步骤 | 开关 | 行为 |
+|---|---|---|
+| 第一步（默认，本轮生效） | 无 | `INFO` + 阈值观测：报告实际数量，超过 `GATE_FMT_MAX`（默认 0）时提示可升级，**不阻断** |
+| 第二步（待确认后翻） | `-S` 或 `GATE_STRICT_FMT=1` | **硬门禁**：任何超过阈值即 `FAIL` 阻断 |
+
+实测（合流树，全仓 `gofmt -l` 已归零）：
+- 默认：`[1b] ... INFO (0 文件待格式化（已达硬门禁标准，下一步 -S 即可翻）)`，计分 **PASS 12**。
+- `sh scripts/gate.sh -S`：`[1b] ... PASS (0 文件待格式化（阈值 0）)`，计分 **PASS 13 / FAIL 0 / SKIP 1**。
+
+即：**升级机制已就位并双侧验证**；是否把默认翻成严格，待再观察一轮（本轮不翻）。
 
 白名单文件（§3 各节与既有 Schema 的默认路径）：任务书 G8 的 10 个受保护文件 `kernel/multihop.go`、`kernel/rank_fusion.go`、`kernel/lifecycle.go`、`kernel/voting.go`、`kernel/model.go`、`kernel/goal.go`、`kernel/embedder.go`、`kernel/storage.go`、`kernel/backend_sqlite.go`、`kernel/backend_pg.go`，另加 C1/A 路的 `kernel/displacement_edge.go`、`kernel/router.go`——共 12 文件，逐文件 `diff -q` 一致。`eval/holdout/holdout_v2.jsonl` 与 `eval/vectors/` 亦未改动。
 
@@ -1783,10 +1822,13 @@ M1=1.0000、M2=0.2498、压缩 35.33%、FP vetoed=0 **逐项一致**；`polaris_
 
 ### D.6 未闭环事项（留 R16）
 
-- §5.4.1 的 PostgreSQL 真机往返：R15 已补 `kernel/edge_persist_pg_test.go` 与 `eval/e2e/pg/setup_edge_persist.sh`，覆盖建边→软删→Save→Load→逐条断言、幂等、软删保留、created_at/invalidated_at 逐位保真、DDL 只增不改、scope 隔离、唯一约束、并发安全。**注意该套件在 `gate.sh` 之外**：需手动设 `LIGHTMEM_PG_HOST` / `LIGHTMEM_PG_TEST_DB` 才会真跑，否则 13 项全 SKIP（红线 12）。0.88 实测（PG 18，127.0.0.1:5432）：**13 PASS / 0 SKIP**。
-- 门禁 [1b] 报出的 4 个既有文件待 gofmt：R15 **已收掉**（0.88 上 `gofmt -w`，全仓 `gofmt -l` 归零）。
-- 报告体积拆分：R15 已立约定（`eval/reports/r15d_report_split_convention.md` + `.gitignore` 加 `*.detail.jsonl`），**下一轮**北极星产出时执行。
+- **R10-B 既有 e2e 套件在配置 PG 后失败（本轮新发现，非本轮引入）**：`eval/e2e/pg/pg_e2e_test.go` 的 `TestPg*` 需 `memories` 表，且有两类真实缺陷——① `confidence` 列 `real`(float32) 与 `model.Confidence` `float64` 精度不匹配；② `eval/scripts/r10_pg_setup.sh` 用 `$$` 生成库名，`create` / `name` 两次调用库名不一致，无法串起建库→测试。**已在 R14 基线复现同样失败**。影响：配置 PG 后 `gate.sh` 的 `[4]` 会 FAIL（这是「配置后硬阻断」的正常告警，不是 `[11]` 缺陷）。修 R10-B 套件属独立欠账。
+- §5.4.1 的 PostgreSQL 真机往返：R15 已补 `kernel/edge_persist_pg_test.go` 与 `eval/e2e/pg/setup_edge_persist.sh`，并在 R15 后续（v2.4.3）**纳入门禁 `[11]`**（策略：显式 SKIP / 配置后硬阻断）。该套件自包含（自带 `CREATE TABLE IF NOT EXISTS`），实测在空库上 13 项全 PASS。
+- 门禁 [1b] 报出的 4 个既有文件待 gofmt：R15 **已收掉**（0.88 上 `gofmt -w`，全仓 `gofmt -l` 归零）；随后升级机制已就位（默认 INFO + 阈值观测 / `-S` 硬门禁），**待再观察一轮后翻默认**。
+- 报告体积拆分：R15 已立约定（`eval/reports/r15d_report_split_convention.md` + `.gitignore` 加 `*.detail.jsonl`），**用户裁定本轮不执行**，下一轮与「是空」全量清单、`tests/` 门禁、scratch 评审一起排期。
 - `lightmem.md` 版本表已由主 Agent 在合流时统一追加一条 v2.4.2（四路共用）。
+- **A 路真实攻击面未测 / 检测性能未基准**（用户裁定记为欠账）：等 PG 门禁与 `tests/` 门禁稳定后再排。
+- **C 路 `holdout_v3` 只做补充、不替换 `holdout_v2`**：替换需另行口径评审。
 
 ### D.7 更正记录（R15 新增，如实登记）
 
