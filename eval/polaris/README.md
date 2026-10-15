@@ -116,3 +116,31 @@ M1·M2 累计器，全纯函数确定性）。
 | `compress_light.go` | 控制面压缩规则（R1-R6）+ 压缩前后对比报告 |
 | `gen_holdout_proxy.go` | 代理语料生成器（`//go:build ignore`） |
 | `polaris_test.go` | 确定性单测 |
+
+## 7. 投毒检测评测入口（R15-A，独立于北极星）
+
+`polaris_injection.go` 是**独立的对抗评测入口**，不复用 M1/M2 累计器，
+也不改动 `eval/holdout/holdout_v2.jsonl`——北极星分母只含真实 query，
+对抗样本不能进北极星（见 §3 说明）。
+
+```sh
+cd /tmp/r15a/lightmem
+go run eval/polaris/polaris_injection.go \
+  -injection eval/dataset/injection_v2.jsonl \
+  -benign  eval/dataset/benign_near.jsonl \
+  -report r15a_injection -reports-dir eval/reports -now-fixed 2026-10-15
+```
+
+- 指标：`recall`（对抗检出率，分母 = 对抗样本数）、`precision`、
+  `false_positive_rate`（良性近似误报率，分母 = 良性样本数），另附
+  `severity_distribution` 与按规则（`by_rule`）/按模式（`by_pattern`）的命中明细。
+  **不输出 M1 / M2**：口径与本包主程序不可比，也互不证明。
+- 语料：`injection_v2.jsonl`（342 条：17 类对抗模式各 20 条 + 2 条零宽变体）、
+  `benign_near.jsonl`（300 条：15 类良性近似，如「忽略不计」「请记住这份合同」
+  「请执行已知函数」「同步到共享文件夹」）。`provenance` 一律留空——检测器只看正文。
+- 确定性（红线 5）：无 `time.Now()`、无随机源、规则表按 ID 字典序静态声明、
+  Signals 显式排序；同语料同配置复跑逐位一致。
+- `-indirect` 开间接面加权（引文/证据块形态），`-enable-repeat` 开重复嫌疑加权；
+  两者默认关，关闭时与 `kernel.DefaultPoisonDetectConfig()` 行为一致。
+- R15-A 实测：recall 1.0000（342/342）、precision 1.0000、fpr 0.0000（0/300）。
+  这是自建对抗语料上的结果，不是真实攻击面的检出率。

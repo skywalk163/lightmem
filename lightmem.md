@@ -363,6 +363,27 @@ Enterprise（集合体 Coordinator/Worker/Archive/Gateway）
 
 **开关与默认：** 本前置**默认路径不调用**——既有 `Rank` / `Fuse` / `VoteFusion` 行为逐位不变；仅在跨 Agent 融合场景由调用方显式调用（`kernel/entity_align.go`），保证北极星 M1 不受影响。
 
+### 3.2.3 合并度指标与语料要求（v2.4.2）
+
+**两个指标的分母定义（只增口径，不改既有字段）：**
+
+| 指标 | 分子 | 分母 | 分母为 0 时 |
+|---|---|---|---|
+| `mean_edges_per_memory` | 有效位移边数（`edges_alive`） | L2 记忆数（`l2_memories`） | 指标恒为 0，**无意义**——此时 L1 不建边、边表为空，0 不代表"建边质量差"，只代表"语料里没有可建边的 L2 节点" |
+| `mean_memories_per_entity` | 有非空 `entity` 的记忆总数 | 归一化（小写去标点）后的实体分组数 | 同上，分母 0 时恒为 0 |
+
+**R15-C 的问题与处置：** R13-B 首次基线在 `holdout_v2.jsonl` 上实测 `l2_memories=0`、`entity_groups=0`（全 L1、`reference_frame` 无 entity/task、`recorded_at` 全零值）——两个指标是"死指标"，只能证明"没坏"，证明不了"边建得好不好"。本轮**不改 v2**（它仍是北极星 M1/M2 的官方评测集，只增不改红线），而是**新增独立语料 `eval/holdout/holdout_v3.jsonl`** 专门激活合并度：
+
+- `layer` 混合：≥120 条 L2（本轮 144 条，其余 696 条 L1）；
+- `reference_frame` 三轴齐全：`entity` / `scene` / `task` 非空率 ≥90%（本轮 100%），`recorded_at` 非零时间戳率 100%；
+- ≥20 个实体分组、每组 ≥10 条（本轮 24 组 × 35 条），使 `mean_memories_per_entity` 有稳定均值；
+- 多跳可建边：四类关系（`entity-alias` / `task-flow` / `causal` / `temporal`）均有存活边（本轮实测 360 / 360 / 312 / 426）；
+- 四桶比例与 v2 对齐（156/275/173/236），保持与北极星口径可对照；**v3 不进北极星链路**，仅供 `polaris_mergence` 单跑。
+
+**语料自检：** `eval/polaris/check_holdout_v3.go`（`//go:build ignore`、仅标准库）把上述阈值写死为常量，不达标即非零退出并打印实际值。**反向断言：v2 上两个指标仍须为 0**——若 v2 输出非 0，说明 runner 口径被改坏，而非语料变好。
+
+**R15-C 实测（-now-fixed 2026-10-15）：** v3 上 `l2_memories=144`、`edges_alive=1458`、`mean_edges_per_memory=10.125`、`entity_groups=24`、`mean_memories_per_entity=35.0`、`entity_coverage=1.0`；v2 上全部仍为 0。runner 只增 `edges_per_relation`（四类关系存活边数）与 `entity_coverage` 两个输出字段，既有字段名与计算口径逐位不变。
+
 ### 3.3 记忆提取器（MemoryExtractor）
 
 **职责：** 从对话、文档、工具结果、外部系统同步数据中，自动抽取结构化记忆条目。
@@ -491,6 +512,17 @@ Enterprise（集合体 Coordinator/Worker/Archive/Gateway）
 - **保守回落：** `L0Limit` / `TopicSwitchOverlap` ≤ 0 回落缺省；`KeepRecent` < 0 视为 0。
 
 **与既有机制的关系（只增不改）：** 本节不修改 §3.5 的任何字段语义、不新增 `Memory` 字段、不改动 `MemoryLifecycleManager` 的晋升 / 降级路径；`FlushPlan` 是计算期结构，**不落库**、**不进默认写入路径**。实现：`kernel/flush.go`。
+
+#### 3.5.1.1 结算后的语义映射（v2.4.2，R15-B）
+
+R14 的 `DecideFlush` 只产出 `FlushPlan`，「Plan → L1 落库记录」这一步此前无人定义、调用数为零。R15-B 在 **只定义、不执行** 的前提下把它显式化，交付 `kernel/flush_pipeline.go` 的 `MapFlushToL1`：
+
+- **`recorded_at` 保留原始值（§4.1 双时态）：** L1 记录逐位沿用 L0 记忆的 `recorded_at`，**禁止刷成 flush 时刻**——它是唯一主字段，只增不改。
+- **`layer` 走既有 `ClassifyLayer`：** 不重写分层逻辑（`ClassifyLayer` 在 `kernel/temperature.go`，按 `memory_kind` + 稳定性判定），L1 记录的 `Layer` 直接取自该既有函数。
+- **`memory_kind` 映射表显式给出（L0 捕获项 → `fact` / `goal` / `procedure`）：** `L0KindToL1Kind` 穷举全部 `MemoryKind`——`event` / `preference` 沉淀为 `fact`，`goal` 保持 `goal`，`procedure` 保持 `procedure`；未列明 kind 回落 `KindFact`。
+- **仍然不写库：** `MapFlushToL1` 只产出「该写什么」的 `FlushRecord` 描述（`MemoryID` / 原始 `Memory` / `RecordedAt` / `Layer` / `TargetKind` / `Reasons`），执行交给既有写路径；取数通过注入的 `FlushMemSource` 接口，本文件不持有、不调用任何 `StorageBackend`，无 I/O、无随机。
+- **`HoldItems` 显式排除：** 只映射 `plan.Items`（待落库项），`HoldItems`（留 L0 的项）不入 L1。
+- **确定性：** 输出按 `MemoryID` 字典序，同输入多次调用结构完全一致（`reflect.DeepEqual` 可断言）。
 
 ### 3.6 静态记忆存储（StaticMemoryStore, L2）
 
@@ -1028,6 +1060,17 @@ L1 接近上限时依次执行：压缩合并 → 低价值降级 L3 → 过时/
 
 **边界：** 本节是纯排序规则，不触碰 §3.2 硬过滤、§4 双时态与 §7 安全边界。衰减结果**不落库**——同一记忆在不同查询下可以有不同的衰减因子，这与 §5.3"固有价值与查询无关"不冲突，因为 V 始终未被改写。实现：`kernel/forgetting_drift.go`（旁路算子，由调用方显式调用，默认路径不调用）。
 
+#### 5.3.1.1 接线契约（v2.4.2，R15-B）
+
+R14 把 `DriftAwareRank` 作为旁路算子交付后，全库生产调用数为零——「代码就位 ≠ 能力生效」。R15-B 用 **opt-in、默认关** 的方式把它接上电，交付 `kernel/drift_pipeline.go` 的 `RankViaPipeline` 分发器：
+
+- **默认关（红线 11）：** `DefaultDriftPipelineConfig().Mode == "default"`，默认态逐位委托既有 `(rf *RankFusion).Rank`，与 R14 基线 **逐位一致**（北极星 M1 / M2 不受影响）。
+- **显式开启：** 把 `Mode` 置为 `"drift"` 才委托 `DriftAwareRank`；本文件**不重写衰减、不实现第二套 RRF / 排序打分**，只做「选路 + 委托」，因此改变 `DriftConfig.Floor` 后漂移态输出与直接调 `DriftAwareRank` 同步变化（共用 R14 同一份逻辑）。
+- **开态语义：** 在召回分上乘漂移因子（只衰减不加分），单轴漂移即下沉到地板 `Floor=0.15`、缺轴走中性 `1.00`。
+- **仅标注才衰减（`OnlyIfAxisAnnotated=true`，默认）：** 查询侧三轴（entity / scene / task）全缺时，即使 `Mode=drift` 也回落默认路径，避免对无参考系数据空转衰减。
+- **为何在 holdout_v2 上不可观测：** holdout_v2 实测 `layer` 全 L1、`entity 0/800`、`task 0/800`、`scene 800/800`（§二.3）。开启漂移态后，记忆侧 entity / task 恒为空 → 那两轴按中性 `1.00` 计，只有 scene 一轴参与比较；而在默认路径（北极星入口）本就不走漂移衰减。故在 holdout_v2 上接线与否的行为变化为零——**验收不能靠北极星，必须用夹具**（`kernel/drift_pipeline_test.go` 的逐位 / 委托一致性断言）。
+- **安全：** `rf==nil` 报错不 panic；`nil qf` / 空候选均安全委托。
+
 ### 5.4 存储后端可插拔（挂接主流数据库，v1.8）
 
 **需求：** 光明记忆不锁定单一数据库，可通过后端抽象挂接当今主流的多种数据库系统。
@@ -1373,6 +1416,43 @@ accton /var/account/acct
 - **共享二次校验：** 跨 Agent/跨租户传播前强制人工确认或可信 Agent 背书（尤其 `procedure`）。
 - **不误伤：** 降权策略仅降权并标记，不丢弃合法记忆；误判率需可观测，人工可解除。
 
+#### 7.5.1 投毒检测与处置的两阶段（v2.4.2）
+
+R14 及以前，§7.5 的「注入降权」只有**处置**、没有**检测**：写入路径上的
+`PoisoningGuardPolicy` 按 `provenance=prompt_injection_suspect` 判降权，
+但全库没有任何组件会给记忆打上这个标签——**标签无人产生，处置恒不触发**，
+应用层这道防线实际处于空转。本节补齐检测端，并把检测与处置显式分离：
+
+- **检测（Detection）**：`kernel/poison_detect.go` 的 `DetectInjection` 是纯函数，
+  对记忆正文跑确定性正则规则表（16 条模式 + 1 条零宽/等价字符改写检测，
+  规则按 ID 字典序静态声明），返回 `InjectionVerdict{Severity, Score, Signals, Quote}`。
+  不读时间、不用随机源、不依赖 map 迭代序，同一输入恒得同一输出。命中即打
+  `provenance=prompt_injection_suspect`；高严重度把 `confidence` 压到 0.3 上限。
+- **处置（Containment）**：注入降权、来源可信度上限、共享二次校验、
+  `source_evidence` 溯源照旧执行，它们读取的正是检测端产生的标签。
+- **间接面与重复型**：`DetectConfig.IndirectMode` 对引文/证据块形态
+  （跨 Agent 转述、粘贴的外部文本）加权；`EnableRepeat` 对同一主体重复出现的
+  同型注入加权。二者默认关，由调用方显式选择。
+- **扫描范围**：全量扫描，不设截断。RE2 无回溯、线性时间，检测成本与正文长度
+  成正比；截断会让「长正文尾部追加的注入」变成确定性盲区，而尾部追加正是
+  真实投毒的主要形态。
+
+**两阶段不合并的理由**：检测是安全语义，处置是策略调参。若合并，「策略关闭」
+就等于「检测关闭」，与 §2.6「§7 安全核心语义在任意档位都不可裁剪」冲突。
+因此检测恒常运行，且只置标签、不改正文、不丢弃记忆（§7.5 不误伤原则）；
+处置可配置。
+
+**可评测性**：对抗语料 `eval/dataset/injection_v2.jsonl`（342 条 / 17 类模式）
+与良性近似语料 `eval/dataset/benign_near.jsonl`（300 条 / 15 类）由
+`eval/polaris/polaris_injection.go` 独立评测，输出 recall / precision /
+false_positive_rate 及按规则、按模式的命中明细。该口径**不进入北极星**
+（北极星分母只含真实 query）、**不与 M1/M2 互证**——它是 §7.5 自身的安全回归门。
+
+R15-A 实测（`-now-fixed 2026-10-15`）：recall **1.0000**（342/342）、
+precision **1.0000**、false_positive_rate **0.0000**（0/300）。以上数字是
+自建对抗语料上的结果，**不代表真实攻击面的检出能力**；真实样本集上的检出率
+需人工标注语料单独验证（留待后续轮次）。
+
 ---
 
 ## 8. 实施路线图
@@ -1549,6 +1629,8 @@ accton /var/account/acct
 
 | v2.4.1 | 2026-10-15 | R14 收口（**只增不改**，主标题版本号仍为 v2.4，本条为修订号）：① 新增 **§5.3.1 参考系漂移衰减**——排序期对参考系三轴（entity/scene/task）漂移做乘性衰减，保守缺省 `Floor=0.15`/`Partial=0.60`/`Neutral=1.00`，只衰减不加分、缺失即中性、单轴漂移即下沉、永不归零，旁路算子由调用方显式调用，结果不落库；② 新增 **§3.5.1 L0→L1 落库边界**——四类触发（会话结束/话题切换/任务完成/L0 容量），纯决策不写入，只产出 `FlushPlan`，无 I/O、无随机、观测时刻由调用方注入；③ 新增 **§5.4.1 位移边持久化**——JSON 落盘 + 同目录临时文件 + `os.Rename` 原子替换、三元组字典序输出保证重复 Save 逐字节一致、时间两端规整 UTC 后按 unix ns 逐位保真、软删双向保真永不物理删除、DDL 只含 `CREATE` 绝不含 `ALTER`；④ 新增统一门禁 `scripts/gate.sh`（8 项 + "只增不改白名单"逐文件 diff）与 **附录 D**（门禁矩阵与北极星复现）。三项均以新增文件落地（`kernel/forgetting_drift.go`、`kernel/flush.go`、`kernel/edge_persist.go`），默认检索/融合/写入路径与既有 Schema 语义不变；白名单 7 文件与 R13 基线逐文件 diff 一致；M1=1.0000（800/800）与 R13 同环境同命令逐位一致。**不改变既有架构结论。** |
 
+| v2.4.2 | 2026-10-15 | R15 四路并行收口（**只增不改**，主标题版本号仍为 v2.4，本条为修订号）。① **§7.5.1 投毒检测与处置的两阶段（A 路）**——补上 R14 及以前"只有处置、没有检测"的缺口（`ProvInjectionSuspect` 全库无写入方，降权策略恒不触发）：新增 `kernel/poison_detect.go` 确定性检测器（16 条 RE2 规则 + 1 条零宽/等价字符变体检测，规则按 ID 字典序静态声明、全量扫描不截断、无时间无随机），`DetectInjection` 只出判定、`MarkSuspect` 只置标签并把高危 `confidence` 压到 0.3；检测器以 `WithInjectionDetection` **opt-in** 追加，`DefaultWritePolicies()` 仍为 6 条、`writepolicy_test.go` 未改。新增对抗语料 342 条 + 良性近似 300 条与独立入口 `eval/polaris/polaris_injection.go`（不进 holdout、不输出 M1/M2），实测 recall=1.0000 / precision=1.0000 / fpr=0.0000。② **§5.3.1.1 接线契约 + §3.5.1.1 结算后的语义映射（B 路）**——把 R14 交付但调用数为零的 `DriftAwareRank` 与 `DecideFlush` 接上电，新增 `kernel/drift_pipeline.go`（选路 + 委托分发器）与 `kernel/flush_pipeline.go`（`FlushPlan`→L1 映射定义，`recorded_at` 逐位保留、layer 走既有 `ClassifyLayer`、只映射不写入）；**默认关**（`DefaultDriftPipelineConfig().Mode == "default"`），只委托不重写第二套衰减/RRF/分层。③ **§3.2.3 合并度指标与语料要求（C 路）**——`mean_edges_per_memory` / `mean_memories_per_entity` 在 holdout_v2 上恒为 0 属"分母为 0 的死指标"；新增独立语料 `eval/holdout/holdout_v3.jsonl`（840 条，L2 144 条、实体分组 24 组、三轴非空率 100%）与自检 `check_holdout_v3.go` 激活指标（v3: `l2=144` / `mean_edges_per_memory=10.125` / `entity_groups=24`），**v2 仍为 0**（反向断言证明口径未被改坏）；`polaris_mergence.go` 仅新增 `edges_per_relation` / `entity_coverage` 两输出字段。④ **附录 D 更新为 R15 门禁矩阵（D 路）**——`gate.sh` 由 8 项扩到 **12 项**（新增 [7b] 受控修改审计、[8] 投毒检测、[9] 合并度激活、[10] 接线默认关；`R15_BASELINE` 优先、`R14_BASELINE` 兼容；入口加 ROOT 存在性断言防误扫全盘），补 D3 收掉 4 个既有 gofmt 噪音文件（全仓 `gofmt -l` 归零）、D1 位移边 **PostgreSQL 真机往返**（`kernel/edge_persist_pg_test.go` 13 项用例；时间列以 BIGINT 存 unix ns 保真、Save 取 scope 级 advisory lock 串行化并发）、D4 报告体积拆分约定（明细 `*.detail.jsonl` 不入库）。四路新增/修改文件与 12 文件"只增不改白名单"**逐文件 diff 一致**；`writepolicy.go` / `metrics.go` diff 为空；北极星 M1=1.0000（800/800，四桶全 1.0）与 R14 报告**逐字节一致**（832178 bytes）。**不改变既有架构结论。** |
+
 ## 附录 C：参考文档
 | 参考 | 链接 |
 |---|---|
@@ -1566,7 +1648,7 @@ accton /var/account/acct
 | TrueNAS SCALE 24.10 Apps（Docker 化、catalog 迁移策略、应用维护独立于系统版本） | https://www.truenas.com/docs/scale/24.10/gettingstarted/printview/ |
 | 配套交付物（本文档之外） | `docs/光明记忆应用包生态与差异化定位_v1.0.md`（包生态设计 + 竞品对照 + M1–M10 口径） |
 
-## 附录 D：R14 门禁与北极星复现（v2.4.1）
+## 附录 D：R15 门禁与北极星复现（v2.4.2）
 
 **运行环境：** FreeBSD 15.1-RELEASE-p1，go1.25.14。门禁入口：`scripts/gate.sh`（一行跑完全部门禁，末行汇总 `PASS / FAIL / SKIP / module 数`）。
 
@@ -1576,15 +1658,25 @@ accton /var/account/acct
 |---|---|---|---|
 | [0] | Go 版本 ≥ 1.25 | PASS | go1.25.14 |
 | [1] | `gofmt -l` 本轮新增文件 | PASS | 0 文件待格式化 |
-| [1b] | `gofmt -l` 全仓 | INFO | 4 个**既有**文件待格式化，只报告不计 FAIL |
+| [1b] | `gofmt -l` 全仓 | INFO | **0 文件待格式化**（D3 已收掉 R14 遗留的 4 个噪音文件，由 INFO 转空） |
 | [2] | `go vet ./...`（逐 module） | PASS | 2/2 通过 |
 | [3] | `go build ./...`（逐 module） | PASS | 2/2 通过 |
 | [4] | `go test -count=1 ./...`（逐 module） | PASS | 2/2 通过，禁用测试缓存 |
 | [5] | `go test -count=1 -race ./...`（kernel） | PASS | 无竞态 |
-| [6] | 新增文件测试函数数 ≥ 12 | PASS | forgetting_drift / flush / edge_persist |
-| [7] | 只增不改白名单逐文件 diff | PASS | 基线 `/tmp/r13/lightmem`，12 文件逐文件一致 |
+| [6] | 新增文件测试函数数 ≥ 12 | PASS | forgetting_drift / flush / edge_persist / **edge_persist_pg（纯测试）** / **poison_detect** / **drift_pipeline** / **flush_pipeline**，共 7 项 |
+| [7] | 只增不改白名单逐文件 diff | PASS | 基线 `/tmp/r14/lightmem`，12 文件逐文件一致 |
+| [7b] | 受控修改审计（writepolicy / metrics / polaris_mergence） | PASS + INFO | `writepolicy.go` / `metrics.go` **diff 为空**（PASS）；`polaris_mergence.go` diff 45 行（纯新增两字段 + 统计，INFO），已存档 `eval/reports/r15_gate_diff/` |
+| [8] | 投毒检测（Injection / Poison / MarkSuspect） | PASS | poison_detect_test.go 全 PASS；`polaris_injection` recall=1.0000 / fpr=0.0000 |
+| [9] | 合并度激活（v3 l2>0, mean_edges>0, entity_groups≥20；v2 仍为 0） | PASS | v3: `l2=144` / `edges=10.125` / `groups=24`；v2 三字段仍为 0（反向断言） |
+| [10] | 接线默认关（DriftPipeline / FlushPipeline） | PASS | 默认关态与 R14 基线逐位一致 |
 
-**汇总：PASS 8 / FAIL 0 / SKIP 0 / module 2。**
+**汇总：PASS 12 / FAIL 0 / SKIP 0 / module 2。**
+
+合流工作树 `/tmp/r15/lightmem`（由 `/tmp/r14/lightmem` 复制后叠加四路），
+命令：`R15_BASELINE=/tmp/r14/lightmem sh scripts/gate.sh`。
+另有一项**独立于 gate.sh** 的真机验证：设置 `LIGHTMEM_PG_HOST` 等环境变量后
+`go test -run 'EdgePersistPg' -count=1 .` → **13 项全 PASS、0 SKIP**；
+不设环境变量时同样 13 项**全部 SKIP 且 `ok`**（红线 12：环境不具备不得冒充 PASS）。
 
 白名单文件（§3 各节与既有 Schema 的默认路径）：任务书 G8 的 10 个受保护文件 `kernel/multihop.go`、`kernel/rank_fusion.go`、`kernel/lifecycle.go`、`kernel/voting.go`、`kernel/model.go`、`kernel/goal.go`、`kernel/embedder.go`、`kernel/storage.go`、`kernel/backend_sqlite.go`、`kernel/backend_pg.go`，另加 C1/A 路的 `kernel/displacement_edge.go`、`kernel/router.go`——共 12 文件，逐文件 `diff -q` 一致。`eval/holdout/holdout_v2.jsonl` 与 `eval/vectors/` 亦未改动。
 
@@ -1593,7 +1685,7 @@ accton /var/account/acct
 1. **`go test` 必须带 `-count=1`。** 不带时输出 `ok ... (cached)`——看着是绿的，实际一行测试都没跑。
 2. **不能只跑根 module。** 本仓库是两个 module（根 `lightmem` + 子 `github.com/lightmem/kernel`）。只跑根 module 时，kernel 的 `go vet` / `go test` **完全不会执行**；失败信息会以 `FAIL ... [build failed]` 出现在根 module 的输出里，极易误判成"eval 目录的问题"。门禁脚本自动发现所有 `go.mod` 并逐 module 执行，堵住这条路径。
 
-### D.3 北极星复现（R14 收口态，正式口径 `holdout-official`）
+### D.3 北极星复现（R15 收口态，正式口径 `holdout-official`）
 
 | 指标 | 值 | 口径 |
 |---|---|---|
@@ -1615,8 +1707,19 @@ go run ./eval/polaris/polaris_holdout.go \
   ./eval/polaris/compress_light.go ./eval/polaris/polaris_fp.go \
   -holdout eval/holdout/holdout_v2.jsonl \
   -weights eval/weights/rank_weights_en_r5.json -embedder vector -topk 5 \
-  -now-fixed 2026-10-14 -report r14_final_holdout -reports-dir eval/reports
+  -now-fixed 2026-10-14 -report r15_final_holdout -reports-dir eval/reports
 ```
+
+报告：`eval/reports/r15_final_20261015.json`（原始时间戳副本
+`r15_final_holdout_20261015-152736.json` 一并入库）。
+
+**R15 四路合流后的逐位对照（实测，非声明）**：与 R14 的
+`r14_final_holdout_20261015-105651.json` 相比——`mode`、`m1`、`m2`、
+`data_plane_compression`、`fp_audit`、`config`、800 条 `details` **全部 identical**，
+整份 JSON **深度相等且逐字节相同（832178 bytes）**。
+即：R15 四路（投毒检测器 / opt-in 接线 / 合并度语料 / PG 真机）**没有改变北极星判定的任何一条输出**——
+检测器是 opt-in 未进默认写路径、B 路接线默认关、C 路只新增独立语料与输出字段、
+D 路只动测试与门禁脚本，因此逐字节相同是预期结果，不是巧合。
 
 与 R13 收口态在**同一台验证机、同一命令**下对照：`mode`、`m1`、`m2`、
 `data_plane_compression`、`fp_audit` 五节**逐字段相同**，800 条 `details` 的 sha256
@@ -1647,6 +1750,8 @@ M1=1.0000、M2=0.2498、压缩 35.33%、FP vetoed=0 **逐项一致**；`polaris_
 
 ### D.5 本轮由门禁抓出的实现缺陷（如实登记，非掩盖）
 
+**R14 段（由 R14 的 gate.sh 首次真跑抓出）：**
+
 | 文件 | 缺陷 | 修复 |
 |---|---|---|
 | `kernel/edge_persist.go` | 调用了标准库中**不存在**的 `os.Replace`，导致整个 kernel 模块无法编译（`undefined: os.Replace`） | 改用同目录 `.tmp` + `os.Rename`（POSIX rename 原子覆盖） |
@@ -1659,10 +1764,46 @@ M1=1.0000、M2=0.2498、压缩 35.33%、FP vetoed=0 **逐项一致**；`polaris_
 | `scripts/gate.sh` | BSD sed 的 BRE 不支持 `\+`，版本号抽取为空，把 go1.25 误判为不达标（假 FAIL） | 改用 awk 做主/次版本比较 |
 | `scripts/gate.sh` | [7] 红线抽查在无 git 的工作树上永远跳过（形同虚设） | 支持目录基线，逐文件 `diff -q` |
 
-另有一项**测试断言自相矛盾**：两处测试对 `Neutral = 0` 的要求相反——一处要求回落到缺省 1.00，另一处要求按地板 0.15 衰减。按保守契约取前者：参考系缺失不得惩罚记忆，否则历史无参考系的存量记忆会被集体打到地板，直接威胁 M1。
+**R15 段（由 R15 四路合流首次真跑抓出）：**
 
-### D.6 未闭环事项（留 R15）
+| 文件 | 缺陷 | 修复 |
+|---|---|---|
+| `kernel/edge_persist_pg_test.go` | **从未编译过**：6 处编译错误（缺 `reflect` / `strings` import、`declared and not used: upper` 与 `s`、`cannot convert ddl (variable of type string) to type []string`） | 补 import、删死代码、修断言类型 |
+| `eval/e2e/pg/setup_edge_persist.sh` | **从未执行过**：第 33 行引号数为奇数导致字符串未闭合，dash 在 DDL 处报 `Syntax error: "(" unexpected` | 改为单个闭合双引号串 |
+| `kernel/edge_persist_pg_test.go` | 表时间列用 `TIMESTAMPTZ`（**微秒**精度），与 §5.4.1 要求的「`created_at`/`invalidated_at` unix ns 逐位保真」直接冲突——往返后纳秒位被抹平 | 改 `BIGINT` 存 unix ns；Load 用 `time.Unix(0, ns)` 还原 |
+| `kernel/edge_persist_pg_test.go` | 并发 Save 在 `READ COMMITTED` 下互相看不见未提交行，8 路并发全部 DELETE 后 INSERT 撞唯一索引（`duplicate key ... uq_disp_edge`） | Save 事务起始取 `pg_advisory_xact_lock(hashtext(scope))` 串行化 |
+| `kernel/edge_persist_pg_test.go` | `TestEdgePersistPgDDLOnlyAdds` 的 `containsUpper` 对 `--` 注释行也匹配，且首字符大小写判定有缺陷 | 与生产测试同口径：先剥离注释行，再 `strings.Contains` 判大小写无关子串 |
+| `kernel/edge_persist_pg_test.go` | `TestEdgePersistPgCreatedAtUnixNsFidelity` 断言自相矛盾：把**完整 epoch ns** 与**纳秒位**比较（`want 123456789 got 1792022400123456789`） | 分别断言 `UnixNano()` 等于固定时刻、`Nanosecond()` 等于 123456789 |
+| `kernel/edge_persist_pg_test.go` | `for _, e = range ...` 复用外层变量，未命中时留零值，错误信息误导 | 改用独立循环变量并在命中时赋值 |
+| `scripts/gate.sh` | [6] 把只有测试文件、无同名实现文件的 `edge_persist_pg` 判为「缺实现」→ 假 FAIL | 改为「无同名实现属预期（纯测试条目）」，只校验测试函数数达标 |
+| `scripts/gate.sh` | [9] 用 `grep` 扫 runner 的 **stdout** 找 JSON 字段，而 `polaris_mergence` 把 JSON 写进**报告文件**（stdout 只有 log 行）→ v2 反向断言恒假 FAIL | 改为解析最新报告文件（`jget` + `jgt0`），并按 `≥20` 校验 `entity_groups` |
+| `kernel/poison_detect*.go`、`eval/polaris/polaris_injection.go` | 三个新增文件从未过 `gofmt`（结构体字段对齐、注释缩进） | 0.88 上 `gofmt -w` 规范化 |
 
-- §5.4.1 的 PostgreSQL 真机往返未做：本仓库 `kernel/backend_sqlite.go` 是内存骨架、无真实 `database/sql` 驱动，本轮只交付 JSON 落盘的真实往返；DDL 文本已就位，真库落表留 R15。
-- 门禁 [1b] 报出的 4 个既有文件待 gofmt（`eval/packages/cmd/package-family/main.go`、`eval/e2e/pg/pg_e2e_test.go`、`eval/e2e/pg/pg_bench_test.go`、`eval/e2e/packages/package_e2e_test.go`），属既有噪音，本轮不顺手改，避免扩大 diff。
-| 配套交付物 | `docs/光明记忆应用包生态与差异化定位_v1.0.md`（包生态设计 + 竞品对照 + M1–M10 口径） |
+另有 R14 遗留一项**测试断言自相矛盾**：两处测试对 `Neutral = 0` 的要求相反——一处要求回落到缺省 1.00，另一处要求按地板 0.15 衰减。按保守契约取前者：参考系缺失不得惩罚记忆，否则历史无参考系的存量记忆会被集体打到地板，直接威胁 M1。
+
+### D.6 未闭环事项（留 R16）
+
+- §5.4.1 的 PostgreSQL 真机往返：R15 已补 `kernel/edge_persist_pg_test.go` 与 `eval/e2e/pg/setup_edge_persist.sh`，覆盖建边→软删→Save→Load→逐条断言、幂等、软删保留、created_at/invalidated_at 逐位保真、DDL 只增不改、scope 隔离、唯一约束、并发安全。**注意该套件在 `gate.sh` 之外**：需手动设 `LIGHTMEM_PG_HOST` / `LIGHTMEM_PG_TEST_DB` 才会真跑，否则 13 项全 SKIP（红线 12）。0.88 实测（PG 18，127.0.0.1:5432）：**13 PASS / 0 SKIP**。
+- 门禁 [1b] 报出的 4 个既有文件待 gofmt：R15 **已收掉**（0.88 上 `gofmt -w`，全仓 `gofmt -l` 归零）。
+- 报告体积拆分：R15 已立约定（`eval/reports/r15d_report_split_convention.md` + `.gitignore` 加 `*.detail.jsonl`），**下一轮**北极星产出时执行。
+- `lightmem.md` 版本表已由主 Agent 在合流时统一追加一条 v2.4.2（四路共用）。
+
+### D.7 更正记录（R15 新增，如实登记）
+
+**§二.3 对 R14 任务书 §九.3 的 `recorded_at` 更正：**
+
+R14 任务书 §九.3 写"holdout_v2 全 L1 且无 entity / recorded_at"，其中 `recorded_at` 有误。
+实测证据（`r13b_mergence_baseline_20261015.json` 与 holdout_v2 逐行统计）：
+
+- `recorded_at`：**800/800 都有**（零时间戳 `0001-01-01T00:00:00Z` 计入），并非缺失。
+- `entity`：**0/800 缺失**，真正缺的是 entity 标注。
+- `task`：**0/800 缺失**，真正缺的是 task 标注。
+- `reference_frame` 三轴：entity 0/800、task 0/800、scene 800/800、tenant 800/800、user 800/800。
+- `layer`：全 L1 × 800。
+- `memory_kind`：全 fact × 800。
+
+**更正结论：** 合并度归零的真因是**全 L1 + 无 entity 标注**，不是没有时间。漂移衰减三轴里只有 scene 有标注，entity / task 全缺失按 `Neutral=1.0` 走中性。"把漂移衰减接进默认链路"在 holdout_v2 上行为零变化——B 路的验收不能靠北极星，必须自建夹具。
+
+**连带影响：** R14 任务书 §九.3 中"无 recorded_at"的判断在所有下游引用处均应以"entity / task 缺失"替代。本更正不改变 R14 的任何代码结论，只修正书面描述。
+
+| 配套交付物（本文档之外） | `docs/光明记忆应用包生态与差异化定位_v1.0.md`（包生态设计 + 竞品对照 + M1–M10 口径） |

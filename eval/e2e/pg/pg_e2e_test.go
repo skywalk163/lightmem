@@ -118,7 +118,7 @@ func makeTestMemory(id, tenant, user, fact string) *kernel.Memory {
 		UserID:         user,
 		Visibility:     kernel.VisPrivate,
 		Permission:     kernel.Permission{Owner: user},
-		MemoryKind:      kernel.KindFact,
+		MemoryKind:     kernel.KindFact,
 		Fact:           fact,
 		Confidence:     0.9,
 		Source:         "r10b-e2e",
@@ -244,7 +244,7 @@ func TestPgQueryVectorSearch(t *testing.T) {
 			h = h*31 + uint32(c)
 		}
 		for i := 0; i < 32; i++ {
-			vec[i] = float32((h >> uint(i%16)) & 0x7F) / 127.0
+			vec[i] = float32((h>>uint(i%16))&0x7F) / 127.0
 		}
 		return vec, nil
 	}

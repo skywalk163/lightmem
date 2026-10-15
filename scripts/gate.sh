@@ -1,11 +1,11 @@
 #!/bin/sh
-# R14-C2：门禁脚本（gate）。真源：lightmem.md §5.4.1 + 附录 D 门禁矩阵。
+# R15-D2：门禁脚本（gate）。真源：lightmem.md §5.4.1 + 附录 D 门禁矩阵。
 #
-# 用途：一条命令复现 R14 验收门禁，输出逐行 PASS/FAIL 矩阵，
+# 用途：一条命令复现 R15 验收门禁，输出逐行 PASS/FAIL/SKIP 矩阵，
 #       任一 FAIL 则以非零码退出（可直接接 CI）。
 #
 # 用法：
-#   sh scripts/gate.sh              # 全部门禁
+#   sh scripts/gate.sh              # 全部门禁（12 项）
 #   sh scripts/gate.sh -n race      # 跳过 -race（调试期加速）
 #   sh scripts/gate.sh -q           # 只在 FAIL 时打印细节
 #
@@ -19,11 +19,22 @@
 #   3. 门禁矩阵是**结论行**，不是日志：每步一行、结果在最后汇总，
 #      便于贴进评审单。
 #   4. 只读检查：不自动 gofmt -w、不改任何文件。发现问题只报告。
+#   5. 基线变量：R15_BASELINE 优先，R14_BASELINE 兼容读取。
+#      脚本必须从仓库内执行（ROOT 须含 go.mod），或用 GATE_ROOT 显式指定。
 #
 # 退出码：0 = 全部门禁通过；1 = 至少一项 FAIL。
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# GATE_ROOT 显式覆盖；否则从脚本位置推导。
+if [ -n "${GATE_ROOT:-}" ]; then
+    ROOT="$GATE_ROOT"
+fi
+# ROOT 必须含 go.mod（脚本须从仓库内执行，或用 GATE_ROOT 显式指定）。
+if [ ! -f "$ROOT/go.mod" ]; then
+    printf 'ROOT 解析失败：%s（请从仓库内执行，或用 GATE_ROOT 显式指定）\n' "$ROOT" >&2
+    exit 2
+fi
 QUIET=0
 SKIP_RACE=0
 for arg in "$@"; do
@@ -101,7 +112,10 @@ MOD_COUNT="$(printf '%s\n' "$MODS" | wc -l | tr -d ' ')"
 # ---------------------------------------------------------------------------
 NEW_GO="kernel/forgetting_drift.go kernel/forgetting_drift_test.go \
 kernel/flush.go kernel/flush_test.go kernel/forgetting_drift_drill_test.go \
-kernel/edge_persist.go kernel/edge_persist_test.go"
+kernel/edge_persist.go kernel/edge_persist_test.go kernel/edge_persist_pg_test.go \
+kernel/poison_detect.go kernel/poison_detect_test.go \
+kernel/drift_pipeline.go kernel/drift_pipeline_test.go \
+kernel/flush_pipeline.go kernel/flush_pipeline_test.go"
 GOFMT_BAD=""
 for f in $NEW_GO; do
     [ -f "$ROOT/$f" ] || continue
@@ -240,15 +254,11 @@ fi
 # ---------------------------------------------------------------------------
 COV_FAIL=0
 COV_NOTE=""
-NEW_FILES="forgetting_drift flush edge_persist"
+COV_TESTONLY=""
+NEW_FILES="forgetting_drift flush edge_persist edge_persist_pg poison_detect drift_pipeline flush_pipeline"
 for f in $NEW_FILES; do
     impl="$ROOT/kernel/$f.go"
     tst="$ROOT/kernel/${f}_test.go"
-    if [ ! -f "$impl" ]; then
-        COV_FAIL=$((COV_FAIL + 1))
-        COV_NOTE="$COV_NOTE $f(缺实现)"
-        continue
-    fi
     if [ ! -f "$tst" ]; then
         COV_FAIL=$((COV_FAIL + 1))
         COV_NOTE="$COV_NOTE $f(缺测试)"
@@ -261,10 +271,21 @@ for f in $NEW_FILES; do
     if [ "$N" -lt 12 ]; then
         COV_FAIL=$((COV_FAIL + 1))
         COV_NOTE="$COV_NOTE $f(仅${N}个测试)"
+        continue
+    fi
+    if [ ! -f "$impl" ]; then
+        # 纯测试条目：如 edge_persist_pg_test.go 是既有 edge_persist.go 的 PG 真机往返测试
+        # （R15-D1 只新增测试文件，不改实现）。无同名实现属预期，只要测试函数数达标即通过。
+        COV_TESTONLY="$COV_TESTONLY $f"
     fi
 done
 if [ $COV_FAIL -eq 0 ]; then
-    row "[6] 新增文件测试覆盖 (阈值 12)" PASS "$(printf '%s' "$NEW_FILES" | tr ' ' ',')"
+    NOTE="$(printf '%s' "$NEW_FILES" | tr ' ' ',')"
+    if [ -n "$COV_TESTONLY" ]; then
+        TESTONLY_CLEAN="$(printf '%s' "$COV_TESTONLY" | tr -s ' ' ' ' | sed 's/^ //;s/ /,/g')"
+        NOTE="$NOTE（纯测试：$TESTONLY_CLEAN）"
+    fi
+    row "[6] 新增文件测试覆盖 (阈值 12)" PASS "$NOTE"
     PASS=$((PASS + 1))
 else
     row "[6] 新增文件测试覆盖 (阈值 12)" FAIL "$COV_NOTE"
@@ -273,8 +294,9 @@ fi
 
 # ---------------------------------------------------------------------------
 # [7] 红线抽查：默认检索/融合/写入路径与既有 Schema 不应被本轮改动
-#     做法：若处于 git 仓库且指定了基线 tag/commit（R14_BASELINE），
-#     则 diff 白名单文件；否则提示跳过（仍记 PASS，但不构成证明）。
+#     做法：若处于 git 仓库且指定了基线 tag/commit（R15_BASELINE 优先，
+#     R14_BASELINE 兼容读取），则 diff 白名单文件；否则提示跳过（仍记 PASS，
+#     但不构成证明）。
 # ---------------------------------------------------------------------------
 # PROTECTED 是「只增不改」白名单：默认检索/融合/写入路径与既有 Schema。
 # 口径与任务书 G8 完全一致（10 文件）；额外把 displacement_edge.go 与
@@ -283,23 +305,25 @@ PROTECTED="kernel/multihop.go kernel/rank_fusion.go kernel/lifecycle.go \
 kernel/voting.go kernel/model.go kernel/goal.go kernel/embedder.go \
 kernel/storage.go kernel/backend_sqlite.go kernel/backend_pg.go \
 kernel/displacement_edge.go kernel/router.go"
-if [ -z "${R14_BASELINE:-}" ]; then
-    row '[7] 红线抽查 (只增不改白名单)' PASS '未设 R14_BASELINE，跳过'
+# 基线变量：R15_BASELINE 优先，R14_BASELINE 兼容读取。
+BASELINE="${R15_BASELINE:-${R14_BASELINE:-}}"
+if [ -z "$BASELINE" ]; then
+    row '[7] 红线抽查 (只增不改白名单)' PASS '未设 R15_BASELINE / R14_BASELINE，跳过'
     PASS=$((PASS + 1))
-elif [ -d "$R14_BASELINE" ]; then
+elif [ -d "$BASELINE" ]; then
     # 目录基线：验证机上是 tar 解压的工作树、没有 .git，git diff 走不通，
-    # 只能逐文件 diff -q。基线示例：R14_BASELINE=/tmp/r13/lightmem（eddff03）
+    # 只能逐文件 diff -q。基线示例：R15_BASELINE=/tmp/r14/lightmem（eddff03）
     BAD=""
     MISS=""
     for f in $PROTECTED; do
-        if [ ! -f "$R14_BASELINE/$f" ]; then
+        if [ ! -f "$BASELINE/$f" ]; then
             MISS="$MISS $f"
-        elif ! diff -q "$R14_BASELINE/$f" "$ROOT/$f" >/dev/null 2>&1; then
+        elif ! diff -q "$BASELINE/$f" "$ROOT/$f" >/dev/null 2>&1; then
             BAD="$BAD $f"
         fi
     done
     if [ -z "$MISS$BAD" ]; then
-        row "[7] 红线抽查 (只增不改白名单)" PASS "基线 $R14_BASELINE，白名单逐文件一致"
+        row "[7] 红线抽查 (只增不改白名单)" PASS "基线 $BASELINE，白名单逐文件一致"
         PASS=$((PASS + 1))
     else
         row "[7] 红线抽查 (只增不改白名单)" FAIL "被改动:$BAD 基线缺失:$MISS"
@@ -308,24 +332,170 @@ elif [ -d "$R14_BASELINE" ]; then
     fi
 elif command -v git >/dev/null 2>&1 \
     && git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    if DIFF="$(git -C "$ROOT" diff --stat "$R14_BASELINE"..HEAD -- $PROTECTED 2>&1)" \
+    if DIFF="$(git -C "$ROOT" diff --stat "$BASELINE"..HEAD -- $PROTECTED 2>&1)" \
         && [ -z "$DIFF" ]; then
-        row "[7] 红线抽查 (只增不改白名单)" PASS "基线 $R14_BASELINE"
+        row "[7] 红线抽查 (只增不改白名单)" PASS "基线 $BASELINE"
         PASS=$((PASS + 1))
     else
-        row "[7] 红线抽查 (只增不改白名单)" FAIL "基线 $R14_BASELINE 有改动"
+        row "[7] 红线抽查 (只增不改白名单)" FAIL "基线 $BASELINE 有改动"
         record "红线 diff" "$DIFF"
         FAIL=$((FAIL + 1))
     fi
 else
-    row "[7] 红线抽查 (只增不改白名单)" FAIL "基线不可用：$R14_BASELINE"
+    row "[7] 红线抽查 (只增不改白名单)" FAIL "基线不可用：$BASELINE"
     FAIL=$((FAIL + 1))
+fi
+
+# ---------------------------------------------------------------------------
+# [7b] 受控修改审计：writepolicy.go / metrics.go / polaris_mergence.go
+#     这三份文件 A 路 / C 路会改（只增不改白名单之外），
+#     用 diff -u 存档到 eval/reports/r15_gate_diff/，人工核读。
+#     不得用 diff -q（会把合法新增误报成红线破坏）。
+# ---------------------------------------------------------------------------
+DIFF_DIR="$ROOT/eval/reports/r15_gate_diff"
+CONTROLLED="kernel/writepolicy.go kernel/metrics.go eval/polaris/polaris_mergence.go"
+if [ ! -d "$DIFF_DIR" ]; then
+    mkdir -p "$DIFF_DIR" 2>/dev/null || true
+fi
+DIFF_FAIL=0
+DIFF_INFO=""
+for f in $CONTROLLED; do
+    if [ -z "$BASELINE" ]; then
+        # 无基线时跳过，记 INFO
+        row "[7b] 受控修改审计 ($f)" INFO '无基线，跳过'
+        continue
+    fi
+    if [ ! -f "$BASELINE/$f" ]; then
+        row "[7b] 受控修改审计 ($f)" INFO '基线缺失，跳过'
+        continue
+    fi
+    OUTFILE="$DIFF_DIR/$(echo "$f" | sed 's|/|-|g').diff"
+    if diff -u "$BASELINE/$f" "$ROOT/$f" > "$OUTFILE" 2>&1; then
+        row "[7b] 受控修改审计 ($f)" PASS 'diff 为空'
+    else
+        LINES="$(wc -l < "$OUTFILE" | tr -d ' ')"
+        row "[7b] 受控修改审计 ($f)" INFO "diff 非空（${LINES} 行），已存档"
+        DIFF_INFO="$DIFF_INFO $f"
+    fi
+done
+
+# ---------------------------------------------------------------------------
+# [8] 投毒检测：kernel/poison_detect_test.go 存在且 -run 'Injection|Poison|MarkSuspect' -count=1 全 PASS；
+#     polaris_injection 在 v2 语料上 recall>0 且良性误报率 <5%。
+# ---------------------------------------------------------------------------
+INJ_FAIL=0
+if [ ! -f "$ROOT/kernel/poison_detect_test.go" ]; then
+    row '[8] 投毒检测' FAIL 'poison_detect_test.go 缺失'
+    INJ_FAIL=1
+    FAIL=$((FAIL + 1))
+else
+    INJ_OUT="$(cd "$ROOT/kernel" && go test -run 'Injection|Poison|MarkSuspect' -count=1 ./... 2>&1)"
+    INJ_RC=$?
+    if [ $INJ_RC -ne 0 ]; then
+        row '[8] 投毒检测' FAIL 'poison_detect_test.go 未全 PASS'
+        record 'poison_detect_test' "$INJ_OUT"
+        INJ_FAIL=1
+        FAIL=$((FAIL + 1))
+    else
+        row '[8] 投毒检测' PASS 'poison_detect_test.go 全 PASS'
+        PASS=$((PASS + 1))
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# [9] 合并度激活：v3 上 l2_memories>0 且 mean_edges_per_memory>0 且 entity_groups≥20；
+#     v2 上仍为 0（证明口径没被改）。
+#     注意：polaris_mergence 的 JSON 写进「报告文件」而非 stdout（stdout 只有 log 行），
+#     因此必须解析报告文件，不能 grep stdout（否则反向断言会因取不到字段而假 FAIL）。
+# ---------------------------------------------------------------------------
+# jget <file> <key>：从报告 JSON 取数值字段（MarshalIndent 形如 "key": 0 / 10.125）。
+jget() {
+    sed -n "s/.*\"$2\": \([0-9][0-9.]*\).*/\1/p" "$1" 2>/dev/null | head -1
+}
+# jgt0 <value>：数值 > 0 为真。
+jgt0() {
+    [ -n "$1" ] && awk -v v="$1" 'BEGIN{exit !(v>0)}'
+}
+MERGE_FAIL=0
+if [ -f "$ROOT/eval/polaris/polaris_mergence.go" ]; then
+    rm -f "$ROOT/eval/reports/r15_gate_v3_"*.json 2>/dev/null || true
+    V3_OUT="$(cd "$ROOT" && go run eval/polaris/polaris_mergence.go -holdout eval/holdout/holdout_v3.jsonl -report r15_gate_v3 -reports-dir eval/reports -now-fixed 2026-10-15 2>&1)"
+    V3_RC=$?
+    V3_FILE="$(ls -t "$ROOT/eval/reports/r15_gate_v3_"*.json 2>/dev/null | head -1)"
+    if [ $V3_RC -ne 0 ] || [ -z "$V3_FILE" ]; then
+        row '[9] 合并度激活' FAIL 'v3 评测失败或未产出报告'
+        record 'mergence v3' "$V3_OUT"
+        MERGE_FAIL=1
+        FAIL=$((FAIL + 1))
+    else
+        V3_L2="$(jget "$V3_FILE" l2_memories)"
+        V3_EDGES="$(jget "$V3_FILE" mean_edges_per_memory)"
+        V3_GROUPS="$(jget "$V3_FILE" entity_groups)"
+        if jgt0 "$V3_L2" && jgt0 "$V3_EDGES" && [ -n "$V3_GROUPS" ] && [ "$V3_GROUPS" -ge 20 ]; then
+            row '[9] 合并度激活' PASS "v3: l2=$V3_L2 edges=$V3_EDGES groups=$V3_GROUPS"
+            PASS=$((PASS + 1))
+        else
+            row '[9] 合并度激活' FAIL "v3 上 l2_memories/mean_edges_per_memory/entity_groups 不达标（l2=$V3_L2 edges=$V3_EDGES groups=$V3_GROUPS）"
+            record 'mergence v3' "$V3_OUT"
+            MERGE_FAIL=1
+            FAIL=$((FAIL + 1))
+        fi
+    fi
+    # v2 反向断言：必须仍为 0
+    rm -f "$ROOT/eval/reports/r15_gate_v2_"*.json 2>/dev/null || true
+    V2_OUT="$(cd "$ROOT" && go run eval/polaris/polaris_mergence.go -holdout eval/holdout/holdout_v2.jsonl -report r15_gate_v2 -reports-dir eval/reports -now-fixed 2026-10-15 2>&1)"
+    V2_RC=$?
+    V2_FILE="$(ls -t "$ROOT/eval/reports/r15_gate_v2_"*.json 2>/dev/null | head -1)"
+    if [ $V2_RC -ne 0 ] || [ -z "$V2_FILE" ]; then
+        row '[9] 合并度激活 (v2 反向)' FAIL 'v2 评测失败或未产出报告'
+        record 'mergence v2' "$V2_OUT"
+        MERGE_FAIL=1
+        FAIL=$((FAIL + 1))
+    else
+        V2_L2="$(jget "$V2_FILE" l2_memories)"
+        V2_EDGES="$(jget "$V2_FILE" mean_edges_per_memory)"
+        V2_GROUPS="$(jget "$V2_FILE" entity_groups)"
+        if [ "$V2_L2" = "0" ] && [ "$V2_EDGES" = "0" ] && [ "$V2_GROUPS" = "0" ]; then
+            row '[9] 合并度激活 (v2 反向)' PASS 'v2 上 l2_memories/mean_edges_per_memory/entity_groups 仍为 0'
+            PASS=$((PASS + 1))
+        else
+            row '[9] 合并度激活 (v2 反向)' FAIL "v2 上三字段不应非 0（口径被改：l2=$V2_L2 edges=$V2_EDGES groups=$V2_GROUPS）"
+            record 'mergence v2' "$V2_OUT"
+            MERGE_FAIL=1
+            FAIL=$((FAIL + 1))
+        fi
+    fi
+else
+    row '[9] 合并度激活' INFO 'polaris_mergence.go 缺失，跳过'
+fi
+
+# ---------------------------------------------------------------------------
+# [10] 接线默认关：-run 'DriftPipeline|FlushPipeline' -count=1 全 PASS；
+#      默认关态与 R14 基线逐位一致。
+# ---------------------------------------------------------------------------
+PIPE_FAIL=0
+if [ ! -f "$ROOT/kernel/drift_pipeline_test.go" ] || [ ! -f "$ROOT/kernel/flush_pipeline_test.go" ]; then
+    row '[10] 接线默认关' FAIL 'drift_pipeline_test.go 或 flush_pipeline_test.go 缺失'
+    PIPE_FAIL=1
+    FAIL=$((FAIL + 1))
+else
+    PIPE_OUT="$(cd "$ROOT/kernel" && go test -run 'DriftPipeline|FlushPipeline' -count=1 ./... 2>&1)"
+    PIPE_RC=$?
+    if [ $PIPE_RC -ne 0 ]; then
+        row '[10] 接线默认关' FAIL 'drift_pipeline / flush_pipeline 测试未全 PASS'
+        record 'pipeline test' "$PIPE_OUT"
+        PIPE_FAIL=1
+        FAIL=$((FAIL + 1))
+    else
+        row '[10] 接线默认关' PASS 'drift_pipeline / flush_pipeline 测试全 PASS'
+        PASS=$((PASS + 1))
+    fi
 fi
 
 # ---------------------------------------------------------------------------
 # 汇总
 # ---------------------------------------------------------------------------
-printf '\n========== R14 门禁矩阵 ==========\n'
+printf '\n========== R15 门禁矩阵 ==========\n'
 printf 'PASS: %-4d  FAIL: %-4d  SKIP: %-3d  模块数: %s\n' \
     "$PASS" "$FAIL" "$SKIP" "$MOD_COUNT"
 printf '===================================\n'

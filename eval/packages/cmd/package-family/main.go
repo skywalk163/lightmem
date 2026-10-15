@@ -1,7 +1,8 @@
 // R11-B 首批 8 包 Family 档装配助手（package-family）
 // 用途：install_family.sh 的 Go 驱动。从 eval/packages/manifests/*.json 装载 8 包 manifest，
-//      用 kernel.InstallOrder 计算拓扑安装顺序，用 kernel.PackageLifecycle 跑通
-//      安装 -> 配置 -> 启用 -> 升级 -> 卸载全链路，并用 kernel.ExtractPackageMemory 抽取包记忆。
+//
+//	用 kernel.InstallOrder 计算拓扑安装顺序，用 kernel.PackageLifecycle 跑通
+//	安装 -> 配置 -> 启用 -> 升级 -> 卸载全链路，并用 kernel.ExtractPackageMemory 抽取包记忆。
 //
 // 红线遵守：
 //   - 内存 SQLite 后端（:memory:），不依赖真实 PG / 网络 / 外部服务；
@@ -9,10 +10,11 @@
 //   - 只调用 kernel 既有公共 API（NewPackageLifecycle / InstallOrder / ExtractPackageMemory），不改 kernel 语义。
 //
 // 用法（由 install_family.sh 调用）：
-//   go run ./eval/packages/cmd/package-family order      # 打印拓扑安装顺序 + 循环依赖检测
-//   go run ./eval/packages/cmd/package-family lifecycle  # 全链路：装->配->启->升->卸
-//   go run ./eval/packages/cmd/package-family memory     # 抽取 8 包包记忆并验证可召回
-//   go run ./eval/packages/cmd/package-family all        # order + lifecycle + memory
+//
+//	go run ./eval/packages/cmd/package-family order      # 打印拓扑安装顺序 + 循环依赖检测
+//	go run ./eval/packages/cmd/package-family lifecycle  # 全链路：装->配->启->升->卸
+//	go run ./eval/packages/cmd/package-family memory     # 抽取 8 包包记忆并验证可召回
+//	go run ./eval/packages/cmd/package-family all        # order + lifecycle + memory
 package main
 
 import (

@@ -27,7 +27,7 @@ func benchEmbed(text string) ([]float32, error) {
 		h = h*31 + uint32(c)
 	}
 	for i := 0; i < 32; i++ {
-		vec[i] = float32((h >> uint(i%16)) & 0x7F) / 127.0
+		vec[i] = float32((h>>uint(i%16))&0x7F) / 127.0
 	}
 	return vec, nil
 }

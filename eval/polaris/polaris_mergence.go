@@ -54,7 +54,13 @@ type emergenceReport struct {
 	MemoriesWithEntity    int       `json:"memories_with_entity"`
 	EntityGroups          int       `json:"entity_groups"`
 	MeanMemoriesPerEntity float64   `json:"mean_memories_per_entity"`
-	Note                  string    `json:"note"`
+	// EdgesPerRelation（R15-C 新增，只增不改既有口径）：有效（未软删）位移边
+	// 按 relation 拆分的计数。经 EdgeStore.OutEdges 统计，遍历全部记忆作起点，
+	// 每条有效边恰好被计一次。
+	EdgesPerRelation map[string]int `json:"edges_per_relation"`
+	// EntityCoverage（R15-C 新增）：有非空 entity 的记忆占比 = memories_with_entity / total_memories。
+	EntityCoverage float64 `json:"entity_coverage"`
+	Note           string  `json:"note"`
 }
 
 func main() {
@@ -120,6 +126,18 @@ func main() {
 		meanPerEntity = float64(memWithEntity) / float64(len(entityGroup))
 	}
 
+	// R15-C：有效边按 relation 拆分（经导出方法 OutEdges，不改动 kernel 白名单）。
+	edgesPerRelation := map[string]int{}
+	for _, m := range mems {
+		for _, e := range store.OutEdges(m.MemoryID) {
+			edgesPerRelation[string(e.Relation)]++
+		}
+	}
+	entityCoverage := 0.0
+	if len(mems) > 0 {
+		entityCoverage = float64(memWithEntity) / float64(len(mems))
+	}
+
 	rep := emergenceReport{
 		Report:                *reportFlag,
 		GeneratedAt:           now.UTC(),
@@ -134,6 +152,8 @@ func main() {
 		MemoriesWithEntity:    memWithEntity,
 		EntityGroups:          len(entityGroup),
 		MeanMemoriesPerEntity: meanPerEntity,
+		EdgesPerRelation:      edgesPerRelation,
+		EntityCoverage:        entityCoverage,
 		Note: fmt.Sprintf(
 			"R13-B 首次基线：BuildEdgesHeuristic 实际新增 %d 边；holdout 多为 L1 且无 entity/task，"+
 				"mean_edges_per_memory 分母(L2)=%d、非空实体组数=%d，作为后续建边质量对照。",

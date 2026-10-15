@@ -1,11 +1,13 @@
 // R11-B 包记忆 E2E 集成测试（任务书 B.4）。
 //
 // 覆盖两条验收：
-//   1) 装包 -> 抽包记忆 -> 查询「这个包是干什么的」命中抽取的包记忆；
-//   2) 错误安装顺序（含循环依赖）-> 拓扑排序报错提示。
+//  1. 装包 -> 抽包记忆 -> 查询「这个包是干什么的」命中抽取的包记忆；
+//  2. 错误安装顺序（含循环依赖）-> 拓扑排序报错提示。
 //
 // 方式：内存 SQLite 后端 + kernel.PackageLifecycle + kernel.InstallOrder +
-//       kernel.ExtractPackageMemory，走真实 kernel 公共 API 与既有语义。
+//
+//	kernel.ExtractPackageMemory，走真实 kernel 公共 API 与既有语义。
+//
 // 红线遵守：
 //   - 内存 SQLite（:memory:），不依赖真实 PG / 网络 / 外部服务；
 //   - 不调 LLM / 外部 embedder；全部确定性；
