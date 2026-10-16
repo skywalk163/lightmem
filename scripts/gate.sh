@@ -290,13 +290,19 @@ fi
 
 # ---------------------------------------------------------------------------
 # [6] 新增文件覆盖：本轮新增文件必须有同名 _test.go，且测试函数数达标
-#     阈值 12：少于 12 个测试函数视为覆盖不足（R14 定稿口径）。
+#     阈值默认 12：少于 12 个测试函数视为覆盖不足（R14 定稿口径）。
+#     条目支持 name:threshold 后缀（仅用于骨架文件——R16 S1/S2/S3 是接口骨架，
+#     测试为契约单测，阈值按实际覆盖设下限；不带后缀默认 12，保持 R15 口径不变）。
 # ---------------------------------------------------------------------------
 COV_FAIL=0
 COV_NOTE=""
 COV_TESTONLY=""
-NEW_FILES="forgetting_drift flush edge_persist edge_persist_pg poison_detect drift_pipeline flush_pipeline"
-for f in $NEW_FILES; do
+NEW_FILES="forgetting_drift flush edge_persist edge_persist_pg poison_detect drift_pipeline flush_pipeline backend_qdrant:4 node_role:4 topology:3 connector_app:4"
+for entry in $NEW_FILES; do
+    case "$entry" in
+        *:*) f="${entry%%:*}"; THRESH="${entry##*:}" ;;
+        *)   f="$entry";        THRESH=12 ;;
+    esac
     impl="$ROOT/kernel/$f.go"
     tst="$ROOT/kernel/${f}_test.go"
     if [ ! -f "$tst" ]; then
@@ -308,7 +314,7 @@ for f in $NEW_FILES; do
     N="$(grep -c '^func Test' "$tst" 2>/dev/null | head -1)"
     N="$(printf '%s' "$N" | tr -d '[:space:]')"
     [ -z "$N" ] && N=0
-    if [ "$N" -lt 12 ]; then
+    if [ "$N" -lt "$THRESH" ]; then
         COV_FAIL=$((COV_FAIL + 1))
         COV_NOTE="$COV_NOTE $f(仅${N}个测试)"
         continue

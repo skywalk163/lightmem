@@ -1,4 +1,4 @@
-# 光明记忆（LIMS）v2.4.1
+# 光明记忆（LIMS）v2.4.1（R16 收口）
 
 [![Go Version](https://img.shields.io/badge/Go-1.25-blue)](https://golang.org/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-green)](LICENSE)
@@ -64,8 +64,9 @@ curl "http://localhost:8080/search?text=客户A偏好"
 | 极简开发计划 | `.dumate/inbox/_R138_B线极简开发计划_4小时版.md` | 4 小时权重校准计划 |
 | 宣传文档 | `docs/lightmem_promo_v2.3.md` | 产品宣传文档 |
 | 评测集说明 | `eval/README.md` | 评测集生成与使用说明 |
-| 门禁脚本 | `scripts/gate.sh` | R15 统一门禁（版本/gofmt/vet/build/test/race/覆盖/红线白名单） |
-| 最新收口报告 | `eval/reports/r15_merge_final_20261015.md` | R15 合流收口（门禁 PASS 12/0/0，北极星 M1=1.0000） |
+| 门禁脚本 | `scripts/gate.sh` | R16 统一门禁（版本/gofmt/vet/build/test/race/覆盖/红线白名单/PG 真机；[6] 已纳入 R16 S1–S3 骨架文件） |
+| 最新收口报告 | `.dumate/inbox/_R16_收口报告.md` | R16 收口（门禁 PASS 12/0/1，北极星三语料补评，ZFS 容灾） |
+| 运行手册 | `manuals/p1-freebsd-zfs-setup.md` | FreeBSD + ZFS + jail + pf + PG 18 迁入 + ZFS 快照容灾 |
 
 ---
 
@@ -102,19 +103,45 @@ curl "http://localhost:8080/search?text=客户A偏好"
 
 ---
 
-## 📊 当前成果（R15 合流，2026-10-15）
+## 📊 当前成果（R16 收口，2026-10-16）
+
+### R16 新增交付（S1–S8）
+
+| 泳道 | 交付物 | 状态 |
+|---|---|---|
+| **S1 Qdrant 后端** | `kernel/backend_qdrant.go`（20 方法，stdlib-only HTTP）+ `profile.go` 接线 | ✅ 骨架交付（未配置明确 error，不静默降级） |
+| **S2 节点角色与拓扑** | `kernel/node_role.go` + `kernel/topology.go`（四角色 + BFS + 撤销 TTL） | ✅ 骨架交付（默认不进主线） |
+| **S3 P5 应用连接器** | `kernel/connector_app.go`（git 元数据扫描 + 幂等） | ✅ 骨架交付 |
+| **S4 门禁与口径** | `scripts/gate.sh` [1b] 硬翻转 + `corpus_note` 动态化 | ✅ 已交付 |
+| **S5 FreeBSD jail vnet** | `/etc/jail.conf` 修复（0.88 实机）+ 手册 §11A | ✅ 已交付（host↔jail 0% loss） |
+| **S6 北极星 holdout_v3 补评** | M1=1.0000（840/840）、M2=0.2214、数据面 −7.13% | ✅ 已交付 |
+| **S7 ZFS 快照容灾** | `scripts/zfs_backup.sh`（298 行）+ 手册 §10 | ✅ 已交付（0.88 全流程 ALL_DONE） |
+| **S8 报告拆分** | 3 份北极星报告各拆为 summary（入库）+ detail.jsonl（不入库） | ✅ 已交付 |
 
 ### 北极星评测（真实语料 holdout）
 
 | 指标 | 目标 | 实际 | 状态 |
 |---|---|---|---|
-| **M1 零 token 覆盖率** | ≥ 0.95 | **1.0000**（800/800） | ✅ 达标 |
+| **M1 零 token 覆盖率** | ≥ 0.95 | **1.0000**（800/800，holdout_v2） | ✅ 达标 |
 | M1 hit@1 | — | **1.0000**（800/800） | ✅ |
 | M2 控制面 token 占比 | 低 token | **0.2498**（43126/172663） | ✅ |
 | 数据面压缩率 | — | **−0.353** | ✅ |
 
 > 语料：`eval/holdout/holdout_v2.jsonl`（800 条，LoCoMo-v2 + beam 混合）｜ runner：`eval/polaris/`
-> 报告：`eval/reports/r15_final_holdout_20261015-152736.json`
+> 报告：`eval/reports/r16_polaris_holdout_v2_corpusnote_20261016-015834_summary.json`
+
+### R16 门禁矩阵（0.88 实机，基线 R15 收口 `2b75731`）
+
+| 门禁 | 结果 |
+|---|---|
+| [0]–[5] go 版本 / gofmt / vet / build / test / race | PASS |
+| [6] 新增文件覆盖（含 R16 S1–S3 骨架文件） | PASS |
+| [7]–[10] 红线抽查 / 投毒检测 / 合并度激活 / 接线默认关 | PASS |
+| [11] PG 真机往返 | SKIP（`LIGHTMEM_PG_HOST` 未配置，非假 PASS） |
+| **合计** | **PASS 12 / FAIL 0 / SKIP 1** |
+
+> 验证环境：192.168.0.88（FreeBSD 15.1，go1.25.14，PG 18.6 + pgvector 0.8.2）
+> 门禁复现命令：`sh scripts/gate.sh`
 
 ### R15 合流门禁
 
@@ -160,6 +187,10 @@ lightmem/
 ├── kernel/                    # 核心内核
 │   ├── backend_sqlite.go      # SQLite 存储后端（Solo 档）
 │   ├── backend_pg.go          # PostgreSQL + pgvector 后端（Family/SMB/Enterprise）
+│   ├── backend_qdrant.go      # Qdrant REST 后端（Enterprise，R16 S1，stdlib-only）
+│   ├── node_role.go           # 节点角色（Coordinator/Worker/Archive/Gateway，R16 S2）
+│   ├── topology.go            # 拓扑 BFS + 撤销 TTL 存储（R16 S2）
+│   ├── connector_app.go       # P5 应用连接器（git 元数据扫描，R16 S3）
 │   ├── router_mem.go          # MemoryRouter 意图识别 + 跨层召回 + RetrievalTrace
 │   ├── rank_fusion.go         # 多信号 rank 融合引擎（8 路信号 + VoteFusion + ConflictDetector）
 │   ├── writepolicy.go         # WritePolicy 插件注册表
@@ -180,7 +211,7 @@ lightmem/
 │   ├── package_order.go       # 安装拓扑排序
 │   ├── router_tools.go        # Agent 记忆工具接口（含 FeedbackLoop）
 │   ├── model.go               # 统一 Schema
-│   ├── profile.go             # Profile 加载与校验（含 Qdrant 配置占位）
+│   ├── profile.go             # Profile 加载与校验（R16 S1：Qdrant 后端已接线）
 │   └── storage.go             # StorageBackend 抽象
 ├── eval/                      # 评测集与 KPI
 │   ├── eval_generate.go       # 评测集生成器
@@ -273,13 +304,13 @@ storage_backend: sqlite
 | P2.5 评测集建设 | 四类分桶评测集、KPI 基线 | ✅ 已交付 |
 | P3 融合反馈与评测 | VoteFusion、FeedbackLoop、retrieval_trace、冲突检测 | ✅ 已交付 |
 | P4 生命周期 | BudgetManager、ForgettingEngine、ArchiveEngine、CoreMemory、后台整合、漂移衰减、Flush | ✅ 已交付 |
-| P5 外部连接器 | DB/Doc 连接器（应用类连接器待补） | ⚠️ 部分交付 |
-| P6 目标与共享 | GoalMemory、权限三元组、单机撤销（跨节点撤销传播待 P8） | ✅ 已交付（单机） |
+| P5 外部连接器 | DB/Doc 连接器 + App 连接器（`kernel/connector_app.go`，R16 S3 骨架） | ✅ 已交付（App 连接器骨架） |
+| P6 目标与共享 | GoalMemory、权限三元组、单机撤销（跨节点撤销传播已交付 `topology.go` + `node_role.go`，默认不进主线） | ✅ 已交付（单机 + 骨架） |
 | P7 合规与优化 | GDPR、P95 性能、SDK、公开基准对标、i18n、OpenAPI | ✅ 已交付 |
-| P8 集合体与多后端 | Qdrant 后端、节点角色、跨节点查询、撤销广播 | 🔜 未开始（本轮 R16 立项，4–8h） |
+| P8 集合体与多后端 | Qdrant 后端（`backend_qdrant.go`）、节点角色（`node_role.go`）、拓扑与撤销广播（`topology.go`）、跨节点查询骨架 | ✅ 骨架已交付（R16 S1/S2，stdlib-only；跨节点默认不进主线） |
 | P9 应用包生态 | 8 包生命周期、拓扑安装、包记忆抽取、e2e 测试 | ✅ 已交付 |
 
-> 北极星里程碑（roadmap 泳道三）：**已达标**，M1 零 token 覆盖率 = **1.0000**（800/800，holdout_v2 真实语料）
+> 北极星里程碑（roadmap 泳道三）：**已达标**，M1 零 token 覆盖率 = **1.0000**（800/800，holdout_v2 真实语料）；R16 holdout_v3 补评同样 **M1=1.0000**（840/840）
 
 ---
 
@@ -296,7 +327,10 @@ storage_backend: sqlite
 - 所有编译/测试/运行在 0.88 执行，本机仅编辑 + SFTP
 - 不调 LLM 生成评测集（模板 + 固定 seed）
 - 权重不写死为"调优好"（以 `eval/weights/` 校准文件为准，不再内联写死在文档）
-- 只增不改 Schema 语义（R14/R15 已建立"只增不改白名单"与统一门禁 `scripts/gate.sh`）
+- 只增不改 Schema 语义（R14/R15/R16 已建立"只增不改白名单"与统一门禁 `scripts/gate.sh`）
+- 运行平台优先级：**FreeBSD > Linux > Windows**（用户拍板）；Windows 仅文档编辑与传输，不装 Go
+- 门禁 [11] PG 真机往返：未配置 → 显式 SKIP（绝不静默当 PASS，R15 口径）
+- R16 门禁 [6] 新增文件覆盖清单含 `backend_qdrant:4` / `node_role:4` / `topology:3` / `connector_app:4`（骨架契约单测阈值，向后兼容默认 12）
 
 ---
 

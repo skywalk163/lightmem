@@ -1633,6 +1633,8 @@ precision **1.0000**、false_positive_rate **0.0000**（0/300）。以上数字�
 
 | v2.4.3 | 2026-10-15 | R15 收口两条门禁增强（**只增不改**，主标题版本号仍为 v2.4，本条为修订号）。① **`gate.sh [11] PG 真机往返`（新增）**——把 R15-D1 的 PostgreSQL 真机往返纳入门禁，策略为**「显式 SKIP / 配置后硬阻断」**：未配置 `LIGHTMEM_PG_HOST` / `LIGHTMEM_PG_TEST_DB` 时输出 `SKIP: PG env not set` 并**计入汇总**（绝不静默当通过）；已配置则测试失败即 `FAIL` 阻断；已配置却 0 项执行（连接不可用 / 库名不一致）同样 `FAIL`——真机覆盖等于没做，不能算绿。该套件**自包含**（`newPgEdgePersistence` 自带 `CREATE TABLE IF NOT EXISTS`），实测在**完全空的库**上跑通 13 项全 PASS。实测：无 PG 环境 → `PASS 12 / FAIL 0 / SKIP 1`；有 PG + 严格 → `[11] PASS (13 项)`。② **`[1b]` 全仓 gofmt 两步升级机制**——目标定为硬门禁，路径分两步：默认 `INFO` + 阈值观测（`GATE_FMT_MAX`，默认 0；超阈值时提示可升级，**不阻断**），确认全仓持续归零且无合理例外后用 `-S` / `GATE_STRICT_FMT=1` 翻成**硬门禁**（任何新增违规即 `FAIL` 阻断）。两侧均已实测：默认 `INFO (0 文件…下一步 -S 即可翻)`；`-S` 下 `[1b] PASS`、计分 13 项。**本轮不翻默认**，再观察一轮。③ `gate.sh` 头部同步更新用法与设计要点（含 `-S` 与 `[11]` 策略说明）。本轮另**如实登记一笔既有欠账**（非本轮引入，已在 R14 基线复现）：`eval/e2e/pg/pg_e2e_test.go` 的 `TestPg*` 在配置 PG 后失败，根因为 `confidence` 列 `real`(float32) 与 `model.Confidence` `float64` 精度不匹配、以及 `eval/scripts/r10_pg_setup.sh` 用 `$$` 生成库名致 `create`/`name` 两次调用不一致；故配置 PG 后 `[4]` 会 FAIL，属「配置后硬阻断」的正常告警。**不改变既有架构结论。** |
 
+| v2.4.4 | 2026-10-16 | R16 收口（**只增不改**，主标题版本号仍为 v2.4，本条为修订号）。① **§5.4.1 Qdrant 后端（S1）**——新增 `kernel/backend_qdrant.go`：**stdlib-only**（只用 `net/http` + `encoding/json`，不改 `go.mod`），实现 `StorageBackend` / `LayerScanner` / `ComplianceBackend` 全接口（20 项方法），集合 `lightmem_memories`（dim=1024、Cosine），payload 键 `_memory` 存序列化 Memory 字符串 + `layer/tenant/user/kind` 过滤字段，`ensureCollection` 幂等 CREATE，`VectorSearch` 失败时降级为 `Query`，未配置时 `newQdrantBackend` 返回明确 error（**不静默降级**）。`profile.go` 仅新增 1 处接线（`case BackendQdrant`），白名单外。② **§5.5 节点角色与拓扑（S2）**——新增 `kernel/node_role.go`（Coordinator/Worker/Archive/Gateway 四角色 + `NodeRegistry` / `PreFilter` / `CrossNodeBroadcaster` 接口 + 内存实现）与 `kernel/topology.go`（`Topology` BFS hop 重算 + `RevocationStore` TTL 自清）；跨节点接线默认关（`CrossNodeRankMerge` 由 `profile.features` 控制，红线④）。③ **§6.2 应用连接器（S3）**——新增 `kernel/connector_app.go`：`AppConnector` 骨架 + git 元数据扫描（`WalkDir` + `extMatch`/`gitFact`/`gitRemoteURL`），幂等入口走 `IdempotencyLookup`。④ **`gate.sh [6]` 新增文件覆盖清单纳入 R16 S1–S3 骨架文件**（`backend_qdrant:4` / `node_role:4` / `topology:3` / `connector_app:4`），并支持 `name:threshold` 后缀（不带后缀默认 12，R15 口径不变）。⑤ **北极星三语料补评（S6）**：holdout_v3（840 条）M1=1.0000、M2=0.2214、数据面 −7.13%；holdout_v2（800 条）与 R15 基线逐位一致（不降级）；holdout.jsonl（450 条纯 LoCoMo，首次直接评测）M1=0.8067。⑥ **S8 报告拆分**：三份北极星报告各拆为 `*_summary.json`（入库）+ `*.detail.jsonl`（不入库）。⑦ **S5 FreeBSD jail vnet 修复 + S7 ZFS 快照容灾**：见手册 §11A 与 §10（`scripts/zfs_backup.sh`，0.88 全流程 ALL_DONE）。**R16 全新增/骨架，默认检索/融合/写入路径与既有 Schema 语义不变；白名单 12 文件与 R15 基线逐文件 diff 一致（profile.go 仅新增 1 处接线，不在白名单内）。** |
+
 ## 附录 C：参考文档
 | 参考 | 链接 |
 |---|---|
@@ -1829,6 +1831,19 @@ M1=1.0000、M2=0.2498、压缩 35.33%、FP vetoed=0 **逐项一致**；`polaris_
 - `lightmem.md` 版本表已由主 Agent 在合流时统一追加一条 v2.4.2（四路共用）。
 - **A 路真实攻击面未测 / 检测性能未基准**（用户裁定记为欠账）：等 PG 门禁与 `tests/` 门禁稳定后再排。
 - **C 路 `holdout_v3` 只做补充、不替换 `holdout_v2`**：替换需另行口径评审。
+
+**R16 收口（2026-10-16）已闭环的 R15 遗留项**：
+
+| R15 遗留 | R16 处置 | 状态 |
+|---|---|---|
+| 门禁 [1b] "待再观察一轮后翻默认" | **已翻**（默认即硬门禁，`GATE_STRICT_FMT=0` 应急回退） | ✅ 闭环 |
+| 报告体积拆分"用户裁定本轮不执行" | **R16 S8 已执行**（3 份北极星报告拆 summary 入库 + detail.jsonl 不入库） | ✅ 闭环 |
+
+**R16 收口后仍开放的欠账（不阻塞，待维护窗口）**：
+
+- **PG 18 迁入 `lims-pg` jail**：runbook 已就绪（`manuals/p1-freebsd-zfs-setup.md` §11A.4），需停 PG 维护窗口执行；迁移前先 `zfs snapshot zroot/lims/pg@pre-migration`。
+- **Qdrant 真机验收**：`backend_qdrant.go` 已骨架交付并过静态核查，但 0.88 尚未部署 Qdrant 实例做真实 HTTP 联调（未配置时明确 error，不静默降级）。
+- **R10-B 既有 e2e 套件**：`eval/e2e/pg/pg_e2e_test.go` 的 `TestPg*` 两处真实缺陷（`confidence` 精度、`$$` 库名不一致）仍未修，配置 PG 后 `[4]` 会 FAIL（属「配置后硬阻断」正常告警）。
 
 ### D.7 更正记录（R15 新增，如实登记）
 
