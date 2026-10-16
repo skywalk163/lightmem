@@ -784,6 +784,165 @@ jexec lims-pg psql -h 10.0.10.10 -U postgres -c 'select version();'
 
 ---
 
+### 11A.7 R17-S3 跨节点 gRPC 通信部署（P8 节点 mesh 落地 runbook）
+
+> **对应任务**：R17 S3 ——「把 P8 跨节点 rank merge 的骨架（`InMemoryNodeRegistry` / `InMemoryBroadcaster` / `NoopPreFilter` + `topology.go`）替换为真实 gRPC 通信，默认关、本地回环」
+> **交付物**：`kernel/proto/node.proto`（+ 生成的 `node.pb.go` / `node_grpc.pb.go`）、`kernel/node_rpc.go`、`kernel/node_rpc_test.go`、`kernel/profile.go` 接线、`kernel/go.mod` / `go.sum`（grpc/protobuf 为 stdlib-only 红线的唯一例外）
+> **验证主机**：192.168.0.88（FreeBSD，go1.25.14）；8 个 gRPC 回环用例 `-race` 全 PASS
+> **状态**：✅ 代码与回环验证完成；多机实机部署待 P8 跨主机阶段（IPsec 就绪后）
+> **编号说明**：§11A.6 为 S2 泳道（pf 9443 规则）预留，合流时插入于本节之前。
+
+#### 11A.7.1 架构与默认关（安全边界）
+
+P8 集合体采用 **Coordinator / Worker** 星型 mesh：
+
+- **Coordinator 节点**：持有全局节点注册表与跨节点撤销广播通道，启动 `NodeRPCServer` 监听 **9443/tcp**（常量 `DefaultNodeGRPCPort`）。
+- **Worker 节点**：通过 `GRPCNodeRegistry` / `GRPCBroadcaster` 懒连接 coordinator（`grpc.NewClient`，首次调用才拨号），周期性上报心跳、接收撤销流。
+- `NodeService` 共 10 个 RPC：`RegisterNode` / `UnregisterNode` / `Heartbeat` / `GetNode` / `ListNodes` / `PurgeStale`（注册面），`Revoke` / `RevocationStream`（撤销面，后者为 server-streaming），`PreFilter` / `Query`（跨节点召回）。
+- 时间字段统一使用 **RFC3339Nano UTC 字符串**，不引入 `google/protobuf/timestamp.proto`，保持协议自描述。
+
+**默认关（红线④，最高优先级）**：
+
+- profile 中 `features.cross_node_rank_merge` 缺省为 `false`；此时 `profile.NewNodeRegistry()` 返回 `InMemoryNodeRegistry`、`NewCrossNodeBroadcaster()` 返回 `InMemoryBroadcaster`，**不监听 9443、不发起任何 gRPC 连接**（`TestNodeRPCWiringDefaultOff` 守护）。
+- 升级该版本后，不开 feature 即与旧版行为完全一致，无新增网络暴露面。
+- 当前 gRPC 通道为 **h2c 明文（insecure）**，只允许跑在 jail vnet 内网或 IPsec 隧道之上；TLS 凭证经 `WithGRPCServerOptions` / `WithDialOptions` 注入，属于后续阶段（P8 多机 + 跨网段）工作，**禁止在公网明文开启 9443**。
+
+#### 11A.7.2 协议工具链与重新生成（开发机，部署机无需）
+
+生成的 `.pb.go` 已随仓库提交，部署机不需要 protoc。只有修改 `node.proto` 时才需要工具链（在 0.88 实测）：
+
+```sh
+# FreeBSD 开发机（0.88 实机版本；Linux 用对应发行版包）
+sudo pkg install -y protobuf                 # protoc 29.6，含 google/protobuf 标准 include
+export GOPROXY=https://goproxy.cn,direct    # proxy.golang.org 在 0.88 不可达，goproxy.cn 实测可用
+go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
+go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
+export PATH="$HOME/go/bin:$PATH"
+
+# 在 kernel/ 目录下重新生成（paths=source_relative，落 proto/ 子包）
+cd kernel
+protoc --go_out=. --go_opt=paths=source_relative \
+       --go-grpc_out=. --go-grpc_opt=paths=source_relative \
+       proto/node.proto
+# 产物：proto/node.pb.go、proto/node_grpc.pb.go，go_package 为
+#       github.com/lightmem/kernel/proto;nodepb
+go mod tidy    # kernel 模块与仓库根模块都要执行（根模块以 replace 引用 kernel）
+```
+
+依赖版本（`kernel/go.mod`，stdlib-only 红线的唯一例外）：`google.golang.org/grpc v1.84.0`、`google.golang.org/protobuf v1.36.12`。
+
+#### 11A.7.3 网络拓扑与 pf 规则
+
+多机形态（以 `profiles/lims-enterprise.profile.yaml` 的 `network.roles` 为例）：
+
+| 角色 | 地址 | 9443 行为 |
+|---|---|---|
+| coordinator | 10.30.7.1 | 监听 9443，接受 worker 注册 / 心跳 / 撤销流 |
+| worker ×N | 10.30.7.10 / 11 / 12 | 主动出站连 10.30.7.1:9443，**不监听** |
+
+单机 jail 演练：coordinator 可落在宿主机 bridge0 网关 `10.0.10.1:9443`，各 jail 作为 worker 出站。跨机链路必须先走 R16 红线⑦的 **IPsec 隧道**（见第 11 节），明文 h2c 不得出内网。
+
+pf 片段（**合流时由 S2 泳道并入 `manuals/pf.rules`，本节只给建议文本，S3 不改 pf.rules**）：
+
+```pf
+# 9443/tcp 仅放行：节点内网段（jail vnet 10.0.10.0/24 或 IPsec 段 10.30.7.0/24）
+# coordinator 侧入站；worker 侧无需放行入站
+tcp_services = "{ 443, 8443, 9443 }"
+pass in on $int_if proto tcp from <lims_nodes> to $coordinator_ip port 9443 keep state
+# 其余来源对 9443 一律 block drop（沿用手册第 6 节默认拒绝策略）
+```
+
+#### 11A.7.4 配置与启动方式
+
+**1）profile 开关与 coordinator 端点解析**（优先级见 `kernel/profile.go` 的 `CoordinatorGRPCAddr`）：
+
+1. 环境变量 `LIGHTMEM_NODE_GRPC_ADDR=host:port`（最高优先级，调试用）；
+2. 否则取 `network.roles.coordinator[0].host`，端口取 `LIGHTMEM_NODE_GRPC_PORT`，再否则用 `DefaultNodeGRPCPort=9443`；
+3. 两者都解析不到时返回空串，`GRPCNodeRegistry` 表现为 no-op 注册（不阻断单机启动）。
+
+```yaml
+# profiles/lims-enterprise.profile.yaml（已就位：cross_node_rank_merge: true）
+features:
+  cross_node_rank_merge: true
+network:
+  roles:
+    coordinator:
+      - host: 10.30.7.1
+    worker:
+      - host: 10.30.7.10
+```
+
+**2）Coordinator 进程启动 gRPC 服务端**：
+
+```go
+srv := nodepb.NewNodeRPCServer(
+    nodepb.WithNodeRegistry(reg),          // 不传则用 InMemoryNodeRegistry
+    nodepb.WithCrossNodeBroadcaster(bc),   // 不传则用 InMemoryBroadcaster
+    nodepb.WithPreFilter(pf),              // 不传则用 NoopPreFilter（全放行）
+    nodepb.WithQueryHandler(queryHandler), // 不传则跨节点 Query 返回 Unimplemented
+    // nodepb.WithGRPCServerOptions(grpc.Creds(creds)), // P8 多机阶段注入 TLS
+)
+addr, err := srv.Start("0.0.0.0:9443")     // 空串时读 env，再否则用默认端口
+defer srv.Stop()                           // GracefulStop，等待流收敛
+```
+
+**3）Worker 进程装配**（由 profile 统一接线，默认关自动走 InMemory）：
+
+```go
+reg := kernel.NewNodeRegistry(p)          // 开 → *GRPCNodeRegistry；关 → *InMemoryNodeRegistry
+bc  := kernel.NewCrossNodeBroadcaster(p)  // 开 → *GRPCBroadcaster；关 → *InMemoryBroadcaster
+```
+
+#### 11A.7.5 回环验证（0.88 已实测）与部署后验证
+
+回环验证（不依赖多机，kernel 模块内直接起停服务）：
+
+```sh
+cd kernel
+go test -race -count=1 -run 'GRPC|NodeRPCWiring' -v .
+# 8 个用例应全部 PASS：
+#   TestGRPCNodeRegistryLoopback / TestGRPCNodeRegistryEmptyAddr
+#   TestGRPCBroadcasterLoopback（含 tenant 撤销 + 全局撤销 + 取消订阅）
+#   TestGRPCPreFilterLoopback / TestGRPCQueryLoopback / TestGRPCRevokeRemote
+#   TestNodeRPCWiringDefaultOff / TestGRPCServerStartTwiceRejected
+```
+
+部署后按顺序检查（coordinator 节点执行）：
+
+```sh
+# 1) 监听确认（FreeBSD 用 sockstat）
+sockstat -4l -P tcp -p 9443               # 仅开启 feature 后应有 LISTEN；默认关时无输出
+# 2) worker 节点连通性
+nc -vz 10.30.7.1 9443                     # connected；pf 拦截时应 timeout
+# 3) 注册面：worker 上线后 coordinator 应能 ListNodes 看到心跳
+# 4) 撤销面：coordinator 执行一次全局 Revoke（空 tenant），所有订阅 worker 应收到
+#    （TestGRPCBroadcasterLoopback 已覆盖此路径的回环等价验证）
+```
+
+#### 11A.7.6 故障排查
+
+| 现象 | 排查 / 修复 |
+|---|---|
+| 9443 无监听 | 确认 `features.cross_node_rank_merge: true`；默认关时无监听是预期行为，不是故障 |
+| worker 报 coordinator 不可达 | 先 `nc -vz <host> 9443`；检查 `LIGHTMEM_NODE_GRPC_ADDR` / `network.roles.coordinator[0].host`；确认 pf 已放行节点段、跨机走 IPsec |
+| 连接串里端口不生效 | `LIGHTMEM_NODE_GRPC_ADDR` 是完整 `host:port` 且优先级最高，会覆盖 profile 与 `LIGHTMEM_NODE_GRPC_PORT` |
+| 关停时服务端等待较久 | 检查 worker 侧 `RevocationStream` 订阅是否都调用了 cancel；`Stop()` 为 GracefulStop，未关闭的流会阻塞其收敛 |
+| 升级后行为异常 | 回滚 = profile 中置 `cross_node_rank_merge: false`（或删掉该键），重启即恢复纯单机 InMemory，无数据迁移 |
+| 协议改动后编译失败 | 必须重新跑 §11A.7.2 的 protoc 生成；`node.pb.go` 与 `node.proto` 必须同源提交 |
+
+#### 11A.7.7 验收核对与红线确认
+
+| # | 验收项（任务书 §七-3） | 结果 |
+|---|---|---|
+| 1 | `go test -count=1 ./kernel/` 全 PASS（本地回环） | ✅ 8 个新增 gRPC 用例 `-race` 全 PASS；kernel 包存在 1 个 **c5ca737 基线预存失败** `TestQdrantHTTPEndToEnd`（纯 HEAD 树同样失败，与 S3 无关，见交付报告） |
+| 2 | `go vet ./kernel/` 无错 | ✅ 无输出 |
+| 3 | 不开 feature 时无 gRPC 初始化 | ✅ `TestNodeRPCWiringDefaultOff` 守护；默认返回 InMemory 实现 |
+| 4 | 手册 §11A.7 | ✅ 本节 |
+
+**红线确认**：grpc/protobuf 是 stdlib-only 红线的唯一例外（`kernel/go.mod` 新增，根模块仅传递间接依赖）；未修改 `model.go` / `storage.go` / `lifecycle.go` / `compliance.go` / `backend_qdrant*.go` / `backend_sqlite*.go`；未触碰 `manuals/pf.rules`（S2 文件域，pf 片段仅建议）；未修改 gate.sh；默认关，未在任何 profile 中打开新的对外监听（enterprise profile 的 `cross_node_rank_merge: true` 为 R16 已就位）。
+
+---
+
 ## 12. 与后续阶段的关系
 
 | P1 搭建项 | 后续阶段衔接 |
