@@ -401,6 +401,59 @@ func NewStorageBackend(ctx context.Context, p *Profile) (StorageBackend, error) 
 	}
 }
 
+// crossNodeEnabled 判断 profile 是否开启跨节点 rank merge（R17 S3 红线④）。
+// profile / features 为 nil 时一律视为关闭（默认关）。
+func (p *Profile) crossNodeEnabled() bool {
+	return p != nil && p.Features != nil && p.Features.CrossNodeRankMerge
+}
+
+// CoordinatorGRPCAddr 解析 coordinator 节点的 gRPC 端点（host:port）。
+// 优先级：env LIGHTMEM_NODE_GRPC_ADDR > network.roles.coordinator[0].host
+// +（env LIGHTMEM_NODE_GRPC_PORT > DefaultNodeGRPCPort）；无法解析时返回 ""。
+func CoordinatorGRPCAddr(p *Profile) string {
+	if v := os.Getenv(EnvNodeGRPCAddr); v != "" {
+		return v
+	}
+	host := ""
+	if p != nil && p.Network != nil && p.Network.Roles != nil {
+		if specs := p.Network.Roles[string(RoleCoordinator)]; len(specs) > 0 {
+			host = specs[0].Host
+		}
+	}
+	if host == "" {
+		return ""
+	}
+	port := DefaultNodeGRPCPort
+	if v := os.Getenv(EnvNodeGRPCPort); v != "" {
+		if n, err := parsePort(v); err == nil {
+			port = n
+		}
+	}
+	return fmt.Sprintf("%s:%d", host, port)
+}
+
+// NewNodeRegistry 按 profile 装配节点注册中心（R17 S3）。
+//
+// 接线默认关（红线④）：features.cross_node_rank_merge 未开启（含
+// profile/features 为 nil）时返回 InMemoryNodeRegistry，不创建任何
+// gRPC 连接；开启时返回 GRPCNodeRegistry（懒连接，首次 RPC 才拨号），
+// coordinator 端点由 CoordinatorGRPCAddr 解析。
+func NewNodeRegistry(p *Profile) NodeRegistry {
+	if !p.crossNodeEnabled() {
+		return NewInMemoryNodeRegistry()
+	}
+	return NewGRPCNodeRegistry(CoordinatorGRPCAddr(p))
+}
+
+// NewCrossNodeBroadcaster 按 profile 装配跨节点广播器（R17 S3）。
+// 默认关口径与 NewNodeRegistry 一致：未开启时返回 InMemoryBroadcaster。
+func NewCrossNodeBroadcaster(p *Profile) CrossNodeBroadcaster {
+	if !p.crossNodeEnabled() {
+		return NewInMemoryBroadcaster()
+	}
+	return NewGRPCBroadcaster(CoordinatorGRPCAddr(p))
+}
+
 // ProfileJSON 输出脱敏后的 JSON 形态（供 /profile 端点）
 func (p *Profile) ProfileJSON() string {
 	c := *p

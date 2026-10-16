@@ -1,0 +1,160 @@
+// R17 S3：跨节点 gRPC 协议（lightmem §5.4 联邦 / 多节点）。
+//
+// 红线：
+//   - 本协议是 R16 stdlib-only 约束的唯一例外（R17 红线⑦）：仅 kernel/proto
+//     与 kernel/node_rpc*.go 引入 google.golang.org/grpc + protobuf，
+//     其余文件保持 stdlib-only。
+//   - 接线默认关（红线④）：由 profile.features.cross_node_rank_merge 控制，
+//     默认 false；未开启时装配层仍走 InMemory 实现，不初始化任何 gRPC 连接。
+//
+// 生成（在 kernel/ 目录下；protoc 29.x + protoc-gen-go / protoc-gen-go-grpc）：
+//
+//	protoc --go_out=. --go_opt=paths=source_relative \
+//	       --go-grpc_out=. --go-grpc_opt=paths=source_relative \
+//	       proto/node.proto
+//
+// 产物：proto/node.pb.go、proto/node_grpc.pb.go（生成后必须 gofmt，禁止手改）。
+syntax = "proto3";
+
+package lightmem.node;
+
+option go_package = "github.com/lightmem/kernel/proto;nodepb";
+
+// NodeService 联邦节点间 RPC（R17 S3）。
+//
+//   - 注册中心：RegisterNode / UnregisterNode / Heartbeat / GetNode /
+//     ListNodes / PurgeStale（替换 R16 InMemoryNodeRegistry 的本地调用）。
+//   - 撤销广播：Revoke（Unary 扇出）+ RevocationStream（服务端流式订阅）。
+//   - 跨节点预过滤：PreFilter（rank merge 前的粗滤）。
+//   - 跨节点召回：Query（worker 节点本地 StorageBackend.Query 的远程封装）。
+service NodeService {
+  // ---- 注册中心 ----
+  rpc RegisterNode(NodeInfoMsg) returns (Empty);
+  rpc UnregisterNode(NodeIDMsg) returns (Empty);
+  rpc Heartbeat(HeartbeatReq) returns (HeartbeatResp);
+  rpc GetNode(NodeIDMsg) returns (GetNodeResp);
+  rpc ListNodes(ListNodesReq) returns (ListNodesResp);
+  rpc PurgeStale(PurgeStaleReq) returns (PurgeStaleResp);
+
+  // ---- 撤销广播 ----
+  rpc Revoke(RevokeMsg) returns (Empty);
+  rpc RevocationStream(StreamReq) returns (stream RevokeMsg);
+
+  // ---- 跨节点预过滤 / 召回 ----
+  rpc PreFilter(PreFilterReq) returns (PreFilterResp);
+  rpc Query(QueryReq) returns (QueryResp);
+}
+
+// Empty 标准空响应。
+message Empty {}
+
+// NodeIDMsg 节点标识。
+message NodeIDMsg {
+  string id = 1;
+}
+
+// NodeInfoMsg 对应 kernel.NodeInfo 运行时快照。
+// 时间字段一律用 RFC3339Nano UTC 字符串（与 kernel 的 date-only / 时间约定一致）；
+// last_seen 为空时由服务端填当前时间。
+message NodeInfoMsg {
+  string id = 1;
+  string role = 2;
+  string host = 3;
+  int32 port = 4;
+  string status = 5;
+  repeated string tenant_shards = 6;
+  string last_seen = 7;
+  double load = 8;
+}
+
+// HeartbeatReq / HeartbeatResp 心跳租约；未知节点返回 codes.NotFound。
+message HeartbeatReq {
+  string node_id = 1;
+  string at = 2; // RFC3339Nano；空 = 服务端取当前时间
+}
+
+message HeartbeatResp {
+  string server_at = 1; // 服务端接受时间（RFC3339Nano）
+}
+
+// GetNodeResp found=false 时 node 为空。
+message GetNodeResp {
+  bool found = 1;
+  NodeInfoMsg node = 2;
+}
+
+// ListNodesReq role 为空 = 全部角色。
+message ListNodesReq {
+  string role = 1;
+}
+
+message ListNodesResp {
+  repeated NodeInfoMsg nodes = 1;
+}
+
+// PurgeStaleReq 超时秒数；PurgeStaleResp 返回被标记 offline 的节点 ID。
+message PurgeStaleReq {
+  int64 timeout_seconds = 1;
+}
+
+message PurgeStaleResp {
+  repeated string node_ids = 1;
+}
+
+// RevokeMsg 对应 kernel.Revocation 跨节点撤销事件。
+message RevokeMsg {
+  repeated string memory_ids = 1;
+  string tenant_id = 2; // 空 = 全局撤销
+  string reason = 3;
+  string issued_at = 4; // RFC3339Nano；空 = 服务端取当前时间
+  int32 ttl_seconds = 5; // 0 = 永久
+}
+
+// StreamReq 订阅请求；tenant 为空 = 订阅全部租户事件（与内存广播语义一致）。
+message StreamReq {
+  string tenant = 1;
+}
+
+// PreFilterReq 跨节点粗滤请求。
+message PreFilterReq {
+  string tenant_id = 1;
+  string query_text = 2;
+}
+
+// PreFilterResp：
+//   - enabled=false 表示服务端未启用预过滤（NoopPreFilter），调用方按全量放行；
+//   - enabled=true 时 candidate_ids 为可能命中的 memory_id 集合（可能为空集）。
+message PreFilterResp {
+  bool enabled = 1;
+  repeated string candidate_ids = 2;
+}
+
+// QueryReq 跨节点召回请求，对应 kernel.QueryParams 的可传输子集。
+message QueryReq {
+  string tenant_id = 1;
+  string viewer = 2;
+  string user_id = 3;
+  string text = 4;
+  repeated float vector = 5;
+  int32 top_k = 6;
+  repeated string memory_kinds = 7;
+  repeated string visibility = 8;
+}
+
+// QueryResultMsg 对应 kernel.QueryResult。
+message QueryResultMsg {
+  string memory_id = 1;
+  string fact = 2;
+  double score = 3;
+  string source = 4;
+  string occurred_at = 5; // RFC3339Nano；空 = 无
+  string recorded_at = 6;
+  string valid_from = 7;
+  string valid_until = 8;
+  string superseded_by = 9; // 空 = 无
+  bool is_historical = 10;
+}
+
+message QueryResp {
+  repeated QueryResultMsg results = 1;
+}
