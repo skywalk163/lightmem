@@ -1,19 +1,30 @@
 // Qdrant 存储后端（S1，§5.4 多后端可插拔）
 // 真源：lightmem.md §5.4 存储后端可插拔清单；profiles/lims.profile.schema.json QdrantConfig。
 //
-// 设计约束（R16 S1 红线）：
+// 设计约束（R16 S1 红线 + R17 S2 真机验收修正）：
 //   - 只增不改：本文件不修改 StorageBackend / LayerScanner / ComplianceBackend 的既有
 //     方法签名与 Memory / QueryParams / QueryResult 字段语义。
 //   - 只读骨架优先：Qdrant 未配置（cfg.Qdrant == nil）时 newQdrantBackend 返回明确
 //     error，不静默降级为其它后端（延续 R15 "SKIP 不冒充 PASS" 的诚实口径）。
 //   - 确定性优先：文本检索与 PG/SQLite 一致，用 tokenize 词元重合度打分，
 //     保证 eval/run_kpi.go 在 qdrant 档位下可复现。
-//   - stdlib-only：只用 net/http + encoding/json，不新增第三方依赖，不修改 go.mod。
+//   - stdlib-only：只用 net/http + encoding/json + crypto/sha1，不新增第三方依赖，
+//     不修改 go.mod。
+//   - 点 ID 映射（R17 S2 真机修正）：Qdrant 1.19 的点 ID 类型 ExtendedPointId 只接受
+//     u64 整数或 UUID 字符串，而 lightmem 的 MemoryID 是 ULID 风格任意字符串
+//     （router_tools.go newMemoryID）。直接透传会被真机 Qdrant 以 400
+//     "not a valid point ID" 全部拒绝——R16 的 httptest mock 接受任意字符串 ID，
+//     掩盖了该契约差异。故统一走 qdrantPointID 确定性 UUIDv5 映射，原 MemoryID
+//     完整保留在 payload._memory 的 Memory JSON 中，对外语义不变。
+//   - 写操作带 wait=true（R17 S2 真机修正）：Qdrant 写为异步两段提交
+//     （acknowledged→completed），显式 wait 保证读己之写（SaveMemory 后立即
+//     Query 可见）。httptest mock 忽略 query 参数，既有契约测试不受影响。
 package kernel
 
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,6 +36,31 @@ import (
 
 // qdrantDefaultDim 向量维度缺省（与 backend_pg.go 默认 1024 对齐）。
 const qdrantDefaultDim = 1024
+
+// qdrantIDNamespace 是 lightmem 专用的 UUIDv5 命名空间（16 字节固定值）。
+// 仅需全局唯一且跨版本稳定，无外部契约。
+var qdrantIDNamespace = [16]byte{'l', 'i', 'g', 'h', 't', 'm', 'e', 'm', '-', 'q', 'd', 'r', 'a', 'n', 't', '1'}
+
+// qdrantPointID 把任意 MemoryID 字符串确定性地映射为 Qdrant 合法的点 ID。
+//
+// 真源：Qdrant 1.19 lib/segment/src/types.rs 的 ExtendedPointId 反序列化——
+// 既非 u64 也非 UUID 的字符串一律报错 "value ... is not a valid point ID,
+// valid values are either an unsigned integer or a UUID"。
+//
+// 算法：UUIDv5 风格（RFC 4122）——SHA-1(namespace || memoryID) 取前 128 位，
+// 置 version=5、variant=RFC4122 标志位。同一 MemoryID 永远得到同一点 ID，
+// Upsert/Get/Delete/UpdateLayer 全路径一致。stdlib-only（crypto/sha1）。
+func qdrantPointID(memoryID string) string {
+	h := sha1.New()
+	h.Write(qdrantIDNamespace[:])
+	h.Write([]byte(memoryID))
+	sum := h.Sum(nil) // 20 bytes，取前 16 字节
+	var u [16]byte
+	copy(u[:], sum[:16])
+	u[6] = (u[6] & 0x0f) | 0x50 // version 5
+	u[8] = (u[8] & 0x3f) | 0x80 // variant RFC 4122
+	return fmt.Sprintf("%x-%x-%x-%x-%x", u[0:4], u[4:6], u[6:8], u[8:10], u[10:16])
+}
 
 // qdrantBackend 实现 StorageBackend / LayerScanner / ComplianceBackend。
 type qdrantBackend struct {
@@ -54,11 +90,11 @@ func newQdrantBackend(ctx context.Context, cfg *StorageConfig) (StorageBackend, 
 		scheme = "https"
 	}
 	b := &qdrantBackend{
-		name:       "qdrant",
-		httpURL:    fmt.Sprintf("%s://%s:%d", scheme, q.Host, port),
-		apiKey:     q.APIKey,
-		col:        "lightmem_memories",
-		dim:        qdrantDefaultDim,
+		name:    "qdrant",
+		httpURL: fmt.Sprintf("%s://%s:%d", scheme, q.Host, port),
+		apiKey:  q.APIKey,
+		col:     "lightmem_memories",
+		dim:     qdrantDefaultDim,
 		client: &http.Client{
 			Timeout: 15 * time.Second,
 		},
@@ -122,14 +158,14 @@ func (b *qdrantBackend) ensureCollection(ctx context.Context) error {
 	if err == nil {
 		return nil // 已存在
 	}
-	// 不存在则 CREATE
+	// 不存在则 CREATE（wait=true：等集合就绪再返回，保证随后读写可用）
 	createReq := map[string]any{
 		"vectors": map[string]any{
 			"size":     b.dim,
 			"distance": "Cosine",
 		},
 	}
-	return b.do(ctx, http.MethodPut, "/collections/"+b.col, createReq, nil)
+	return b.do(ctx, http.MethodPut, "/collections/"+b.col+"?wait=true", createReq, nil)
 }
 
 // point 是 Qdrant point 结构（payload 承载 Memory JSON）。
@@ -208,9 +244,9 @@ func (b *qdrantBackend) Upsert(ctx context.Context, m *Memory) error {
 		vec = existing.Vector
 	}
 	upsertReq := map[string]any{
-		"points": []qdrantPoint{{ID: m.MemoryID, Vector: vec, Payload: payload}},
+		"points": []qdrantPoint{{ID: qdrantPointID(m.MemoryID), Vector: vec, Payload: payload}},
 	}
-	return b.do(ctx, http.MethodPut, "/collections/"+b.col+"/points", upsertReq, nil)
+	return b.do(ctx, http.MethodPut, "/collections/"+b.col+"/points?wait=true", upsertReq, nil)
 }
 
 func (b *qdrantBackend) Get(ctx context.Context, memoryID, viewer, tenant string) (*Memory, error) {
@@ -413,9 +449,9 @@ func (b *qdrantBackend) UpdateLayer(ctx context.Context, memoryID string, layer 
 		return err
 	}
 	upsertReq := map[string]any{
-		"points": []qdrantPoint{{ID: memoryID, Vector: p.Vector, Payload: payload}},
+		"points": []qdrantPoint{{ID: qdrantPointID(memoryID), Vector: p.Vector, Payload: payload}},
 	}
-	return b.do(ctx, http.MethodPut, "/collections/"+b.col+"/points", upsertReq, nil)
+	return b.do(ctx, http.MethodPut, "/collections/"+b.col+"/points?wait=true", upsertReq, nil)
 }
 
 // ---------------------------------------------------------------------
@@ -457,8 +493,13 @@ func (b *qdrantBackend) DeleteByScope(ctx context.Context, tenant, userID string
 	if len(ids) == 0 {
 		return ids, nil
 	}
-	delReq := map[string]any{"points": ids}
-	if err := b.do(ctx, http.MethodPost, "/collections/"+b.col+"/points/delete", delReq, nil); err != nil {
+	// 请求用映射后的点 ID；返回值仍是原始 MemoryID（合规导出语义不变）。
+	delIDs := make([]string, 0, len(ids))
+	for _, id := range ids {
+		delIDs = append(delIDs, qdrantPointID(id))
+	}
+	delReq := map[string]any{"points": delIDs}
+	if err := b.do(ctx, http.MethodPost, "/collections/"+b.col+"/points/delete?wait=true", delReq, nil); err != nil {
 		return nil, err
 	}
 	return ids, nil
@@ -468,8 +509,8 @@ func (b *qdrantBackend) DeleteByID(ctx context.Context, memoryID string) error {
 	if memoryID == "" {
 		return fmt.Errorf("memory_id required")
 	}
-	delReq := map[string]any{"points": []string{memoryID}}
-	return b.do(ctx, http.MethodPost, "/collections/"+b.col+"/points/delete", delReq, nil)
+	delReq := map[string]any{"points": []string{qdrantPointID(memoryID)}}
+	return b.do(ctx, http.MethodPost, "/collections/"+b.col+"/points/delete?wait=true", delReq, nil)
 }
 
 // ---------------------------------------------------------------------
@@ -480,7 +521,7 @@ func (b *qdrantBackend) fetchPoint(ctx context.Context, id string) (*qdrantPoint
 	var resp struct {
 		Result qdrantPoint `json:"result"`
 	}
-	if err := b.do(ctx, http.MethodGet, "/collections/"+b.col+"/points/"+id, nil, &resp); err != nil {
+	if err := b.do(ctx, http.MethodGet, "/collections/"+b.col+"/points/"+qdrantPointID(id), nil, &resp); err != nil {
 		return nil, err
 	}
 	return &resp.Result, nil
