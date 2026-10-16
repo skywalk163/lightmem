@@ -180,6 +180,7 @@ func mkMemory(id, fact string, kind MemoryKind) *Memory {
 		Layer:      LayerL1,
 		TenantID:   "t1",
 		UserID:     "u1",
+		Visibility: VisPrivate, // R17 基线修复：零值 Visibility 不匹配 canView 任何 case（全代码库 fixture 惯例为显式设置）
 		MemoryKind: kind,
 		Confidence: 0.8,
 		RecordedAt: time.Now().UTC().Truncate(time.Second),
