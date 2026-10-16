@@ -23,7 +23,7 @@
 | P5 外部连接器 | 🔜 | ⚠️ **部分→骨架补全（R16 S3）** | `kernel/connector.go:18/53/160`（DB+Doc）；**R16 S3 新增 `kernel/connector_app.go`**（AppConnector + git 元数据扫描，7 项单测） |
 | P6 目标与共享 | 🔜 | ✅ 已交付（单机） | `kernel/goal.go:15/149/181/205`、`model.go:64`；跨节点撤销传播骨架（R16 S2 `topology.go` RevocationStore） |
 | P7 合规与优化 | 🔜 | ✅ **已交付** | `kernel/gdpr.go`、`perf.go`、`i18n/`、`metrics.go`、`sdk/{python,js}`、`eval/benchmarks/`、`docs/api.md` + `api.openapi.yaml` |
-| P8 集合体与多后端 | 🔜 | ✅ **骨架已交付（R16 收口）** | **S1** `kernel/backend_qdrant.go`（Qdrant REST 后端全接口实现 + profile 接线）；**S2** `kernel/node_role.go` + `kernel/topology.go`（四角色 + 拓扑 + 撤销广播）；门禁 [1b] 硬翻转；北极星三语料补评；ZFS 快照容灾 |
+| P8 集合体与多后端 | 🔜 | ✅ **已交付（R16 骨架 + R17 真机落地）** | **R16** `kernel/backend_qdrant.go`（REST 后端 + profile 接线）+ `node_role.go`/`topology.go`（四角色 + 拓扑 + 撤销广播）；**R17 S1** PG 18.6 迁入 lims-pg jail（10.0.10.10，手册 §11A.5）；**R17 S2** Qdrant 1.19.1 真机部署（lims-qdrant 10.0.10.60）+ 真机联调 4/4 PASS + 幂等部署脚本（§11A.6）；**R17 S3** 跨节点 gRPC 真实现（`node_rpc.go` + `proto/`，默认关，本地回环 + vet 通过，§11A.7） |
 | P9 应用包生态 | 🔜 | ✅ **已交付** | `kernel/package*.go`、`eval/packages/manifests/`（8 包齐）、`eval/e2e/packages/package_e2e_test.go` |
 
 > ✅ **本轮已同步**：`README.md` 开发计划表已按上表真实状态更新（P4/P5/P6/P7/P9 由 🔜 更正，P1 移除未实现的 MemoryExtractor）。
@@ -160,11 +160,11 @@
 | P7-C | `sdk/` | REST 文档 + Python/JS SDK | ✅ 已交付（R5-C + R9-C 收口） |
 | 基准数据集 | `eval/benchmarks/*` | LongMemEval/LoCoMo/BEAM 子集 | ✅ 已交付（650 条，R8-B） |
 | P7-E | `kernel/i18n/` | 国际化本地化 | ✅ 已交付（R8-A） |
-| 部署 | `manuals/p1-freebsd-zfs-setup.md` 执行记录 | ZFS+jail+pf 实机 | ⚠️ 部分（ZFS/jail/Family 启动 ✅，jail vnet 未通、快照未做） |
+| 部署 | `manuals/p1-freebsd-zfs-setup.md` 执行记录 | ZFS+jail+pf 实机 | ✅ **已交付（R16 jail vnet 实测 + R17 PG/Qdrant 迁 jail + 快照与回滚就绪）** |
 | 北极星 | `eval/reports/polaris_*.json` | M1/M2 与 ≥0.95 达标 | ✅ **超标**（M1=1.0000，n=800） |
 | 应用包生态 | `kernel/package*.go` + `eval/packages/` | 8 包生命周期 + 包记忆 + 拓扑排序 | ✅ 已交付（R11-B） |
 | 门禁 | `scripts/gate.sh` | 统一门禁（R14 引入，R15 强化） | ✅ 已交付（PASS 12/0/0） |
-| **P8 集合体** | （未生成） | Qdrant 后端 / 节点角色 / 跨节点查询 | 🔜 **未开始**（唯一剩余主交付项） |
+| **P8 集合体** | `kernel/backend_qdrant.go` + `kernel/node_rpc.go` + `kernel/proto/` + `scripts/deploy_qdrant.sh` | Qdrant 真机后端 / 节点角色 / 跨节点 gRPC 查询 | ✅ **已交付（R17 收口：Qdrant 真机联调 + PG 迁 jail + gRPC 默认关）** |
 
 ---
 

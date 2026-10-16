@@ -307,7 +307,7 @@ storage_backend: sqlite
 | P5 外部连接器 | DB/Doc 连接器 + App 连接器（`kernel/connector_app.go`，R16 S3 骨架） | ✅ 已交付（App 连接器骨架） |
 | P6 目标与共享 | GoalMemory、权限三元组、单机撤销（跨节点撤销传播已交付 `topology.go` + `node_role.go`，默认不进主线） | ✅ 已交付（单机 + 骨架） |
 | P7 合规与优化 | GDPR、P95 性能、SDK、公开基准对标、i18n、OpenAPI | ✅ 已交付 |
-| P8 集合体与多后端 | Qdrant 后端（`backend_qdrant.go`）、节点角色（`node_role.go`）、拓扑与撤销广播（`topology.go`）、跨节点查询骨架 | ✅ 骨架已交付（R16 S1/S2，stdlib-only；跨节点默认不进主线） |
+| P8 集合体与多后端 | Qdrant 真机后端（`backend_qdrant.go`，R17 真机联调 4/4 PASS）、节点角色（`node_role.go`）、拓扑与撤销广播（`topology.go`）、跨节点 gRPC 真实现（`node_rpc.go` + `proto/`，默认关，本地回环通过） | ✅ 已交付（R16 骨架 + R17 真机落地；PG 18.6 迁入 lims-pg jail） |
 | P9 应用包生态 | 8 包生命周期、拓扑安装、包记忆抽取、e2e 测试 | ✅ 已交付 |
 
 > 北极星里程碑（roadmap 泳道三）：**已达标**，M1 零 token 覆盖率 = **1.0000**（800/800，holdout_v2 真实语料）；R16 holdout_v3 补评同样 **M1=1.0000**（840/840）
