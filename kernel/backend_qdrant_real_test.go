@@ -12,7 +12,7 @@
 //   - Upsert 保留已有向量（fetchPoint 探针；真机实测 Qdrant 1.19 GET 单点
 //     默认返回 vector，且 Cosine 集合存储归一化向量——保留判据为方向保持）。
 //
-// 门控口径（与 R15 门禁 [11] PG「显式 SKIP / 配置后硬阻断」一致）：
+// 门控口径（与 R15 门禁 [11] PG“显式 SKIP / 配置后硬阻断”一致）：
 //   - LIGHTMEM_QDRANT_HOST 未配置 → 全部真机测试 t.Skip（计入 SKIP，不假 PASS）；
 //   - 已配置 → 任何失败即 FAIL 阻断。
 //
@@ -371,7 +371,7 @@ func TestQdrantRealEndToEnd(t *testing.T) {
 // （真机路径）。探针实测结论（Qdrant 1.19.1 真机，2026-10）：
 //   - GET 单点默认返回 vector（无需 with_vector=true），len=dim；
 //   - Cosine 集合落库时归一化向量（读回 = 预置向量 / |v|，如首分量
-//     0.647 → 0.03493356 ≈ 0.647/18.5）——保留判据因此为「方向保持」：
+//     0.647 → 0.03493356 ≈ 0.647/18.5）——保留判据因此为“方向保持”：
 //     读回向量与预置向量平行（余弦相似度 ≈ 1），而非逐分量相等。
 func TestQdrantRealVectorPreserve(t *testing.T) {
 	cfg := loadQdrantRealTestConfig(t)

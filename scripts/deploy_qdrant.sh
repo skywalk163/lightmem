@@ -1,9 +1,9 @@
 #!/bin/sh
 # R17-S2：lims-qdrant jail + Qdrant 幂等部署脚本。
-# 真源：manuals/p1-freebsd-zfs-setup.md §11A.6「Qdrant 真机部署与联调验收」。
+# 真源：manuals/p1-freebsd-zfs-setup.md §11A.6“Qdrant 真机部署与联调验收”。
 #
 # 用途：一条命令在 FreeBSD 宿主机（0.88）上完成
-#       「ZFS dataset → jail → 出网(NAT/路由) → pkg 安装 → 存储挂载 → 启动 → pf 放行 → 健康检查」，
+#       “ZFS dataset → jail → 出网(NAT/路由) → pkg 安装 → 存储挂载 → 启动 → pf 放行 → 健康检查”，
 #       重复执行不报错（幂等），任一 FAIL 以非零码退出（可接 CI / 交接 runbook）。
 #       纯 POSIX sh，只依赖 FreeBSD 基座命令（zfs/jail/pfctl/pkg/jexec），无第三方依赖。
 #

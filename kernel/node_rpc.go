@@ -188,7 +188,7 @@ type QueryHandler func(ctx context.Context, q QueryParams) ([]QueryResult, error
 
 // NodeRPCServer gRPC 服务端：把节点注册中心 / 撤销广播 / 预过滤 / 召回
 // 暴露给联邦内其他节点。默认实现全部复用 R16 内存组件，单进程测试
-// 与「单节点兼任 coordinator」部署均可直接使用。
+// 与“单节点兼任 coordinator”部署均可直接使用。
 type NodeRPCServer struct {
 	nodepb.UnimplementedNodeServiceServer
 

@@ -3,9 +3,9 @@
 # ============================================================
 # 对应任务：R11 C.2；R17 S2 修订（jail 出网 NAT + lims-qdrant + Qdrant 6333/6334 放行/转发）
 # 对应文档：manuals/p1-freebsd-zfs-setup.md §6 / §11A.6
-# 对应架构：lightmem.md §5.7「网络隔离」+ §5.5「集合体」
+# 对应架构：lightmem.md §5.7“网络隔离”+ §5.5“集合体”
 # 适用平台：FreeBSD 15.1-RELEASE-p1（0.88 实机，go1.25.14）
-# 实机状态：本文件与 0.88 /etc/pf.conf 逐行等价（2026-10-16 R17 S2 定稿加载）
+# 实机状态：规则行与 0.88 /etc/pf.conf 等价（注释为扩充说明，非逐行复制；2026-10-16 R17 S2 定稿加载）
 # ============================================================
 #
 # 设计原则：
@@ -49,7 +49,7 @@ scrub in all
 #       net.inet.ip.forwarding=0、jail 无默认路由，三项叠加导致所有 jail（含存量
 #       lims-redis/lims-pg 等）出网 100% loss，jail 内 pkg install 全部失败
 #       （"Transient resolver failure"）。R16 §11A.3 只验证了 jail↔host、jail↔jail
-#       （L2 本地，不需转发），任务书中「出网已通」系过度声明。
+#       （L2 本地，不需转发），任务书中“出网已通”系过度声明。
 # 配套（缺一不可，均已实机验证，deploy_qdrant.sh [6] 步自动补齐）：
 #   1) /etc/sysctl.conf: net.inet.ip.forwarding=1（运行时 sysctl 同步置 1）
 #   2) jail 内默认路由：/usr/jails/<jail>/etc/rc.conf defaultrouter="10.0.10.1"
@@ -81,22 +81,22 @@ pass out all keep state
 block in on $ext_if
 
 # ---- Qdrant 放行（R17 S2，须排在 block 之后）----
-# rdr 转发后的入站放行。注意 pf「末条匹配胜出」语义：本条位于 block 之后，
+# rdr 转发后的入站放行。注意 pf“末条匹配胜出”语义：本条位于 block 之后，
 # 翻译后的流量（目的 10.0.10.60:6333/6334）命中本条即放行；
 # 顺序若调换到 block 之前虽也可达（quick 语义），现位置为实机验证态，勿随意调整。
 # 仅管理网段（192.168.0.0/24 + 192.168.1.0/24）。
 pass in on $ext_if proto tcp from { 192.168.0.0/24, 192.168.1.0/24 } to 10.0.10.60 port { 6333, 6334 } flags S/SA keep state
 
 # ============================================================
-# R17 S2 拓扑发现（pf 排查实录，勿删——解释「为何有些路径不通」）
+# R17 S2 拓扑发现（pf 排查实录，勿删——解释“为何有些路径不通”）
 # ============================================================
 # 1. 工作站是宿主机 VirtualBox 内的 VM（10.0.2.15，用户态 NAT）。VM 访问
-#    「宿主机自身 IP」（192.168.0.88）时被 NAT 回环为 lo0 流量（源/目的均为
+#    “宿主机自身 IP”（192.168.0.88）时被 NAT 回环为 lo0 流量（源/目的均为
 #    192.168.0.88），完全不经 em0——因此宿主机上的 pf/rdr 对该流量不生效。
 #    工作站访问 Qdrant 的正确路径：直接用 jail IP 10.0.10.60:6333（宿主机
 #    路由可达，实测通过，curl 返回 {"title":"qdrant - vector search engine",
 #    "version":"1.19.1"}）。
-# 2. 曾尝试对 lo0 加 rdr 规则让「宿主机 IP:6333」也能转发：前向翻译成功
+# 2. 曾尝试对 lo0 加 rdr 规则让“宿主机 IP:6333”也能转发：前向翻译成功
 #    （SYN 到达 jail、SYN-ACK 返回），但反向翻译/状态回写失败，宿主机对
 #    jail 的 SYN-ACK 回 RST（curl exit 28）。FreeBSD pf 对本地产生流量的
 #    已知局限，已回退该规则（备份 r17bak7 前的迭代态）。
