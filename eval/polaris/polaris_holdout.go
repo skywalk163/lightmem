@@ -81,9 +81,12 @@ func main() {
 	_ = os.MkdirAll(resolveReportsDir(*reportsDir), 0o755)
 
 	// ---- 语料定位：真实 holdout 优先，缺席回落代理（显著标注非正式） ----
+	// R16 S4（用户拍板②）：corpus_note 不再硬编码 "holdout.jsonl"，改为与
+	// config.holdout（即实际评测路径）动态一致——评 holdout_v2.jsonl 就写
+	// holdout_v2.jsonl（800 条），评 holdout.jsonl 就写 holdout.jsonl（450 条）。
 	holdoutPath := *holdoutFlag
 	official := true
-	note := "真实语料 holdout.jsonl（正式判定）"
+	var note string
 	if holdoutPath == "" {
 		holdoutPath = resolvePath(
 			"../dataset/holdout.jsonl", "eval/dataset/holdout.jsonl", "dataset/holdout.jsonl",
@@ -93,7 +96,6 @@ func main() {
 				"../dataset/holdout_proxy.jsonl", "eval/dataset/holdout_proxy.jsonl", "dataset/holdout_proxy.jsonl",
 			)
 			official = false
-			note = "⚠️ 非正式判定：真实语料未到位，使用代理语料 holdout_proxy.jsonl 预跑（数字仅作走势参考，不作为北极星达标依据）"
 		}
 	}
 	if holdoutPath == "" {
@@ -104,6 +106,13 @@ func main() {
 		log.Fatalf("load %s: %v", holdoutPath, err)
 	}
 	log.Printf("loaded %d items from %s", len(items), holdoutPath)
+	// corpus_note 与 config.holdout 同口径：动态取文件名 + 实际条数。
+	corpusBase := filepath.Base(holdoutPath)
+	if official {
+		note = fmt.Sprintf("真实语料 %s（正式判定，%d 条）", corpusBase, len(items))
+	} else {
+		note = fmt.Sprintf("⚠️ 非正式判定：真实语料未到位，使用代理语料 %s 预跑（%d 条；数字仅作走势参考，不作为北极星达标依据）", corpusBase, len(items))
+	}
 	if !official {
 		log.Printf("==============================================")
 		log.Printf("⚠️  非正式判定：代理语料预跑，不作为北极星达标依据")

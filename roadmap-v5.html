@@ -1,0 +1,3609 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="generator" content="Box Agent Roadmap Artifact v1" />
+  <meta name="box-agent-artifact-layout-id" content="roadmap-swimlane-v1" />
+  <meta name="box-agent-artifact-version" content="1" />
+  <meta name="box-agent-roadmap-generation-version" content="4" />
+  <title>光明记忆 LIMS · 5 天加速开发路线图（R16 真实进度版 · v5） · 路线图</title>
+  <style>
+:root {
+  color-scheme: light dark;
+  --roadmap-bg: #f3f6fa;
+  --roadmap-surface: #ffffff;
+  --roadmap-surface-strong: #f7f9fc;
+  --roadmap-text: #182033;
+  --roadmap-muted: #7b8494;
+  --roadmap-border: #e2e7ef;
+  --roadmap-primary: #8e6bf2;
+  --roadmap-primary-soft: #f0ecff;
+  --roadmap-danger: #c33b52;
+  --roadmap-danger-soft: #fff0f2;
+  --roadmap-shadow: 0 16px 44px rgb(22 32 51 / 12%);
+  font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+html, body { min-height: 100%; margin: 0; }
+body { background: var(--roadmap-bg); color: var(--roadmap-text); }
+button, input, select { font: inherit; }
+button:focus-visible, input:focus-visible, select:focus-visible {
+  outline: 2px solid var(--roadmap-primary);
+  outline-offset: 2px;
+}
+
+.roadmap-app { min-height: 100vh; padding: 24px; }
+.roadmap-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 auto 16px;
+  max-width: 1440px;
+}
+.roadmap-heading { min-width: 0; }
+.roadmap-heading h1 { margin: 0; overflow: hidden; font-size: 22px; font-weight: 720; letter-spacing: -.02em; text-overflow: ellipsis; white-space: nowrap; }
+.roadmap-heading p { margin: 5px 0 0; color: var(--roadmap-muted); font-size: 12px; }
+.roadmap-actions { display: flex; flex: none; gap: 8px; }
+.roadmap-actions[hidden] { display: none; }
+.roadmap-button {
+  min-height: 34px;
+  border: 1px solid var(--roadmap-border);
+  border-radius: 8px;
+  background: var(--roadmap-surface);
+  color: var(--roadmap-text);
+  cursor: pointer;
+  padding: 6px 12px;
+}
+.roadmap-button:hover:not(:disabled) { border-color: var(--roadmap-primary); }
+.roadmap-button:disabled { cursor: not-allowed; opacity: .55; }
+.roadmap-button[data-primary="true"] { border-color: var(--roadmap-primary); background: var(--roadmap-primary); color: white; }
+.roadmap-button[data-variant="primary"] {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-color: var(--roadmap-primary);
+  background: var(--roadmap-primary);
+  color: white;
+  font-size: 12px;
+  font-weight: 540;
+  box-shadow: 0 3px 9px color-mix(in srgb, var(--roadmap-primary) 24%, transparent);
+  transition: background-color .16s ease, box-shadow .16s ease, translate .16s ease;
+}
+.roadmap-button[data-variant="primary"]:hover:not(:disabled) {
+  border-color: var(--roadmap-primary);
+  background: color-mix(in srgb, var(--roadmap-primary) 88%, black);
+  box-shadow: 0 5px 14px color-mix(in srgb, var(--roadmap-primary) 30%, transparent);
+  translate: 0 -1px;
+}
+.roadmap-icon-button {
+  display: inline-grid;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  place-items: center;
+  padding: 0;
+}
+.roadmap-button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
+.roadmap-button[data-variant="primary"] svg { width: 14px; height: 14px; }
+.roadmap-button[data-variant="danger"] { color: var(--roadmap-muted); }
+.roadmap-button[data-variant="danger"]:hover:not(:disabled) { border-color: var(--roadmap-danger); background: var(--roadmap-danger-soft); color: var(--roadmap-danger); }
+
+.roadmap-diagnostics {
+  max-width: 1440px;
+  margin: 0 auto 12px;
+  border: 1px solid #e5b75c;
+  border-radius: 8px;
+  background: #fff8e8;
+  color: #6b4b08;
+  padding: 8px 12px;
+  font-size: 12px;
+}
+.roadmap-diagnostics[hidden] { display: none; }
+
+.roadmap-stage-shell {
+  position: relative;
+  max-width: 1440px;
+  margin: 0 auto;
+  overflow: hidden;
+  border: 1px solid var(--roadmap-border);
+  border-radius: 18px;
+  background: var(--roadmap-surface);
+  box-shadow: var(--roadmap-shadow);
+}
+.roadmap-stage {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1440px;
+  min-height: 900px;
+  transform-origin: top left;
+  background: var(--roadmap-surface);
+}
+.roadmap-header, .roadmap-axis-label, .roadmap-lane, .roadmap-bar, .roadmap-label, .roadmap-milestone, .roadmap-continuation, .roadmap-grid-line {
+  position: absolute;
+}
+.roadmap-axis-label {
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  border: 1px solid var(--roadmap-border);
+  border-width: 1px 1px 1px 0;
+  background: var(--roadmap-surface);
+  padding: 0 22px;
+}
+.roadmap-axis-label span { font-size: 15px; font-weight: 720; }
+.roadmap-axis-label small { color: var(--roadmap-muted); font-size: 11px; letter-spacing: .08em; }
+.roadmap-header {
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid var(--roadmap-border);
+  border-width: 0 1px 1px 0;
+  background: var(--roadmap-surface);
+  color: var(--roadmap-muted);
+  padding: 0 8px;
+  font-size: 13px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.roadmap-header[data-kind="month"] { background: var(--roadmap-surface-strong); color: var(--roadmap-text); font-size: 14px; font-weight: 680; }
+.roadmap-lane {
+  z-index: 0;
+  border-bottom: 1px solid var(--roadmap-border);
+  background: color-mix(in srgb, var(--roadmap-lane-accent) 2.5%, var(--roadmap-surface));
+}
+.roadmap-lane-label {
+  position: absolute;
+  z-index: 2;
+  left: 0;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  width: 260px;
+  height: 100%;
+  border-right: 1px solid var(--roadmap-border);
+  background: color-mix(in srgb, var(--roadmap-lane-accent) 3.5%, var(--roadmap-surface));
+  padding: 0 22px;
+}
+.roadmap-lane-index {
+  flex: none;
+  color: var(--roadmap-muted);
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .08em;
+}
+.roadmap-lane-title {
+  overflow: hidden;
+  color: var(--roadmap-lane-accent);
+  font-size: 17px;
+  font-weight: 720;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.roadmap-grid-line {
+  z-index: 1;
+  width: 1px;
+  background: color-mix(in srgb, var(--roadmap-border) 70%, transparent);
+  pointer-events: none;
+}
+.roadmap-bar {
+  z-index: 3;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-left: 6px solid var(--roadmap-item-accent, var(--roadmap-primary));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--roadmap-item-accent, var(--roadmap-primary)) 12%, var(--roadmap-surface));
+  box-shadow: 0 5px 16px color-mix(in srgb, var(--roadmap-item-accent, var(--roadmap-primary)) 11%, transparent);
+}
+.roadmap-bar[data-line-style="dashed"] { border-color: var(--roadmap-item-accent, var(--roadmap-primary)); border-style: dashed; border-left-width: 6px; }
+.roadmap-bar-progress { height: 100%; background: var(--roadmap-item-accent, var(--roadmap-primary)); opacity: .1; }
+.roadmap-bar[data-progress="doing"] .roadmap-bar-progress { opacity: .22; }
+.roadmap-bar[data-progress="done"] .roadmap-bar-progress { opacity: .16; }
+.roadmap-bar[data-progress="blocked"] {
+  border-color: color-mix(in srgb, var(--roadmap-danger) 58%, transparent);
+  border-left-color: var(--roadmap-danger);
+  background: color-mix(in srgb, var(--roadmap-danger) 7%, var(--roadmap-surface));
+  box-shadow: 0 5px 16px color-mix(in srgb, var(--roadmap-danger) 13%, transparent);
+}
+.roadmap-bar[data-progress="blocked"] .roadmap-bar-progress {
+  background: repeating-linear-gradient(-45deg, color-mix(in srgb, var(--roadmap-danger) 24%, transparent) 0 8px, transparent 8px 16px);
+  opacity: 1;
+}
+.roadmap-label {
+  z-index: 4;
+  overflow: hidden;
+  color: var(--roadmap-text);
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 46px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.roadmap-label[data-placement="inside"] { padding: 0 8px; }
+.roadmap-milestone {
+  z-index: 3;
+  rotate: 45deg;
+  border: 3px solid var(--roadmap-item-accent, var(--roadmap-primary));
+  border-radius: 3px;
+  background: var(--roadmap-surface);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--roadmap-item-accent, var(--roadmap-primary)) 20%, transparent);
+}
+.roadmap-milestone[data-line-style="dashed"] { border-style: dashed; }
+.roadmap-continuation { z-index: 4; color: var(--roadmap-primary); font-size: 22px; line-height: 1; }
+.roadmap-legend { position: absolute; left: 24px; bottom: 18px; display: flex; gap: 18px; color: var(--roadmap-muted); font-size: 12px; }
+.roadmap-legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; margin-right: 6px; border: 2px solid var(--roadmap-primary); border-radius: 2px; vertical-align: -1px; }
+
+.roadmap-editor-backdrop {
+  position: fixed;
+  z-index: 19;
+  inset: 0;
+  background: rgb(22 32 51 / 28%);
+  cursor: default;
+}
+.roadmap-editor-backdrop[hidden] { display: none; }
+body[data-editor-open="true"] { overflow: hidden; }
+.roadmap-editor {
+  position: fixed;
+  z-index: 20;
+  inset: 0 0 0 auto;
+  width: min(720px, 94vw);
+  overflow: auto;
+  border-left: 1px solid var(--roadmap-border);
+  background: var(--roadmap-surface);
+  box-shadow: -16px 0 44px rgb(22 32 51 / 16%);
+  padding: 20px;
+}
+.roadmap-editor[hidden] { display: none; }
+.roadmap-editor header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.roadmap-editor h2 { margin: 0; font-size: 18px; }
+.roadmap-editor > header { position: sticky; z-index: 2; top: -20px; margin: -20px -20px 0; border-bottom: 1px solid var(--roadmap-border); background: var(--roadmap-surface); padding: 16px 20px; }
+.roadmap-editor-section { margin-top: 18px; }
+.roadmap-editor-section h3 { margin: 0 0 8px; font-size: 14px; }
+.roadmap-editor-section > header .roadmap-button { flex: none; }
+.roadmap-editor-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.roadmap-field { display: grid; gap: 4px; color: var(--roadmap-muted); font-size: 11px; }
+.roadmap-field input, .roadmap-field select {
+  min-width: 0;
+  height: 34px;
+  border: 1px solid var(--roadmap-border);
+  border-radius: 6px;
+  background: var(--roadmap-surface);
+  color: var(--roadmap-text);
+  padding: 4px 8px;
+}
+.roadmap-table-wrap { overflow-x: auto; }
+.roadmap-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.roadmap-table th, .roadmap-table td { border-bottom: 1px solid var(--roadmap-border); padding: 6px 4px; text-align: left; }
+.roadmap-table input, .roadmap-select-trigger { width: 100%; min-width: 90px; height: 32px; border: 1px solid var(--roadmap-border); border-radius: 5px; background: var(--roadmap-surface); color: var(--roadmap-text); padding: 3px 7px; }
+.roadmap-select { min-width: 90px; }
+.roadmap-select-trigger {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+}
+.roadmap-select-trigger::after {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border: solid currentColor;
+  border-width: 0 1.5px 1.5px 0;
+  content: "";
+  rotate: 45deg;
+  translate: 0 -2px;
+  transition: rotate .14s ease, translate .14s ease;
+}
+.roadmap-select-trigger[aria-expanded="true"] { border-color: var(--roadmap-primary); box-shadow: 0 0 0 2px color-mix(in srgb, var(--roadmap-primary) 16%, transparent); }
+.roadmap-select-trigger[aria-expanded="true"]::after { rotate: 225deg; translate: 0 2px; }
+.roadmap-select-menu {
+  position: fixed;
+  z-index: 50;
+  inset: auto;
+  max-height: 224px;
+  overflow: auto;
+  margin: 0;
+  border: 1px solid var(--roadmap-border);
+  border-radius: 8px;
+  background: var(--roadmap-surface);
+  color: var(--roadmap-text);
+  box-shadow: 0 12px 28px rgb(22 32 51 / 18%);
+  padding: 4px;
+}
+.roadmap-select-option {
+  display: flex;
+  width: 100%;
+  min-height: 30px;
+  align-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 5px 8px;
+  text-align: left;
+  white-space: nowrap;
+}
+.roadmap-select-option:hover, .roadmap-select-option:focus-visible { background: var(--roadmap-primary-soft); color: var(--roadmap-primary); outline: none; }
+.roadmap-select-option[aria-selected="true"] { background: var(--roadmap-primary); color: white; }
+.roadmap-table th:last-child, .roadmap-table td:last-child { width: 40px; text-align: right; }
+.roadmap-toast { position: fixed; z-index: 40; left: 50%; bottom: 24px; translate: -50% 0; border-radius: 8px; background: #162033; color: white; padding: 9px 14px; font-size: 12px; box-shadow: var(--roadmap-shadow); }
+.roadmap-toast[hidden] { display: none; }
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --roadmap-bg: #111722;
+    --roadmap-surface: #192130;
+    --roadmap-surface-strong: #202938;
+    --roadmap-text: #eef3fb;
+    --roadmap-muted: #aab6c9;
+    --roadmap-border: #344158;
+    --roadmap-primary: #8fa6ff;
+    --roadmap-primary-soft: #27365f;
+    --roadmap-danger-soft: #3c2530;
+    --roadmap-shadow: 0 16px 44px rgb(0 0 0 / 32%);
+  }
+  .roadmap-diagnostics { background: #3b321d; color: #f5d58e; border-color: #80672f; }
+}
+
+@media (max-width: 720px) {
+  .roadmap-app { padding: 10px; }
+  .roadmap-toolbar { align-items: flex-start; }
+  .roadmap-heading h1 { font-size: 16px; }
+  .roadmap-editor-grid { grid-template-columns: 1fr; }
+}
+
+  </style>
+</head>
+<body data-artifact-kind="roadmap" data-layout-id="roadmap-swimlane-v1" data-palette-id="roadmap-default-v1" data-generation-version="4" data-schema-version="1" data-geometry-version="1" data-renderer-version="1">
+  <main class="roadmap-app">
+    <header class="roadmap-toolbar">
+      <div class="roadmap-heading"><h1 data-role="roadmap-title"></h1><p>路线图 · 双层月份刻度 · 泳道排期</p></div>
+      <div class="roadmap-actions" data-role="roadmap-actions" hidden>
+        <button class="roadmap-button" type="button" data-action="adjust" disabled title="当前运行时未声明 Roadmap 编辑能力">调整</button>
+        <button class="roadmap-button" data-primary="true" type="button" data-action="save" disabled>保存</button>
+      </div>
+    </header>
+    <aside class="roadmap-diagnostics" data-role="diagnostics" hidden></aside>
+    <div class="roadmap-stage-shell" data-role="stage-shell" style="height:1208px">
+      <div class="roadmap-stage" data-role="stage" style="width:1440px;height:1208px">
+<div class="roadmap-lane" data-lane-id="p8" style="left:32px;top:1008px;width:1376px;height:200px;--roadmap-lane-accent:#a678f5"><div class="roadmap-lane-label" title="P8 集合体与多后端（R16 新增）"><span class="roadmap-lane-index">05</span><span class="roadmap-lane-title">P8 集合体与多后端（R16 新增）</span></div></div>
+<div class="roadmap-grid-line" style="left:292px;top:1008px;height:200px"></div>
+<div class="roadmap-grid-line" style="left:1184.8px;top:1008px;height:200px"></div>
+<div class="roadmap-grid-line" style="left:1408px;top:1008px;height:200px"></div>
+<div class="roadmap-bar" data-item-id="p8-s1-qdrant" data-line-style="solid" data-progress="planned" title="S1 Qdrant 后端 · 2026-10-16 · 计划中" style="left:1184.8px;top:1028px;width:55.8px;height:46px;--roadmap-item-accent:#a678f5"><div class="roadmap-bar-progress" style="width:0%"></div></div>
+<div class="roadmap-label" data-item-id="p8-s1-qdrant" data-placement="inside" title="S1 Qdrant 后端" style="left:1192.8px;top:1028px;width:39.8px;height:46px">S1 Qdrant 后端</div>
+<div class="roadmap-bar" data-item-id="p8-s2-noderole" data-line-style="solid" data-progress="planned" title="S2 节点角色与拓扑 · 2026-10-16 · 计划中" style="left:1240.6px;top:1028px;width:55.8px;height:46px;--roadmap-item-accent:#a678f5"><div class="roadmap-bar-progress" style="width:0%"></div></div>
+<div class="roadmap-label" data-item-id="p8-s2-noderole" data-placement="inside" title="S2 节点角色与拓扑" style="left:1248.6px;top:1028px;width:39.8px;height:46px">S2 节点角色与拓扑</div>
+<div class="roadmap-bar" data-item-id="p8-s3-appconn" data-line-style="solid" data-progress="planned" title="S3 应用连接器 · 2026-10-16 · 计划中" style="left:1296.4px;top:1028px;width:55.8px;height:46px;--roadmap-item-accent:#a678f5"><div class="roadmap-bar-progress" style="width:0%"></div></div>
+<div class="roadmap-label" data-item-id="p8-s3-appconn" data-placement="inside" title="S3 应用连接器" style="left:1304.4px;top:1028px;width:39.8px;height:46px">S3 应用连接器</div>
+<div class="roadmap-bar" data-item-id="p8-s4-gate" data-line-style="solid" data-progress="planned" title="S4 门禁+corpus_note+450 · 2026-10-16 · 计划中" style="left:1352.2px;top:1028px;width:55.8px;height:46px;--roadmap-item-accent:#a678f5"><div class="roadmap-bar-progress" style="width:0%"></div></div>
+<div class="roadmap-label" data-item-id="p8-s4-gate" data-placement="inside" title="S4 门禁+corpus_note+450" style="left:1360.2px;top:1028px;width:39.8px;height:46px">S4 门禁+corpus_note+450</div>
+<div class="roadmap-milestone" data-item-id="p8-gate-milestone" data-line-style="solid" title="R16 门禁 PASS + 北极星补评出数 · 2026-10-16" style="left:1184.8px;top:1092px;width:18px;height:18px;--roadmap-item-accent:#a678f5"></div>
+<div class="roadmap-label" data-item-id="p8-gate-milestone" data-placement="outside-right" title="R16 门禁 PASS + 北极星补评出数" style="left:1208.8px;top:1090px;width:220px;height:46px">R16 门禁 PASS + 北极星补评</div>
+<div class="roadmap-axis-label" style="left:32px;top:60px;width:260px;height:76px"><span>阶段</span><small>团队泳道</small></div>
+<div class="roadmap-header" data-kind="month" title="2026-10" style="left:292px;top:60px;width:1116px;height:38px">2026-10</div>
+<div class="roadmap-header" data-kind="half-month" title="上半月" style="left:292px;top:98px;width:892.8px;height:38px">上半月</div>
+<div class="roadmap-header" data-kind="half-month" title="下半月" style="left:1184.8px;top:98px;width:223.2px;height:38px">下半月</div>
+<div class="roadmap-lane" data-lane-id="p7" style="left:32px;top:136px;width:1376px;height:282px;--roadmap-lane-accent:#8e6bf2"><div class="roadmap-lane-label" title="P7 合规与优化"><span class="roadmap-lane-index">01</span><span class="roadmap-lane-title">P7 合规与优化</span></div></div>
+<div class="roadmap-lane" data-lane-id="deploy" style="left:32px;top:418px;width:1376px;height:218px;--roadmap-lane-accent:#7092fa"><div class="roadmap-lane-label" title="FreeBSD + ZFS 真机部署"><span class="roadmap-lane-index">02</span><span class="roadmap-lane-title">FreeBSD + ZFS 真机部署</span></div></div>
+<div class="roadmap-lane" data-lane-id="polaris" style="left:32px;top:636px;width:1376px;height:218px;--roadmap-lane-accent:#56d9b6"><div class="roadmap-lane-label" title="AI 协同与北极星评测"><span class="roadmap-lane-index">03</span><span class="roadmap-lane-title">AI 协同与北极星评测</span></div></div>
+<div class="roadmap-lane" data-lane-id="packages" style="left:32px;top:854px;width:1376px;height:154px;--roadmap-lane-accent:#ebaf78"><div class="roadmap-lane-label" title="应用包生态真机验证"><span class="roadmap-lane-index">04</span><span class="roadmap-lane-title">应用包生态真机验证</span></div></div>
+<div class="roadmap-grid-line" style="left:292px;top:136px;height:872px"></div>
+<div class="roadmap-grid-line" style="left:1184.8px;top:136px;height:872px"></div>
+<div class="roadmap-grid-line" style="left:1408px;top:136px;height:872px"></div>
+<div class="roadmap-bar" data-item-id="p7-gdpr" data-line-style="solid" data-progress="done" title="P7-A GDPR 合规 · 2026-10-12 → 2026-10-13 · 已完成" style="left:292px;top:156px;width:223.2px;height:46px;--roadmap-item-accent:#8e6bf2"><div class="roadmap-bar-progress" style="width:0%"></div></div>
+<div class="roadmap-bar" data-item-id="p7-bench-dataset" data-line-style="solid" data-progress="done" title="外部基准数据集获取/制作（独立任务） · 2026-10-12 → 2026-10-14 · 已完成" style="left:292px;top:220px;width:446.4px;height:46px;--roadmap-item-accent:#8e6bf2"><div class="roadmap-bar-progress" style="width:0%"></div></div>
+<div class="roadmap-bar" data-item-id="p7-perf" data-line-style="solid" data-progress="done" title="P7-B 检索性能 P95&lt;200ms · 2026-10-13 → 2026-10-14 · 已完成" style="left:515.2px;top:284px;width:223.2px;height:46px;--roadmap-item-accent:#8e6bf2"><div class="roadmap-bar-progress" style="width:0%"></div></div>
+<div class="roadmap-bar" data-item-id="p7-sdk" data-line-style="solid" data-progress="done" title="P7-C 开放 API/SDK · 2026-10-13 → 2026-10-14 · 已完成" style="left:515.2px;top:348px;width:223.2px;height:46px;--roadmap-item-accent:#8e6bf2"><div class="roadmap-bar-progress" style="width:0%"></div></div>
+<div class="roadmap-bar" data-item-id="p7-bench" data-line-style="solid" data-progress="done" title="P7-D 公开基准对标 · 2026-10-14 → 2026-10-17 · 已完成" style="left:738.4px;top:156px;width:669.6px;height:46px;--roadmap-item-accent:#8e6bf2"><div class="roadmap-bar-progress" style="width:0%"></div></div>
+<div class="roadmap-bar" data-item-id="p7-i18n" data-line-style="solid" data-progress="done" title="P7-E 多语言国际化 · 2026-10-16 → 2026-10-17 · 已完成" style="left:1184.8px;top:220px;width:223.2px;height:46px;--roadmap-item-accent:#8e6bf2"><div class="roadmap-bar-progress" style="width:0%"></div></div>
+<div class="roadmap-bar" data-item-id="dep-zfs-jail" data-line-style="solid" data-progress="done" title="ZFS dataset + jail 划分 · 2026-10-12 → 2026-10-13 · 已完成" style="left:292px;top:438px;width:223.2px;height:46px;--roadmap-item-accent:#7092fa"><div class="roadmap-bar-progress" style="width:0%"></div></div>
+<div class="roadmap-bar" data-item-id="dep-pf-security" data-line-style="solid" data-progress="doing" title="pf 规则 + 安全加固 · 2026-10-13 → 2026-10-14 · 进行中" style="left:515.2px;top:566px;width:223.2px;height:46px;--roadmap-item-accent:#7092fa"><div class="roadmap-bar-progress" style="width:0%"></div></div>
+<div class="roadmap-bar" data-item-id="dep-snapshot" data-line-style="solid" data-progress="blocked" title="ZFS 快照 + 容灾 + 备份包 · 2026-10-14 → 2026-10-15 · 阻塞" style="left:738.4px;top:438px;width:223.2px;height:46px;--roadmap-item-accent:#7092fa"><div class="roadmap-bar-progress" style="width:0%"></div></div>
+<div class="roadmap-bar" data-item-id="dep-cluster" data-line-style="solid" data-progress="planned" title="集合体 Cluster 节点验证 · 2026-10-15 → 2026-10-17 · 计划中" style="left:961.6px;top:502px;width:446.4px;height:46px;--roadmap-item-accent:#7092fa"><div class="roadmap-bar-progress" style="width:0%"></div></div>
+<div class="roadmap-bar" data-item-id="pol-corpus" data-line-style="solid" data-progress="done" title="真实语料 holdout 接入 · 2026-10-13 → 2026-10-14 · 已完成" style="left:515.2px;top:656px;width:223.2px;height:46px;--roadmap-item-accent:#56d9b6"><div class="roadmap-bar-progress" style="width:0%"></div></div>
+<div class="roadmap-bar" data-item-id="pol-metric" data-line-style="solid" data-progress="done" title="零 token 覆盖率口径 M1/M2 实现 · 2026-10-14 → 2026-10-15 · 已完成" style="left:738.4px;top:720px;width:223.2px;height:46px;--roadmap-item-accent:#56d9b6"><div class="roadmap-bar-progress" style="width:0%"></div></div>
+<div class="roadmap-bar" data-item-id="pol-optimize" data-line-style="solid" data-progress="done" title="控制面光明语言压缩优化 · 2026-10-15 → 2026-10-17 · 已完成" style="left:961.6px;top:656px;width:446.4px;height:46px;--roadmap-item-accent:#56d9b6"><div class="roadmap-bar-progress" style="width:0%"></div></div>
+<div class="roadmap-bar" data-item-id="pkg-install" data-line-style="solid" data-progress="done" title="首批 8 包 Family 档装配 · 2026-10-13 → 2026-10-14 · 已完成" style="left:515.2px;top:874px;width:223.2px;height:46px;--roadmap-item-accent:#ebaf78"><div class="roadmap-bar-progress" style="width:0%"></div></div>
+<div class="roadmap-bar" data-item-id="pkg-memory" data-line-style="solid" data-progress="done" title="包记忆抽取 + 拓扑排序真机验证 · 2026-10-14 → 2026-10-15 · 已完成" style="left:738.4px;top:938px;width:223.2px;height:46px;--roadmap-item-accent:#ebaf78"><div class="roadmap-bar-progress" style="width:0%"></div></div>
+<div class="roadmap-milestone" data-item-id="dep-family-boot" data-line-style="solid" title="Family 档真机启动验收 · 2026-10-13" style="left:506.20000000000005px;top:516px;width:18px;height:18px;--roadmap-item-accent:#7092fa"></div>
+<div class="roadmap-milestone" data-item-id="pol-polaris-gate" data-line-style="solid" title="北极星 ≥0.95 达标验证 · 2026-10-16" style="left:1175.8px;top:798px;width:18px;height:18px;--roadmap-item-accent:#56d9b6"></div>
+<div class="roadmap-label" data-item-id="p7-gdpr" data-placement="inside" title="P7-A GDPR 合规" style="left:302px;top:156px;width:203.2px;height:46px">P7-A GDPR 合规</div>
+<div class="roadmap-label" data-item-id="p7-bench-dataset" data-placement="inside" title="外部基准数据集获取/制作（独立任务）" style="left:302px;top:220px;width:426.4px;height:46px">外部基准数据集获取/制作（独立任务）</div>
+<div class="roadmap-label" data-item-id="p7-perf" data-placement="inside" title="P7-B 检索性能 P95&lt;200ms" style="left:525.2px;top:284px;width:203.2px;height:46px">P7-B 检索性能 P95&lt;200ms</div>
+<div class="roadmap-label" data-item-id="p7-sdk" data-placement="inside" title="P7-C 开放 API/SDK" style="left:525.2px;top:348px;width:203.2px;height:46px">P7-C 开放 API/SDK</div>
+<div class="roadmap-label" data-item-id="p7-bench" data-placement="inside" title="P7-D 公开基准对标" style="left:748.4px;top:156px;width:649.6px;height:46px">P7-D 公开基准对标</div>
+<div class="roadmap-label" data-item-id="p7-i18n" data-placement="inside" title="P7-E 多语言国际化" style="left:1194.8px;top:220px;width:203.2px;height:46px">P7-E 多语言国际化</div>
+<div class="roadmap-label" data-item-id="dep-zfs-jail" data-placement="inside" title="ZFS dataset + jail 划分" style="left:302px;top:438px;width:203.2px;height:46px">ZFS dataset + jail 划分</div>
+<div class="roadmap-label" data-item-id="dep-family-boot" data-placement="outside-right" title="Family 档真机启动验收" style="left:534.2px;top:502px;width:161px;height:46px">Family 档真机启动验收</div>
+<div class="roadmap-label" data-item-id="dep-pf-security" data-placement="inside" title="pf 规则 + 安全加固" style="left:525.2px;top:566px;width:203.2px;height:46px">pf 规则 + 安全加固</div>
+<div class="roadmap-label" data-item-id="dep-snapshot" data-placement="inside" title="ZFS 快照 + 容灾 + 备份包" style="left:748.4px;top:438px;width:203.2px;height:46px">ZFS 快照 + 容灾 + 备份包</div>
+<div class="roadmap-label" data-item-id="dep-cluster" data-placement="inside" title="集合体 Cluster 节点验证" style="left:971.6px;top:502px;width:426.4px;height:46px">集合体 Cluster 节点验证</div>
+<div class="roadmap-label" data-item-id="pol-corpus" data-placement="inside" title="真实语料 holdout 接入" style="left:525.2px;top:656px;width:203.2px;height:46px">真实语料 holdout 接入</div>
+<div class="roadmap-label" data-item-id="pol-metric" data-placement="outside-right" title="零 token 覆盖率口径 M1/M2 实现" style="left:971.6px;top:720px;width:232px;height:46px">零 token 覆盖率口径 M1/M2 实现</div>
+<div class="roadmap-label" data-item-id="pol-optimize" data-placement="inside" title="控制面光明语言压缩优化" style="left:971.6px;top:656px;width:426.4px;height:46px">控制面光明语言压缩优化</div>
+<div class="roadmap-label" data-item-id="pol-polaris-gate" data-placement="outside-right" title="北极星 ≥0.95 达标验证" style="left:1203.8px;top:784px;width:168px;height:46px">北极星 ≥0.95 达标验证</div>
+<div class="roadmap-label" data-item-id="pkg-install" data-placement="inside" title="首批 8 包 Family 档装配" style="left:525.2px;top:874px;width:203.2px;height:46px">首批 8 包 Family 档装配</div>
+<div class="roadmap-label" data-item-id="pkg-memory" data-placement="outside-right" title="包记忆抽取 + 拓扑排序真机验证" style="left:971.6px;top:938px;width:219px;height:46px">包记忆抽取 + 拓扑排序真机验证</div>
+
+      </div>
+    </div>
+  </main>
+  <div class="roadmap-editor-backdrop" data-role="editor-backdrop" hidden></div>
+  <aside class="roadmap-editor" data-role="editor" role="dialog" aria-modal="true" aria-label="路线图调整" hidden></aside>
+  <div class="roadmap-toast" data-role="toast" role="status" aria-live="polite" hidden></div>
+  <script type="application/json" id="deck-document">{
+  "schema_version": 1,
+  "kind": "roadmap-spec",
+  "title": "光明记忆 LIMS · 5 天加速开发路线图（R16 真实进度版 · v5）",
+  "range": {
+    "start": "2026-10-12",
+    "end": "2026-10-17",
+    "granularity": "half-month"
+  },
+  "lanes": [
+    {
+      "id": "p7",
+      "label": "P7 合规与优化",
+      "order": 1
+    },
+    {
+      "id": "deploy",
+      "label": "FreeBSD + ZFS 真机部署",
+      "order": 2
+    },
+    {
+      "id": "polaris",
+      "label": "AI 协同与北极星评测",
+      "order": 3
+    },
+    {
+      "id": "packages",
+      "label": "应用包生态真机验证",
+      "order": 4
+    },
+    {
+      "id": "p8",
+      "label": "P8 集合体与多后端（R16 新增）",
+      "order": 5
+    }
+  ],
+  "items": [
+    {
+      "id": "p7-gdpr",
+      "lane_id": "p7",
+      "title": "P7-A GDPR 合规",
+      "start": "2026-10-12",
+      "end": "2026-10-13",
+      "kind": "bar",
+      "certainty": "confirmed",
+      "progress": "done",
+      "source": {
+        "type": "natural-language",
+        "confidence": 1,
+        "excerpt": "启动 P7 合规与优化（高优先级）— _R138_B线P5-P9下一步计划.md §九"
+      }
+    },
+    {
+      "id": "p7-bench-dataset",
+      "lane_id": "p7",
+      "title": "外部基准数据集获取/制作（独立任务）",
+      "start": "2026-10-12",
+      "end": "2026-10-14",
+      "kind": "bar",
+      "certainty": "confirmed",
+      "progress": "done",
+      "source": {
+        "type": "natural-language",
+        "confidence": 0.9,
+        "excerpt": "用户确认外部基准数据集 5 天内可用，需单独开任务获取/制作"
+      }
+    },
+    {
+      "id": "p7-perf",
+      "lane_id": "p7",
+      "title": "P7-B 检索性能 P95\u003c200ms",
+      "start": "2026-10-13",
+      "end": "2026-10-14",
+      "kind": "bar",
+      "certainty": "confirmed",
+      "progress": "done",
+      "source": {
+        "type": "natural-language",
+        "confidence": 1,
+        "excerpt": "检索延迟 P95 \u003c 200ms（内核记忆检索链路）— _R138_B线P5-P9下一步计划.md §四"
+      }
+    },
+    {
+      "id": "p7-sdk",
+      "lane_id": "p7",
+      "title": "P7-C 开放 API/SDK",
+      "start": "2026-10-13",
+      "end": "2026-10-14",
+      "kind": "bar",
+      "certainty": "confirmed",
+      "progress": "done",
+      "source": {
+        "type": "natural-language",
+        "confidence": 1,
+        "excerpt": "提供 Python/JS SDK — _R138_B线P5-P9下一步计划.md §四"
+      }
+    },
+    {
+      "id": "p7-bench",
+      "lane_id": "p7",
+      "title": "P7-D 公开基准对标",
+      "start": "2026-10-14",
+      "end": "2026-10-17",
+      "kind": "bar",
+      "certainty": "confirmed",
+      "progress": "done",
+      "source": {
+        "type": "natural-language",
+        "confidence": 0.8,
+        "excerpt": "公开基准对标每年重跑并记录结果 — 数据集获取任务 10-14 前完成"
+      }
+    },
+    {
+      "id": "p7-i18n",
+      "lane_id": "p7",
+      "title": "P7-E 多语言国际化",
+      "start": "2026-10-16",
+      "end": "2026-10-17",
+      "kind": "bar",
+      "certainty": "confirmed",
+      "progress": "done",
+      "source": {
+        "type": "natural-language",
+        "confidence": 0.8,
+        "excerpt": "用户确认 P7-E 多语言本轮做，不顺延"
+      }
+    },
+    {
+      "id": "dep-zfs-jail",
+      "lane_id": "deploy",
+      "title": "ZFS dataset + jail 划分",
+      "start": "2026-10-12",
+      "end": "2026-10-13",
+      "kind": "bar",
+      "certainty": "confirmed",
+      "progress": "done",
+      "source": {
+        "type": "natural-language",
+        "confidence": 1,
+        "excerpt": "P5 ZFS + jail 实机 — manuals/dev-plan-p1-pgvector-p2-temperature-p5-zfsjail.md §2.1"
+      }
+    },
+    {
+      "id": "dep-family-boot",
+      "lane_id": "deploy",
+      "title": "Family 档真机启动验收",
+      "start": "2026-10-13",
+      "kind": "milestone",
+      "certainty": "confirmed",
+      "progress": "done",
+      "source": {
+        "type": "natural-language",
+        "confidence": 0.95,
+        "excerpt": "Family 档真机启动验收 — manuals §2.1 P1/P5 验收标准"
+      }
+    },
+    {
+      "id": "dep-pf-security",
+      "lane_id": "deploy",
+      "title": "pf 规则 + 安全加固",
+      "start": "2026-10-13",
+      "end": "2026-10-14",
+      "kind": "bar",
+      "certainty": "confirmed",
+      "progress": "doing",
+      "source": {
+        "type": "natural-language",
+        "confidence": 0.95,
+        "excerpt": "pf 规则 — manuals §2.1 P5 验收：pfctl -sr 仅暴露 443/8443"
+      }
+    },
+    {
+      "id": "dep-snapshot",
+      "lane_id": "deploy",
+      "title": "ZFS 快照 + 容灾 + 备份包",
+      "start": "2026-10-14",
+      "end": "2026-10-15",
+      "kind": "bar",
+      "certainty": "confirmed",
+      "progress": "blocked",
+      "source": {
+        "type": "natural-language",
+        "confidence": 0.9,
+        "excerpt": "快照与 zfs send 容灾 — lightmem.md §5.6"
+      }
+    },
+    {
+      "id": "dep-cluster",
+      "lane_id": "deploy",
+      "title": "集合体 Cluster 节点验证",
+      "start": "2026-10-15",
+      "end": "2026-10-17",
+      "kind": "bar",
+      "certainty": "confirmed",
+      "progress": "planned",
+      "source": {
+        "type": "natural-language",
+        "confidence": 0.8,
+        "excerpt": "用户确认家庭实验室有 2 台机器做 Coordinator/Worker"
+      }
+    },
+    {
+      "id": "pol-corpus",
+      "lane_id": "polaris",
+      "title": "真实语料 holdout 接入",
+      "start": "2026-10-13",
+      "end": "2026-10-14",
+      "kind": "bar",
+      "certainty": "confirmed",
+      "progress": "done",
+      "source": {
+        "type": "natural-language",
+        "confidence": 0.85,
+        "excerpt": "用户确认真实语料 5 天内到位"
+      }
+    },
+    {
+      "id": "pol-metric",
+      "lane_id": "polaris",
+      "title": "零 token 覆盖率口径 M1/M2 实现",
+      "start": "2026-10-14",
+      "end": "2026-10-15",
+      "kind": "bar",
+      "certainty": "confirmed",
+      "progress": "done",
+      "source": {
+        "type": "natural-language",
+        "confidence": 0.85,
+        "excerpt": "M1–M10 评测口径（含独有控制面 token 占比 M2）— lightmem.md §2.1 v2.1"
+      }
+    },
+    {
+      "id": "pol-optimize",
+      "lane_id": "polaris",
+      "title": "控制面光明语言压缩优化",
+      "start": "2026-10-15",
+      "end": "2026-10-17",
+      "kind": "bar",
+      "certainty": "confirmed",
+      "progress": "done",
+      "source": {
+        "type": "natural-language",
+        "confidence": 0.85,
+        "excerpt": "主特色：低 token 长期运行 — lightmem.md §2.1 v2.1；用户确认本轮完成"
+      }
+    },
+    {
+      "id": "pol-polaris-gate",
+      "lane_id": "polaris",
+      "title": "北极星 ≥0.95 达标验证",
+      "start": "2026-10-16",
+      "kind": "milestone",
+      "certainty": "confirmed",
+      "progress": "done",
+      "source": {
+        "type": "natural-language",
+        "confidence": 0.8,
+        "excerpt": "北极星指标：真实语料 holdout 零 token 覆盖率 ≥0.95；用户确认本轮验证"
+      }
+    },
+    {
+      "id": "pkg-install",
+      "lane_id": "packages",
+      "title": "首批 8 包 Family 档装配",
+      "start": "2026-10-13",
+      "end": "2026-10-14",
+      "kind": "bar",
+      "certainty": "confirmed",
+      "progress": "done",
+      "source": {
+        "type": "natural-language",
+        "confidence": 0.85,
+        "excerpt": "首批 8 包安装、配置、升级、卸载 — _R138_B线P5-P9下一步计划.md §六"
+      }
+    },
+    {
+      "id": "pkg-memory",
+      "lane_id": "packages",
+      "title": "包记忆抽取 + 拓扑排序真机验证",
+      "start": "2026-10-14",
+      "end": "2026-10-15",
+      "kind": "bar",
+      "certainty": "confirmed",
+      "progress": "done",
+      "source": {
+        "type": "natural-language",
+        "confidence": 0.8,
+        "excerpt": "包成为被记忆的一等实体（装包/配包/用包/沉淀包经验四环节）— lightmem.md §6.2 v2.1"
+      }
+    },
+    {
+      "id": "p8-s1-qdrant",
+      "lane_id": "p8",
+      "title": "S1 Qdrant 后端",
+      "start": "2026-10-16",
+      "end": "2026-10-16",
+      "kind": "bar",
+      "certainty": "confirmed",
+      "progress": "planned",
+      "source": {
+        "type": "natural-language",
+        "confidence": 1,
+        "excerpt": "R16 S1: kernel/backend_qdrant.go + test"
+      }
+    },
+    {
+      "id": "p8-s2-noderole",
+      "lane_id": "p8",
+      "title": "S2 节点角色与拓扑",
+      "start": "2026-10-16",
+      "end": "2026-10-16",
+      "kind": "bar",
+      "certainty": "confirmed",
+      "progress": "planned",
+      "source": {
+        "type": "natural-language",
+        "confidence": 1,
+        "excerpt": "R16 S2: kernel/node_role.go + topology.go + test"
+      }
+    },
+    {
+      "id": "p8-s3-appconn",
+      "lane_id": "p8",
+      "title": "S3 应用连接器",
+      "start": "2026-10-16",
+      "end": "2026-10-16",
+      "kind": "bar",
+      "certainty": "confirmed",
+      "progress": "planned",
+      "source": {
+        "type": "natural-language",
+        "confidence": 1,
+        "excerpt": "R16 S3: kernel/connector_app.go + test"
+      }
+    },
+    {
+      "id": "p8-s4-gate",
+      "lane_id": "p8",
+      "title": "S4 门禁+corpus_note+holdout 450",
+      "start": "2026-10-16",
+      "end": "2026-10-16",
+      "kind": "bar",
+      "certainty": "confirmed",
+      "progress": "planned",
+      "source": {
+        "type": "natural-language",
+        "confidence": 1,
+        "excerpt": "R16 S4: gate.sh hard gate + corpus_note fix + holdout 450 polaris"
+      }
+    },
+    {
+      "id": "p8-gate-milestone",
+      "lane_id": "p8",
+      "title": "R16 门禁 PASS + 北极星补评出数",
+      "start": "2026-10-16",
+      "kind": "milestone",
+      "certainty": "confirmed",
+      "progress": "planned",
+      "source": {
+        "type": "natural-language",
+        "confidence": 1,
+        "excerpt": "R16 accept: gate.sh PASS, polaris holdout 450 output"
+      }
+    }
+  ]
+}</script>
+  <script type="application/json" id="roadmap-geometry">{
+  "schema_version": 1,
+  "kind": "roadmap-geometry",
+  "source_schema_version": 1,
+  "canvas": {
+    "width": 1440,
+    "height": 1208,
+    "plot_left": 292,
+    "plot_right": 1408,
+    "header_top": 60,
+    "header_height": 76
+  },
+  "headers": [
+    {
+      "id": "month-1",
+      "kind": "month",
+      "label": "2026-10",
+      "start": "2026-10-12",
+      "end": "2026-10-17",
+      "x": 292,
+      "y": 60,
+      "width": 1116,
+      "height": 38
+    },
+    {
+      "id": "half-month-1",
+      "kind": "half-month",
+      "label": "上半月",
+      "start": "2026-10-12",
+      "end": "2026-10-16",
+      "x": 292,
+      "y": 98,
+      "width": 892.8,
+      "height": 38
+    },
+    {
+      "id": "half-month-2",
+      "kind": "half-month",
+      "label": "下半月",
+      "start": "2026-10-16",
+      "end": "2026-10-17",
+      "x": 1184.8,
+      "y": 98,
+      "width": 223.2,
+      "height": 38
+    }
+  ],
+  "lanes": [
+    {
+      "id": "p7",
+      "label": "P7 合规与优化",
+      "order": 1,
+      "x": 32,
+      "y": 136,
+      "width": 1376,
+      "height": 282,
+      "track_count": 4
+    },
+    {
+      "id": "deploy",
+      "label": "FreeBSD + ZFS 真机部署",
+      "order": 2,
+      "x": 32,
+      "y": 418,
+      "width": 1376,
+      "height": 218,
+      "track_count": 3
+    },
+    {
+      "id": "polaris",
+      "label": "AI 协同与北极星评测",
+      "order": 3,
+      "x": 32,
+      "y": 636,
+      "width": 1376,
+      "height": 218,
+      "track_count": 3
+    },
+    {
+      "id": "packages",
+      "label": "应用包生态真机验证",
+      "order": 4,
+      "x": 32,
+      "y": 854,
+      "width": 1376,
+      "height": 154,
+      "track_count": 2
+    },
+    {
+      "id": "p8",
+      "label": "P8 集合体与多后端（R16 新增）",
+      "order": 5,
+      "x": 32,
+      "y": 1008,
+      "width": 1376,
+      "height": 200,
+      "track_count": 2
+    }
+  ],
+  "bars": [
+    {
+      "id": "p7-gdpr",
+      "lane_id": "p7",
+      "title": "P7-A GDPR 合规",
+      "start": "2026-10-12",
+      "end": "2026-10-13",
+      "track": 0,
+      "x": 292,
+      "y": 156,
+      "width": 223.2,
+      "height": 46,
+      "certainty": "confirmed",
+      "progress": "done",
+      "line_style": "solid"
+    },
+    {
+      "id": "p7-bench-dataset",
+      "lane_id": "p7",
+      "title": "外部基准数据集获取/制作（独立任务）",
+      "start": "2026-10-12",
+      "end": "2026-10-14",
+      "track": 1,
+      "x": 292,
+      "y": 220,
+      "width": 446.4,
+      "height": 46,
+      "certainty": "confirmed",
+      "progress": "done",
+      "line_style": "solid"
+    },
+    {
+      "id": "p7-perf",
+      "lane_id": "p7",
+      "title": "P7-B 检索性能 P95\u003c200ms",
+      "start": "2026-10-13",
+      "end": "2026-10-14",
+      "track": 2,
+      "x": 515.2,
+      "y": 284,
+      "width": 223.2,
+      "height": 46,
+      "certainty": "confirmed",
+      "progress": "done",
+      "line_style": "solid"
+    },
+    {
+      "id": "p7-sdk",
+      "lane_id": "p7",
+      "title": "P7-C 开放 API/SDK",
+      "start": "2026-10-13",
+      "end": "2026-10-14",
+      "track": 3,
+      "x": 515.2,
+      "y": 348,
+      "width": 223.2,
+      "height": 46,
+      "certainty": "confirmed",
+      "progress": "done",
+      "line_style": "solid"
+    },
+    {
+      "id": "p7-bench",
+      "lane_id": "p7",
+      "title": "P7-D 公开基准对标",
+      "start": "2026-10-14",
+      "end": "2026-10-17",
+      "track": 0,
+      "x": 738.4,
+      "y": 156,
+      "width": 669.6,
+      "height": 46,
+      "certainty": "confirmed",
+      "progress": "done",
+      "line_style": "solid"
+    },
+    {
+      "id": "p7-i18n",
+      "lane_id": "p7",
+      "title": "P7-E 多语言国际化",
+      "start": "2026-10-16",
+      "end": "2026-10-17",
+      "track": 1,
+      "x": 1184.8,
+      "y": 220,
+      "width": 223.2,
+      "height": 46,
+      "certainty": "confirmed",
+      "progress": "done",
+      "line_style": "solid"
+    },
+    {
+      "id": "dep-zfs-jail",
+      "lane_id": "deploy",
+      "title": "ZFS dataset + jail 划分",
+      "start": "2026-10-12",
+      "end": "2026-10-13",
+      "track": 0,
+      "x": 292,
+      "y": 438,
+      "width": 223.2,
+      "height": 46,
+      "certainty": "confirmed",
+      "progress": "done",
+      "line_style": "solid"
+    },
+    {
+      "id": "dep-pf-security",
+      "lane_id": "deploy",
+      "title": "pf 规则 + 安全加固",
+      "start": "2026-10-13",
+      "end": "2026-10-14",
+      "track": 2,
+      "x": 515.2,
+      "y": 566,
+      "width": 223.2,
+      "height": 46,
+      "certainty": "confirmed",
+      "progress": "doing",
+      "line_style": "solid"
+    },
+    {
+      "id": "dep-snapshot",
+      "lane_id": "deploy",
+      "title": "ZFS 快照 + 容灾 + 备份包",
+      "start": "2026-10-14",
+      "end": "2026-10-15",
+      "track": 0,
+      "x": 738.4,
+      "y": 438,
+      "width": 223.2,
+      "height": 46,
+      "certainty": "confirmed",
+      "progress": "blocked",
+      "line_style": "solid"
+    },
+    {
+      "id": "dep-cluster",
+      "lane_id": "deploy",
+      "title": "集合体 Cluster 节点验证",
+      "start": "2026-10-15",
+      "end": "2026-10-17",
+      "track": 1,
+      "x": 961.6,
+      "y": 502,
+      "width": 446.4,
+      "height": 46,
+      "certainty": "confirmed",
+      "progress": "planned",
+      "line_style": "solid"
+    },
+    {
+      "id": "pol-corpus",
+      "lane_id": "polaris",
+      "title": "真实语料 holdout 接入",
+      "start": "2026-10-13",
+      "end": "2026-10-14",
+      "track": 0,
+      "x": 515.2,
+      "y": 656,
+      "width": 223.2,
+      "height": 46,
+      "certainty": "confirmed",
+      "progress": "done",
+      "line_style": "solid"
+    },
+    {
+      "id": "pol-metric",
+      "lane_id": "polaris",
+      "title": "零 token 覆盖率口径 M1/M2 实现",
+      "start": "2026-10-14",
+      "end": "2026-10-15",
+      "track": 1,
+      "x": 738.4,
+      "y": 720,
+      "width": 223.2,
+      "height": 46,
+      "certainty": "confirmed",
+      "progress": "done",
+      "line_style": "solid"
+    },
+    {
+      "id": "pol-optimize",
+      "lane_id": "polaris",
+      "title": "控制面光明语言压缩优化",
+      "start": "2026-10-15",
+      "end": "2026-10-17",
+      "track": 0,
+      "x": 961.6,
+      "y": 656,
+      "width": 446.4,
+      "height": 46,
+      "certainty": "confirmed",
+      "progress": "done",
+      "line_style": "solid"
+    },
+    {
+      "id": "pkg-install",
+      "lane_id": "packages",
+      "title": "首批 8 包 Family 档装配",
+      "start": "2026-10-13",
+      "end": "2026-10-14",
+      "track": 0,
+      "x": 515.2,
+      "y": 874,
+      "width": 223.2,
+      "height": 46,
+      "certainty": "confirmed",
+      "progress": "done",
+      "line_style": "solid"
+    },
+    {
+      "id": "pkg-memory",
+      "lane_id": "packages",
+      "title": "包记忆抽取 + 拓扑排序真机验证",
+      "start": "2026-10-14",
+      "end": "2026-10-15",
+      "track": 1,
+      "x": 738.4,
+      "y": 938,
+      "width": 223.2,
+      "height": 46,
+      "certainty": "confirmed",
+      "progress": "done",
+      "line_style": "solid"
+    },
+    {
+      "id": "p8-s1-qdrant",
+      "lane_id": "p8",
+      "title": "S1 Qdrant 后端",
+      "start": "2026-10-16",
+      "end": "2026-10-16",
+      "track": 0,
+      "x": 1184.8,
+      "y": 1028,
+      "width": 55.8,
+      "height": 46,
+      "certainty": "confirmed",
+      "progress": "planned",
+      "line_style": "solid"
+    },
+    {
+      "id": "p8-s2-noderole",
+      "lane_id": "p8",
+      "title": "S2 节点角色与拓扑",
+      "start": "2026-10-16",
+      "end": "2026-10-16",
+      "track": 0,
+      "x": 1240.6,
+      "y": 1028,
+      "width": 55.8,
+      "height": 46,
+      "certainty": "confirmed",
+      "progress": "planned",
+      "line_style": "solid"
+    },
+    {
+      "id": "p8-s3-appconn",
+      "lane_id": "p8",
+      "title": "S3 应用连接器",
+      "start": "2026-10-16",
+      "end": "2026-10-16",
+      "track": 0,
+      "x": 1296.3999999999999,
+      "y": 1028,
+      "width": 55.8,
+      "height": 46,
+      "certainty": "confirmed",
+      "progress": "planned",
+      "line_style": "solid"
+    },
+    {
+      "id": "p8-s4-gate",
+      "lane_id": "p8",
+      "title": "S4 门禁+corpus_note+holdout 450",
+      "start": "2026-10-16",
+      "end": "2026-10-16",
+      "track": 0,
+      "x": 1352.1999999999998,
+      "y": 1028,
+      "width": 55.8,
+      "height": 46,
+      "certainty": "confirmed",
+      "progress": "planned",
+      "line_style": "solid"
+    }
+  ],
+  "milestones": [
+    {
+      "id": "dep-family-boot",
+      "lane_id": "deploy",
+      "title": "Family 档真机启动验收",
+      "date": "2026-10-13",
+      "track": 1,
+      "x": 515.2,
+      "y": 525,
+      "size": 18,
+      "certainty": "confirmed",
+      "progress": "done",
+      "line_style": "solid"
+    },
+    {
+      "id": "pol-polaris-gate",
+      "lane_id": "polaris",
+      "title": "北极星 ≥0.95 达标验证",
+      "date": "2026-10-16",
+      "track": 2,
+      "x": 1184.8,
+      "y": 807,
+      "size": 18,
+      "certainty": "confirmed",
+      "progress": "done",
+      "line_style": "solid"
+    },
+    {
+      "id": "p8-gate-milestone",
+      "lane_id": "p8",
+      "title": "R16 门禁 PASS + 北极星补评出数",
+      "start": "2026-10-16",
+      "x": 1184.8,
+      "y": 1092,
+      "width": 18,
+      "height": 18,
+      "certainty": "confirmed",
+      "progress": "planned",
+      "line_style": "solid"
+    }
+  ],
+  "labels": [
+    {
+      "id": "label-p7-gdpr",
+      "item_id": "p7-gdpr",
+      "lane_id": "p7",
+      "text": "P7-A GDPR 合规",
+      "placement": "inside",
+      "x": 302,
+      "y": 156,
+      "width": 203.2,
+      "height": 46
+    },
+    {
+      "id": "label-p7-bench-dataset",
+      "item_id": "p7-bench-dataset",
+      "lane_id": "p7",
+      "text": "外部基准数据集获取/制作（独立任务）",
+      "placement": "inside",
+      "x": 302,
+      "y": 220,
+      "width": 426.4,
+      "height": 46
+    },
+    {
+      "id": "label-p7-perf",
+      "item_id": "p7-perf",
+      "lane_id": "p7",
+      "text": "P7-B 检索性能 P95\u003c200ms",
+      "placement": "inside",
+      "x": 525.2,
+      "y": 284,
+      "width": 203.2,
+      "height": 46
+    },
+    {
+      "id": "label-p7-sdk",
+      "item_id": "p7-sdk",
+      "lane_id": "p7",
+      "text": "P7-C 开放 API/SDK",
+      "placement": "inside",
+      "x": 525.2,
+      "y": 348,
+      "width": 203.2,
+      "height": 46
+    },
+    {
+      "id": "label-p7-bench",
+      "item_id": "p7-bench",
+      "lane_id": "p7",
+      "text": "P7-D 公开基准对标",
+      "placement": "inside",
+      "x": 748.4,
+      "y": 156,
+      "width": 649.6,
+      "height": 46
+    },
+    {
+      "id": "label-p7-i18n",
+      "item_id": "p7-i18n",
+      "lane_id": "p7",
+      "text": "P7-E 多语言国际化",
+      "placement": "inside",
+      "x": 1194.8,
+      "y": 220,
+      "width": 203.2,
+      "height": 46
+    },
+    {
+      "id": "label-dep-zfs-jail",
+      "item_id": "dep-zfs-jail",
+      "lane_id": "deploy",
+      "text": "ZFS dataset + jail 划分",
+      "placement": "inside",
+      "x": 302,
+      "y": 438,
+      "width": 203.2,
+      "height": 46
+    },
+    {
+      "id": "label-dep-family-boot",
+      "item_id": "dep-family-boot",
+      "lane_id": "deploy",
+      "text": "Family 档真机启动验收",
+      "placement": "outside-right",
+      "x": 534.2,
+      "y": 502,
+      "width": 161,
+      "height": 46
+    },
+    {
+      "id": "label-dep-pf-security",
+      "item_id": "dep-pf-security",
+      "lane_id": "deploy",
+      "text": "pf 规则 + 安全加固",
+      "placement": "inside",
+      "x": 525.2,
+      "y": 566,
+      "width": 203.2,
+      "height": 46
+    },
+    {
+      "id": "label-dep-snapshot",
+      "item_id": "dep-snapshot",
+      "lane_id": "deploy",
+      "text": "ZFS 快照 + 容灾 + 备份包",
+      "placement": "inside",
+      "x": 748.4,
+      "y": 438,
+      "width": 203.2,
+      "height": 46
+    },
+    {
+      "id": "label-dep-cluster",
+      "item_id": "dep-cluster",
+      "lane_id": "deploy",
+      "text": "集合体 Cluster 节点验证",
+      "placement": "inside",
+      "x": 971.6,
+      "y": 502,
+      "width": 426.4,
+      "height": 46
+    },
+    {
+      "id": "label-pol-corpus",
+      "item_id": "pol-corpus",
+      "lane_id": "polaris",
+      "text": "真实语料 holdout 接入",
+      "placement": "inside",
+      "x": 525.2,
+      "y": 656,
+      "width": 203.2,
+      "height": 46
+    },
+    {
+      "id": "label-pol-metric",
+      "item_id": "pol-metric",
+      "lane_id": "polaris",
+      "text": "零 token 覆盖率口径 M1/M2 实现",
+      "placement": "outside-right",
+      "x": 971.6,
+      "y": 720,
+      "width": 232,
+      "height": 46
+    },
+    {
+      "id": "label-pol-optimize",
+      "item_id": "pol-optimize",
+      "lane_id": "polaris",
+      "text": "控制面光明语言压缩优化",
+      "placement": "inside",
+      "x": 971.6,
+      "y": 656,
+      "width": 426.4,
+      "height": 46
+    },
+    {
+      "id": "label-pol-polaris-gate",
+      "item_id": "pol-polaris-gate",
+      "lane_id": "polaris",
+      "text": "北极星 ≥0.95 达标验证",
+      "placement": "outside-right",
+      "x": 1203.8,
+      "y": 784,
+      "width": 168,
+      "height": 46
+    },
+    {
+      "id": "label-pkg-install",
+      "item_id": "pkg-install",
+      "lane_id": "packages",
+      "text": "首批 8 包 Family 档装配",
+      "placement": "inside",
+      "x": 525.2,
+      "y": 874,
+      "width": 203.2,
+      "height": 46
+    },
+    {
+      "id": "label-pkg-memory",
+      "item_id": "pkg-memory",
+      "lane_id": "packages",
+      "text": "包记忆抽取 + 拓扑排序真机验证",
+      "placement": "outside-right",
+      "x": 971.6,
+      "y": 938,
+      "width": 219,
+      "height": 46
+    }
+  ],
+  "continuations": []
+}</script>
+  <script type="application/json" id="roadmap-diagnostics">
+[]
+  </script>
+  <script type="application/json" id="roadmap-pending-questions">
+[]
+  </script>
+  <script type="application/json" id="roadmap-palette">
+{
+  "id": "roadmap-default-v1",
+  "colors": [
+    "#8e6bf2",
+    "#7092fa",
+    "#56d9b6",
+    "#ebaf78",
+    "#f96565",
+    "#96dee8",
+    "#9f5f8f",
+    "#78d3f8",
+    "#21d3c5",
+    "#f9c955",
+    "#ff9999"
+  ]
+}
+  </script>
+  <script type="application/json" id="roadmap-editor-metadata">
+{
+  "mode": "form-table",
+  "source_element_id": "deck-document",
+  "layout_id": "roadmap-swimlane-v1",
+  "palette_id": "roadmap-default-v1"
+}
+  </script>
+  <script data-roadmap-runtime="contract-core">
+(function(){const module={exports:{}};const exports=module.exports;const require=(request)=>{if(request==="crypto")return {createHash:()=>{throw new Error("crypto hashing is unavailable in the Roadmap editor runtime")}};throw new Error(`Unsupported runtime module: ${request}`);};
+"use strict";
+
+const crypto = require("crypto");
+
+const ROADMAP_DRAFT_SCHEMA_VERSION = 1;
+const ROADMAP_SPEC_SCHEMA_VERSION = 1;
+const ROADMAP_KIND_DRAFT = "roadmap-draft";
+const ROADMAP_KIND_SPEC = "roadmap-spec";
+const LOW_CONFIDENCE_THRESHOLD = 0.8;
+const MAX_LANES = 8;
+const MAX_ITEMS = 80;
+const MAX_RANGE_DAYS = 184;
+const ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
+const PLAIN_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const SOURCE_TYPES = new Set([
+  "natural-language",
+  "table",
+  "image",
+  "roadmap-spec",
+]);
+const ITEM_KINDS = new Set(["bar", "milestone"]);
+const CERTAINTIES = new Set(["confirmed", "tentative"]);
+const PROGRESS_STATES = new Set(["planned", "doing", "done", "blocked"]);
+const GRANULARITIES = new Set(["half-month"]);
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function clone(value) {
+  return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+}
+
+function text(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function unknownFields(value, allowed, fieldPath, issues) {
+  if (!isPlainObject(value)) return;
+  const unknown = Object.keys(value).filter(key => !allowed.has(key));
+  if (unknown.length) issues.push(`${fieldPath}: unknown field(s): ${unknown.join(", ")}`);
+}
+
+function normalizeNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function plainDateToDay(value) {
+  if (!PLAIN_DATE_RE.test(String(value || ""))) return null;
+  const [year, month, day] = String(value).split("-").map(Number);
+  const timestamp = Date.UTC(year, month - 1, day);
+  const date = new Date(timestamp);
+  if (
+    date.getUTCFullYear() !== year
+    || date.getUTCMonth() !== month - 1
+    || date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return Math.floor(timestamp / 86400000);
+}
+
+function dayToPlainDate(day) {
+  if (!Number.isInteger(day)) return null;
+  return new Date(day * 86400000).toISOString().slice(0, 10);
+}
+
+function stableId(value, prefix, identityParts) {
+  const supplied = text(value);
+  if (supplied) return supplied;
+  const seed = identityParts.map(part => String(part || "").normalize("NFKC")).join("\u001f");
+  const slug = text(identityParts[0])
+    .normalize("NFKD")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 32);
+  const digest = crypto.createHash("sha256").update(seed).digest("hex").slice(0, 10);
+  return `${prefix}-${slug ? `${slug}-` : ""}${digest}`;
+}
+
+function normalizeConfidence(value, fieldPath, issues) {
+  const number = normalizeNumber(value);
+  if (number == null || number < 0 || number > 1) {
+    issues.push(`${fieldPath}: expected number between 0 and 1`);
+    return null;
+  }
+  return number;
+}
+
+function normalizeSource(value, fieldPath, issues) {
+  if (!isPlainObject(value)) {
+    issues.push(`${fieldPath}: expected object`);
+    return null;
+  }
+  unknownFields(
+    value,
+    new Set(["type", "confidence", "field_confidence", "excerpt", "row", "column", "region", "page", "field_path"]),
+    fieldPath,
+    issues
+  );
+  const type = text(value.type);
+  if (!SOURCE_TYPES.has(type)) {
+    issues.push(`${fieldPath}.type: expected one of ${[...SOURCE_TYPES].join(", ")}`);
+  }
+  const confidence = normalizeConfidence(value.confidence, `${fieldPath}.confidence`, issues);
+  const fieldConfidence = {};
+  if (value.field_confidence !== undefined) {
+    if (!isPlainObject(value.field_confidence)) {
+      issues.push(`${fieldPath}.field_confidence: expected object`);
+    } else {
+      Object.entries(value.field_confidence).forEach(([key, entry]) => {
+        const normalized = normalizeConfidence(
+          entry,
+          `${fieldPath}.field_confidence.${key}`,
+          issues
+        );
+        if (normalized != null) fieldConfidence[key] = normalized;
+      });
+    }
+  }
+  const normalized = {
+    type,
+    ...(confidence == null ? {} : { confidence }),
+    ...(Object.keys(fieldConfidence).length ? { field_confidence: fieldConfidence } : {}),
+  };
+  if (value.excerpt !== undefined) {
+    const excerpt = text(value.excerpt);
+    if (!excerpt || Array.from(excerpt).length > 500) {
+      issues.push(`${fieldPath}.excerpt: expected 1-500 characters`);
+    } else normalized.excerpt = excerpt;
+  }
+  if (value.row !== undefined) {
+    if (!Number.isInteger(value.row) || value.row < 1) {
+      issues.push(`${fieldPath}.row: expected positive integer`);
+    } else normalized.row = value.row;
+  }
+  if (value.column !== undefined) {
+    const column = text(value.column);
+    if (!column) issues.push(`${fieldPath}.column: expected non-empty text`);
+    else normalized.column = column;
+  }
+  if (value.page !== undefined) {
+    if (!Number.isInteger(value.page) || value.page < 1) {
+      issues.push(`${fieldPath}.page: expected positive integer`);
+    } else normalized.page = value.page;
+  }
+  if (value.field_path !== undefined) {
+    const fieldPathValue = text(value.field_path);
+    if (!fieldPathValue) issues.push(`${fieldPath}.field_path: expected non-empty text`);
+    else normalized.field_path = fieldPathValue;
+  }
+  if (value.region !== undefined) {
+    const region = value.region;
+    if (
+      !Array.isArray(region)
+      || region.length !== 4
+      || region.some(entry => !Number.isFinite(entry))
+      || region[0] < 0
+      || region[1] < 0
+      || region[2] <= 0
+      || region[3] <= 0
+    ) {
+      issues.push(`${fieldPath}.region: expected [x, y, width, height] with positive size`);
+    } else normalized.region = region.slice();
+  }
+  if (type === "table" && normalized.row === undefined) {
+    issues.push(`${fieldPath}.row: required for table source`);
+  }
+  if (type === "image" && normalized.region === undefined) {
+    issues.push(`${fieldPath}.region: required for image source`);
+  }
+  if (type === "roadmap-spec" && !normalized.field_path) {
+    issues.push(`${fieldPath}.field_path: required for roadmap-spec source`);
+  }
+  return normalized;
+}
+
+function normalizeQuestion(value, fieldPath, issues) {
+  if (!isPlainObject(value)) {
+    issues.push(`${fieldPath}: expected object`);
+    return null;
+  }
+  unknownFields(value, new Set(["field_path", "prompt", "reason"]), fieldPath, issues);
+  const target = text(value.field_path);
+  const prompt = text(value.prompt);
+  const reason = text(value.reason);
+  if (!target) issues.push(`${fieldPath}.field_path: expected non-empty text`);
+  if (!prompt) issues.push(`${fieldPath}.prompt: expected non-empty text`);
+  return target && prompt
+    ? { field_path: target, prompt, ...(reason ? { reason } : {}) }
+    : null;
+}
+
+function validateAndNormalizePendingQuestions(value, fieldPath = "pending_questions") {
+  const issues = [];
+  const pendingQuestions = [];
+  if (!Array.isArray(value)) {
+    issues.push(`${fieldPath}: expected array`);
+  } else {
+    value.forEach((question, index) => {
+      const normalized = normalizeQuestion(question, `${fieldPath}.${index}`, issues);
+      if (normalized) pendingQuestions.push(normalized);
+    });
+  }
+  return { ok: issues.length === 0, pending_questions: pendingQuestions, issues };
+}
+
+function pendingQuestionsForRoadmapSpec(spec, existingQuestions = []) {
+  const result = validateAndNormalizePendingQuestions(existingQuestions);
+  const questions = result.pending_questions.filter(
+    question => !/^items\.\d+\./.test(question.field_path)
+  );
+  if (!isPlainObject(spec) || !Array.isArray(spec.items)) return result;
+  spec.items.forEach((item, index) => {
+    if (!isPlainObject(item) || item.certainty !== "tentative") return;
+    addQuestion(
+      questions,
+      `items.${index}.start`,
+      `请确认“${text(item.title) || "该任务"}”的起止日期。`,
+      [fieldConfidence(item.source, "start"), fieldConfidence(item.source, "end")]
+        .some(confidence => confidence != null && confidence < LOW_CONFIDENCE_THRESHOLD)
+        ? `date confidence is below ${LOW_CONFIDENCE_THRESHOLD}`
+        : "item remains tentative"
+    );
+  });
+  return { ...result, pending_questions: questions };
+}
+
+function normalizeContinuation(value, fieldPath, issues) {
+  if (value === undefined) return null;
+  if (!isPlainObject(value)) {
+    issues.push(`${fieldPath}: expected object`);
+    return null;
+  }
+  unknownFields(value, new Set(["before", "after"]), fieldPath, issues);
+  const normalized = {};
+  for (const key of ["before", "after"]) {
+    if (value[key] === undefined) continue;
+    if (value[key] !== true) issues.push(`${fieldPath}.${key}: expected true when present`);
+    else normalized[key] = true;
+  }
+  if (!Object.keys(normalized).length) {
+    issues.push(`${fieldPath}: expected before=true or after=true`);
+    return null;
+  }
+  return normalized;
+}
+
+function validateAndNormalizeRoadmapDraft(value) {
+  const issues = [];
+  const warnings = [];
+  if (!isPlainObject(value)) {
+    return { ok: false, normalized: null, issues: ["roadmap draft: expected object"], warnings };
+  }
+  unknownFields(
+    value,
+    new Set(["schema_version", "kind", "title", "range", "lanes", "items", "pending_questions"]),
+    "roadmap draft",
+    issues
+  );
+  if (value.schema_version !== ROADMAP_DRAFT_SCHEMA_VERSION) {
+    issues.push(`schema_version: expected ${ROADMAP_DRAFT_SCHEMA_VERSION}`);
+  }
+  if (value.kind !== ROADMAP_KIND_DRAFT) {
+    issues.push(`kind: expected ${ROADMAP_KIND_DRAFT}`);
+  }
+  const title = text(value.title);
+  if (!title) warnings.push("title: missing; compilation requires a roadmap title");
+  else if (Array.from(title).length > 120) issues.push("title: expected at most 120 characters");
+
+  let range = null;
+  if (value.range !== undefined) {
+    if (!isPlainObject(value.range)) {
+      issues.push("range: expected object");
+    } else {
+      unknownFields(value.range, new Set(["start", "end", "granularity"]), "range", issues);
+      const start = text(value.range.start);
+      const end = text(value.range.end);
+      const granularity = text(value.range.granularity) || "half-month";
+      if (start && plainDateToDay(start) == null) issues.push("range.start: expected valid YYYY-MM-DD");
+      if (end && plainDateToDay(end) == null) issues.push("range.end: expected valid YYYY-MM-DD");
+      if (!GRANULARITIES.has(granularity)) {
+        issues.push(`range.granularity: expected one of ${[...GRANULARITIES].join(", ")}`);
+      }
+      range = {
+        ...(start ? { start } : {}),
+        ...(end ? { end } : {}),
+        granularity,
+      };
+    }
+  }
+
+  const lanes = [];
+  if (!Array.isArray(value.lanes)) {
+    issues.push("lanes: expected array");
+  } else {
+    value.lanes.forEach((lane, index) => {
+      const fieldPath = `lanes.${index}`;
+      if (!isPlainObject(lane)) {
+        issues.push(`${fieldPath}: expected object`);
+        return;
+      }
+      unknownFields(lane, new Set(["id", "label", "order", "raw", "source"]), fieldPath, issues);
+      const id = text(lane.id);
+      const label = text(lane.label);
+      if (id && !ID_RE.test(id)) issues.push(`${fieldPath}.id: invalid stable id`);
+      if (!label) issues.push(`${fieldPath}.label: required non-empty text`);
+      else if (Array.from(label).length > 60) issues.push(`${fieldPath}.label: expected at most 60 characters`);
+      const order = lane.order;
+      if (!Number.isInteger(order) || order < 1) issues.push(`${fieldPath}.order: expected positive integer`);
+      if (!isPlainObject(lane.raw)) issues.push(`${fieldPath}.raw: expected object with original fields`);
+      const source = normalizeSource(lane.source, `${fieldPath}.source`, issues);
+      lanes.push({
+        ...(id ? { id } : {}),
+        ...(label ? { label } : {}),
+        order,
+        raw: isPlainObject(lane.raw) ? clone(lane.raw) : {},
+        ...(source ? { source } : {}),
+      });
+    });
+  }
+
+  const items = [];
+  if (!Array.isArray(value.items)) {
+    issues.push("items: expected array");
+  } else {
+    value.items.forEach((item, index) => {
+      const fieldPath = `items.${index}`;
+      if (!isPlainObject(item)) {
+        issues.push(`${fieldPath}: expected object`);
+        return;
+      }
+      unknownFields(
+        item,
+        new Set(["id", "lane_ref", "title", "start", "end", "kind", "certainty", "progress", "continuation", "color", "detail", "raw", "source"]),
+        fieldPath,
+        issues
+      );
+      const id = text(item.id);
+      const laneRef = text(item.lane_ref);
+      const titleValue = text(item.title);
+      const start = text(item.start);
+      const end = text(item.end);
+      const kind = text(item.kind);
+      const certainty = text(item.certainty);
+      const progress = text(item.progress);
+      const continuation = normalizeContinuation(
+        item.continuation,
+        `${fieldPath}.continuation`,
+        issues
+      );
+      const color = text(item.color);
+      const detail = text(item.detail);
+      if (id && !ID_RE.test(id)) issues.push(`${fieldPath}.id: invalid stable id`);
+      if (!laneRef) issues.push(`${fieldPath}.lane_ref: required non-empty text`);
+      if (!titleValue) issues.push(`${fieldPath}.title: required non-empty text`);
+      else if (Array.from(titleValue).length > 100) issues.push(`${fieldPath}.title: expected at most 100 characters`);
+      if (start && plainDateToDay(start) == null) issues.push(`${fieldPath}.start: expected valid YYYY-MM-DD`);
+      if (end && plainDateToDay(end) == null) issues.push(`${fieldPath}.end: expected valid YYYY-MM-DD`);
+      if (!ITEM_KINDS.has(kind)) issues.push(`${fieldPath}.kind: expected bar or milestone`);
+      if (certainty && !CERTAINTIES.has(certainty)) {
+        issues.push(`${fieldPath}.certainty: expected confirmed or tentative`);
+      }
+      if (!PROGRESS_STATES.has(progress)) {
+        issues.push(`${fieldPath}.progress: expected one of ${[...PROGRESS_STATES].join(", ")}`);
+      }
+      if (color && Array.from(color).length > 40) issues.push(`${fieldPath}.color: expected at most 40 characters`);
+      if (detail && Array.from(detail).length > 500) issues.push(`${fieldPath}.detail: expected at most 500 characters`);
+      if (!isPlainObject(item.raw)) issues.push(`${fieldPath}.raw: expected object with original fields`);
+      const source = normalizeSource(item.source, `${fieldPath}.source`, issues);
+      items.push({
+        ...(id ? { id } : {}),
+        ...(laneRef ? { lane_ref: laneRef } : {}),
+        ...(titleValue ? { title: titleValue } : {}),
+        ...(start ? { start } : {}),
+        ...(end ? { end } : {}),
+        kind,
+        ...(certainty ? { certainty } : {}),
+        progress,
+        ...(continuation ? { continuation } : {}),
+        ...(color ? { color } : {}),
+        ...(detail ? { detail } : {}),
+        raw: isPlainObject(item.raw) ? clone(item.raw) : {},
+        ...(source ? { source } : {}),
+      });
+    });
+  }
+
+  let pendingQuestions = [];
+  if (value.pending_questions === undefined) {
+    issues.push("pending_questions: required array");
+  } else {
+    const questionResult = validateAndNormalizePendingQuestions(value.pending_questions);
+    issues.push(...questionResult.issues);
+    pendingQuestions = questionResult.pending_questions;
+  }
+  return {
+    ok: issues.length === 0,
+    normalized: {
+      schema_version: ROADMAP_DRAFT_SCHEMA_VERSION,
+      kind: ROADMAP_KIND_DRAFT,
+      ...(title ? { title } : {}),
+      ...(range ? { range } : {}),
+      lanes,
+      items,
+      pending_questions: pendingQuestions,
+    },
+    issues,
+    warnings,
+  };
+}
+
+function fieldConfidence(source, field) {
+  if (!source) return null;
+  if (source.field_confidence && source.field_confidence[field] !== undefined) {
+    return source.field_confidence[field];
+  }
+  return source.confidence;
+}
+
+function addQuestion(questions, fieldPath, prompt, reason) {
+  if (questions.some(question => question.field_path === fieldPath)) return;
+  questions.push({ field_path: fieldPath, prompt, reason });
+}
+
+function compileRoadmapDraft(value) {
+  const draftResult = validateAndNormalizeRoadmapDraft(value);
+  const issues = draftResult.issues.slice();
+  const warnings = draftResult.warnings.slice();
+  const draft = draftResult.normalized;
+  const questions = draft ? draft.pending_questions.map(clone) : [];
+  if (!draftResult.ok || !draft) {
+    return { ok: false, spec: null, draft, issues, warnings, pending_questions: questions };
+  }
+  if (!draft.title) {
+    issues.push("title: required to compile RoadmapSpec");
+    addQuestion(questions, "title", "这份路线图的标题是什么？", "renderer requires a title");
+  }
+  if (!draft.lanes.length) issues.push("lanes: expected at least one lane");
+  if (draft.lanes.length > MAX_LANES) issues.push(`lanes: expected at most ${MAX_LANES}`);
+  if (!draft.items.length) issues.push("items: expected at least one item");
+  if (draft.items.length > MAX_ITEMS) issues.push(`items: expected at most ${MAX_ITEMS}`);
+
+  const laneIds = new Set();
+  const laneAliases = new Map();
+  const lanes = draft.lanes.map((lane, index) => {
+    if (!lane.label) issues.push(`lanes.${index}.label: required to compile RoadmapSpec`);
+    let id = stableId(lane.id, "lane", [lane.label, lane.order, JSON.stringify(lane.raw)]);
+    if (!ID_RE.test(id)) issues.push(`lanes.${index}.id: invalid stable id`);
+    if (laneIds.has(id)) {
+      id = stableId(null, "lane", [lane.label, lane.order, JSON.stringify(lane.raw), index]);
+    }
+    if (laneIds.has(id)) issues.push(`lanes.${index}.id: duplicate id ${id}`);
+    laneIds.add(id);
+    [lane.id, lane.label, id].filter(Boolean).forEach(alias => laneAliases.set(alias, id));
+    return { id, label: lane.label || "待确认泳道", order: lane.order };
+  });
+
+  const itemIds = new Set();
+  const items = draft.items.map((item, index) => {
+    const fieldPath = `items.${index}`;
+    if (!item.title) issues.push(`${fieldPath}.title: required to compile RoadmapSpec`);
+    const laneId = laneAliases.get(item.lane_ref);
+    if (!laneId) issues.push(`${fieldPath}.lane_ref: unknown lane ${JSON.stringify(item.lane_ref || "")}`);
+    if (!item.start) {
+      issues.push(`${fieldPath}.start: required to compile RoadmapSpec`);
+      addQuestion(questions, `${fieldPath}.start`, `“${item.title || "该任务"}”从哪一天开始？`, "missing date cannot be invented");
+    }
+    if (item.kind === "bar" && !item.end) {
+      issues.push(`${fieldPath}.end: required for bar item`);
+      addQuestion(questions, `${fieldPath}.end`, `“${item.title || "该任务"}”在哪一天结束（结束日不包含）？`, "bar interval uses [start, end)");
+    }
+    const startConfidence = fieldConfidence(item.source, "start");
+    const endConfidence = item.kind === "milestone" ? 1 : fieldConfidence(item.source, "end");
+    const lowDateConfidence = (
+      (startConfidence != null && startConfidence < LOW_CONFIDENCE_THRESHOLD)
+      || (endConfidence != null && endConfidence < LOW_CONFIDENCE_THRESHOLD)
+    );
+    let certainty = item.certainty || (lowDateConfidence ? "tentative" : "confirmed");
+    if (lowDateConfidence && certainty !== "tentative") {
+      certainty = "tentative";
+      warnings.push(`${fieldPath}.certainty: normalized to tentative from low-confidence date source`);
+    }
+    if (lowDateConfidence) {
+      addQuestion(
+        questions,
+        `${fieldPath}.start`,
+        `请确认“${item.title || "该任务"}”的起止日期。`,
+        `date confidence is below ${LOW_CONFIDENCE_THRESHOLD}`
+      );
+    }
+    let id = stableId(item.id, "item", [
+      item.title,
+      item.lane_ref,
+      item.start,
+      item.end,
+      item.kind,
+      JSON.stringify(item.raw),
+    ]);
+    if (itemIds.has(id)) {
+      id = stableId(null, "item", [item.title, item.lane_ref, item.start, item.end, JSON.stringify(item.raw), index]);
+    }
+    if (itemIds.has(id)) issues.push(`${fieldPath}.id: duplicate id ${id}`);
+    itemIds.add(id);
+    return {
+      id,
+      lane_id: laneId || "invalid-lane",
+      title: item.title || "待确认任务",
+      ...(item.start ? { start: item.start } : {}),
+      ...(item.kind === "bar" && item.end ? { end: item.end } : {}),
+      kind: item.kind,
+      certainty,
+      progress: item.progress,
+      ...(item.continuation ? { continuation: clone(item.continuation) } : {}),
+      ...(item.color ? { color: item.color } : {}),
+      ...(item.detail ? { detail: item.detail } : {}),
+      ...(item.source ? { source: clone(item.source) } : {}),
+    };
+  });
+
+  const validStarts = items.map(item => plainDateToDay(item.start)).filter(Number.isInteger);
+  const validEnds = items.map(item => {
+    const startDay = plainDateToDay(item.start);
+    if (item.kind === "milestone") return startDay == null ? null : startDay + 1;
+    return plainDateToDay(item.end);
+  }).filter(Number.isInteger);
+  const rangeStart = draft.range && draft.range.start
+    ? draft.range.start
+    : (validStarts.length ? dayToPlainDate(Math.min(...validStarts)) : null);
+  const rangeEnd = draft.range && draft.range.end
+    ? draft.range.end
+    : (validEnds.length ? dayToPlainDate(Math.max(...validEnds)) : null);
+  if (!rangeStart) issues.push("range.start: missing and cannot be derived from items");
+  if (!rangeEnd) issues.push("range.end: missing and cannot be derived from items");
+
+  if (issues.length) {
+    return { ok: false, spec: null, draft, issues, warnings, pending_questions: questions };
+  }
+  const specCandidate = {
+    schema_version: ROADMAP_SPEC_SCHEMA_VERSION,
+    kind: ROADMAP_KIND_SPEC,
+    title: draft.title,
+    range: {
+      start: rangeStart,
+      end: rangeEnd,
+      granularity: draft.range && draft.range.granularity || "half-month",
+    },
+    lanes,
+    items,
+  };
+  const specResult = validateAndNormalizeRoadmapSpec(specCandidate);
+  return {
+    ok: specResult.ok,
+    spec: specResult.ok ? specResult.normalized : null,
+    draft,
+    issues: specResult.issues,
+    warnings: [...warnings, ...specResult.warnings],
+    pending_questions: questions,
+  };
+}
+
+function validateAndNormalizeRoadmapSpec(value) {
+  const issues = [];
+  const warnings = [];
+  if (!isPlainObject(value)) {
+    return { ok: false, normalized: null, issues: ["RoadmapSpec: expected object"], warnings };
+  }
+  unknownFields(value, new Set(["schema_version", "kind", "title", "range", "lanes", "items", "legend"]), "RoadmapSpec", issues);
+  if (value.schema_version !== ROADMAP_SPEC_SCHEMA_VERSION) {
+    issues.push(`schema_version: expected ${ROADMAP_SPEC_SCHEMA_VERSION}`);
+  }
+  if (value.kind !== ROADMAP_KIND_SPEC) issues.push(`kind: expected ${ROADMAP_KIND_SPEC}`);
+  const title = text(value.title);
+  if (!title || Array.from(title).length > 120) issues.push("title: expected 1-120 characters");
+
+  let range = { start: "", end: "", granularity: "half-month" };
+  if (!isPlainObject(value.range)) {
+    issues.push("range: expected object");
+  } else {
+    unknownFields(value.range, new Set(["start", "end", "granularity"]), "range", issues);
+    const start = text(value.range.start);
+    const end = text(value.range.end);
+    const granularity = text(value.range.granularity);
+    const startDay = plainDateToDay(start);
+    const endDay = plainDateToDay(end);
+    if (startDay == null) issues.push("range.start: expected valid YYYY-MM-DD");
+    if (endDay == null) issues.push("range.end: expected valid YYYY-MM-DD");
+    if (startDay != null && endDay != null) {
+      if (startDay >= endDay) issues.push("range: expected [start, end) with start before end");
+      if (endDay - startDay > MAX_RANGE_DAYS) {
+        issues.push(`range: expected at most ${MAX_RANGE_DAYS} days for one page`);
+      }
+    }
+    if (!GRANULARITIES.has(granularity)) {
+      issues.push(`range.granularity: expected one of ${[...GRANULARITIES].join(", ")}`);
+    }
+    range = { start, end, granularity };
+  }
+
+  const lanes = [];
+  const laneIds = new Set();
+  const laneOrders = new Set();
+  if (!Array.isArray(value.lanes) || !value.lanes.length) {
+    issues.push("lanes: expected 1-8 lanes");
+  } else {
+    if (value.lanes.length > MAX_LANES) issues.push(`lanes: expected at most ${MAX_LANES}`);
+    value.lanes.forEach((lane, index) => {
+      const fieldPath = `lanes.${index}`;
+      if (!isPlainObject(lane)) {
+        issues.push(`${fieldPath}: expected object`);
+        return;
+      }
+      unknownFields(lane, new Set(["id", "label", "order"]), fieldPath, issues);
+      const id = text(lane.id);
+      const label = text(lane.label);
+      const order = lane.order;
+      if (!ID_RE.test(id)) issues.push(`${fieldPath}.id: invalid stable id`);
+      if (laneIds.has(id)) issues.push(`${fieldPath}.id: duplicate id ${id}`);
+      laneIds.add(id);
+      if (!label || Array.from(label).length > 60) issues.push(`${fieldPath}.label: expected 1-60 characters`);
+      if (!Number.isInteger(order) || order < 1) issues.push(`${fieldPath}.order: expected positive integer`);
+      if (laneOrders.has(order)) issues.push(`${fieldPath}.order: duplicate order ${order}`);
+      laneOrders.add(order);
+      lanes.push({ id, label, order });
+    });
+  }
+  lanes.sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
+  const laneOrder = new Map(lanes.map((lane, index) => [lane.id, index]));
+
+  const items = [];
+  const itemIds = new Set();
+  if (!Array.isArray(value.items) || !value.items.length) {
+    issues.push("items: expected 1-80 items");
+  } else {
+    if (value.items.length > MAX_ITEMS) issues.push(`items: expected at most ${MAX_ITEMS}`);
+    value.items.forEach((item, index) => {
+      const fieldPath = `items.${index}`;
+      if (!isPlainObject(item)) {
+        issues.push(`${fieldPath}: expected object`);
+        return;
+      }
+      unknownFields(
+        item,
+        new Set(["id", "lane_id", "title", "start", "end", "kind", "certainty", "progress", "continuation", "color", "detail", "source"]),
+        fieldPath,
+        issues
+      );
+      const id = text(item.id);
+      const laneId = text(item.lane_id);
+      const titleValue = text(item.title);
+      const start = text(item.start);
+      const end = text(item.end);
+      const kind = text(item.kind);
+      const certainty = text(item.certainty);
+      const progress = text(item.progress);
+      const continuation = normalizeContinuation(
+        item.continuation,
+        `${fieldPath}.continuation`,
+        issues
+      );
+      const color = text(item.color);
+      const detail = text(item.detail);
+      if (!ID_RE.test(id)) issues.push(`${fieldPath}.id: invalid stable id`);
+      if (itemIds.has(id)) issues.push(`${fieldPath}.id: duplicate id ${id}`);
+      itemIds.add(id);
+      if (!laneIds.has(laneId)) issues.push(`${fieldPath}.lane_id: unknown lane ${JSON.stringify(laneId)}`);
+      if (!titleValue || Array.from(titleValue).length > 100) issues.push(`${fieldPath}.title: expected 1-100 characters`);
+      const startDay = plainDateToDay(start);
+      const endDay = plainDateToDay(end);
+      if (startDay == null) issues.push(`${fieldPath}.start: expected valid YYYY-MM-DD`);
+      if (!ITEM_KINDS.has(kind)) issues.push(`${fieldPath}.kind: expected bar or milestone`);
+      if (kind === "bar") {
+        if (endDay == null) issues.push(`${fieldPath}.end: required valid YYYY-MM-DD for bar`);
+        else if (startDay != null && startDay >= endDay) {
+          issues.push(`${fieldPath}: expected [start, end) with start before end`);
+        }
+      } else if (kind === "milestone" && item.end !== undefined) {
+        issues.push(`${fieldPath}.end: milestone uses start only`);
+      }
+      if (continuation && kind !== "bar") {
+        issues.push(`${fieldPath}.continuation: only bar items may continue`);
+      }
+      if (!CERTAINTIES.has(certainty)) issues.push(`${fieldPath}.certainty: expected confirmed or tentative`);
+      if (!PROGRESS_STATES.has(progress)) {
+        issues.push(`${fieldPath}.progress: expected one of ${[...PROGRESS_STATES].join(", ")}`);
+      }
+      if (color && Array.from(color).length > 40) issues.push(`${fieldPath}.color: expected at most 40 characters`);
+      if (detail && Array.from(detail).length > 500) issues.push(`${fieldPath}.detail: expected at most 500 characters`);
+      const source = item.source === undefined
+        ? null
+        : normalizeSource(item.source, `${fieldPath}.source`, issues);
+      const rangeStart = plainDateToDay(range.start);
+      const rangeEnd = plainDateToDay(range.end);
+      const effectiveEnd = kind === "milestone" && startDay != null ? startDay + 1 : endDay;
+      if (
+        startDay != null
+        && effectiveEnd != null
+        && rangeStart != null
+        && rangeEnd != null
+        && (startDay < rangeStart || effectiveEnd > rangeEnd)
+      ) {
+        issues.push(`${fieldPath}: item interval must stay within roadmap range`);
+      }
+      if (continuation && continuation.before && start !== range.start) {
+        issues.push(`${fieldPath}.continuation.before: item must start at range.start`);
+      }
+      if (continuation && continuation.after && end !== range.end) {
+        issues.push(`${fieldPath}.continuation.after: item must end at range.end`);
+      }
+      items.push({
+        id,
+        lane_id: laneId,
+        title: titleValue,
+        start,
+        ...(kind === "bar" ? { end } : {}),
+        kind,
+        certainty,
+        progress,
+        ...(continuation ? { continuation } : {}),
+        ...(color ? { color } : {}),
+        ...(detail ? { detail } : {}),
+        ...(source ? { source } : {}),
+      });
+    });
+  }
+  items.sort((left, right) => {
+    const laneDelta = (laneOrder.get(left.lane_id) ?? Number.MAX_SAFE_INTEGER)
+      - (laneOrder.get(right.lane_id) ?? Number.MAX_SAFE_INTEGER);
+    if (laneDelta) return laneDelta;
+    const startDelta = (plainDateToDay(left.start) ?? 0) - (plainDateToDay(right.start) ?? 0);
+    if (startDelta) return startDelta;
+    const leftEnd = left.kind === "milestone" ? plainDateToDay(left.start) + 1 : plainDateToDay(left.end);
+    const rightEnd = right.kind === "milestone" ? plainDateToDay(right.start) + 1 : plainDateToDay(right.end);
+    return leftEnd - rightEnd || left.id.localeCompare(right.id);
+  });
+
+  let legend;
+  if (value.legend !== undefined) {
+    if (!Array.isArray(value.legend)) issues.push("legend: expected array");
+    else {
+      legend = value.legend.map((entry, index) => {
+        if (!isPlainObject(entry)) {
+          issues.push(`legend.${index}: expected object`);
+          return null;
+        }
+        unknownFields(entry, new Set(["key", "label"]), `legend.${index}`, issues);
+        const label = text(entry.label);
+        const key = text(entry.key);
+        if (!key || !label) issues.push(`legend.${index}: key and label are required`);
+        return key && label ? { key, label } : null;
+      }).filter(Boolean);
+    }
+  }
+
+  return {
+    ok: issues.length === 0,
+    normalized: {
+      schema_version: ROADMAP_SPEC_SCHEMA_VERSION,
+      kind: ROADMAP_KIND_SPEC,
+      title,
+      range,
+      lanes,
+      items,
+      ...(legend ? { legend } : {}),
+    },
+    issues,
+    warnings,
+  };
+}
+
+function compileRoadmapInput(value) {
+  if (isPlainObject(value) && value.kind === ROADMAP_KIND_SPEC) {
+    const result = validateAndNormalizeRoadmapSpec(value);
+    const questionResult = result.ok
+      ? pendingQuestionsForRoadmapSpec(result.normalized)
+      : { pending_questions: [] };
+    return {
+      ok: result.ok,
+      input_kind: ROADMAP_KIND_SPEC,
+      spec: result.ok ? result.normalized : null,
+      issues: result.issues,
+      warnings: result.warnings,
+      pending_questions: questionResult.pending_questions,
+    };
+  }
+  const result = compileRoadmapDraft(value);
+  return { ...result, input_kind: ROADMAP_KIND_DRAFT };
+}
+
+module.exports = {
+  CERTAINTIES,
+  GRANULARITIES,
+  ITEM_KINDS,
+  LOW_CONFIDENCE_THRESHOLD,
+  MAX_ITEMS,
+  MAX_LANES,
+  MAX_RANGE_DAYS,
+  PROGRESS_STATES,
+  ROADMAP_DRAFT_SCHEMA_VERSION,
+  ROADMAP_KIND_DRAFT,
+  ROADMAP_KIND_SPEC,
+  ROADMAP_SPEC_SCHEMA_VERSION,
+  SOURCE_TYPES,
+  compileRoadmapDraft,
+  compileRoadmapInput,
+  dayToPlainDate,
+  plainDateToDay,
+  pendingQuestionsForRoadmapSpec,
+  validateAndNormalizeRoadmapDraft,
+  validateAndNormalizePendingQuestions,
+  validateAndNormalizeRoadmapSpec,
+};
+
+;window.__roadmapContractCore=module.exports;})();
+  </script>
+  <script data-roadmap-runtime="geometry-core">
+(function(){const module={exports:{}};const exports=module.exports;const require=(request)=>{if(request==="./roadmap_contract_core.js")return window.__roadmapContractCore;throw new Error(`Unsupported runtime module: ${request}`);};
+"use strict";
+
+const {
+  dayToPlainDate,
+  plainDateToDay,
+  validateAndNormalizeRoadmapSpec,
+} = require("./roadmap_contract_core.js");
+
+const DEFAULT_VIEWPORT = Object.freeze({ width: 1440, height: 900 });
+const MIN_VIEWPORT = Object.freeze({ width: 640, height: 360 });
+const LAYOUT = Object.freeze({
+  outerPadding: 32,
+  titleHeight: 28,
+  headerHeight: 76,
+  laneLabelWidth: 260,
+  lanePadding: 20,
+  trackHeight: 50,
+  trackGap: 14,
+  barHeight: 46,
+  milestoneSize: 18,
+  minLaneHeight: 124,
+  labelHeight: 46,
+  labelGap: 10,
+  collisionGap: 10,
+  continuationSize: 10,
+});
+
+function round(value) {
+  return Math.round(value * 1000) / 1000;
+}
+
+function clamp(value, minimum, maximum) {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function normalizeViewport(value) {
+  const width = value && Number.isFinite(value.width) ? value.width : DEFAULT_VIEWPORT.width;
+  const height = value && Number.isFinite(value.height) ? value.height : DEFAULT_VIEWPORT.height;
+  if (width < MIN_VIEWPORT.width || height < MIN_VIEWPORT.height) {
+    throw new Error(
+      `viewport: expected at least ${MIN_VIEWPORT.width}x${MIN_VIEWPORT.height}, got ${width}x${height}`
+    );
+  }
+  return { width: round(width), height: round(height) };
+}
+
+function nextMonthStart(day) {
+  const date = new Date(day * 86400000);
+  return Math.floor(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1) / 86400000);
+}
+
+function monthStart(day) {
+  const date = new Date(day * 86400000);
+  return Math.floor(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1) / 86400000);
+}
+
+function halfMonthBoundaries(startDay, endDay) {
+  const boundaries = new Set([startDay, endDay]);
+  let cursor = monthStart(startDay);
+  while (cursor < endDay) {
+    const date = new Date(cursor * 86400000);
+    const firstHalfEnd = Math.floor(
+      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 16) / 86400000
+    );
+    const next = nextMonthStart(cursor);
+    if (firstHalfEnd > startDay && firstHalfEnd < endDay) boundaries.add(firstHalfEnd);
+    if (next > startDay && next < endDay) boundaries.add(next);
+    cursor = next;
+  }
+  return [...boundaries].sort((left, right) => left - right);
+}
+
+function monthSegments(startDay, endDay) {
+  const segments = [];
+  let cursor = monthStart(startDay);
+  while (cursor < endDay) {
+    const next = nextMonthStart(cursor);
+    const clippedStart = Math.max(startDay, cursor);
+    const clippedEnd = Math.min(endDay, next);
+    if (clippedStart < clippedEnd) {
+      const date = new Date(cursor * 86400000);
+      segments.push({
+        start: clippedStart,
+        end: clippedEnd,
+        label: `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`,
+      });
+    }
+    cursor = next;
+  }
+  return segments;
+}
+
+function estimatedLabelWidth(title) {
+  const width = Array.from(title).reduce(
+    (total, character) => total + (/^[\u0000-\u00ff]$/.test(character) ? 8 : 15),
+    0
+  );
+  return Math.min(260, Math.max(72, width));
+}
+
+function visualBounds(item, options) {
+  const startDay = plainDateToDay(item.start);
+  const endDay = item.kind === "milestone"
+    ? startDay + 1
+    : plainDateToDay(item.end);
+  const startX = options.xForDay(startDay);
+  const endX = options.xForDay(endDay);
+  const labelWidth = estimatedLabelWidth(item.title);
+  if (item.kind === "milestone") {
+    const rightStart = startX + LAYOUT.milestoneSize / 2 + LAYOUT.labelGap;
+    if (rightStart + labelWidth <= options.plotRight) {
+      return {
+        startDay,
+        endDay,
+        labelWidth,
+        labelPlacement: "outside-right",
+        visualStart: startX - LAYOUT.milestoneSize / 2,
+        visualEnd: rightStart + labelWidth,
+      };
+    }
+    const leftEnd = startX - LAYOUT.milestoneSize / 2 - LAYOUT.labelGap;
+    return {
+      startDay,
+      endDay,
+      labelWidth,
+      labelPlacement: "outside-left",
+      visualStart: Math.max(options.plotLeft, leftEnd - labelWidth),
+      visualEnd: startX + LAYOUT.milestoneSize / 2,
+    };
+  }
+  const width = endX - startX;
+  if (width >= labelWidth + LAYOUT.labelGap * 2) {
+    return {
+      startDay,
+      endDay,
+      labelWidth,
+      labelPlacement: "inside",
+      visualStart: startX,
+      visualEnd: endX,
+    };
+  }
+  const rightStart = endX + LAYOUT.labelGap;
+  if (rightStart + labelWidth <= options.plotRight) {
+    return {
+      startDay,
+      endDay,
+      labelWidth,
+      labelPlacement: "outside-right",
+      visualStart: startX,
+      visualEnd: rightStart + labelWidth,
+    };
+  }
+  const leftEnd = startX - LAYOUT.labelGap;
+  return {
+    startDay,
+    endDay,
+    labelWidth,
+    labelPlacement: "outside-left",
+    visualStart: Math.max(options.plotLeft, leftEnd - labelWidth),
+    visualEnd: endX,
+  };
+}
+
+function assignTracks(items, options) {
+  const entries = items.map((item, index) => ({
+    item,
+    index,
+    ...visualBounds(item, options),
+  }));
+  entries.sort((left, right) => (
+    left.visualStart - right.visualStart
+    || left.visualEnd - right.visualEnd
+    || left.item.id.localeCompare(right.item.id)
+  ));
+  const trackEnds = [];
+  entries.forEach(entry => {
+    let track = trackEnds.findIndex(
+      trackEnd => trackEnd + LAYOUT.collisionGap <= entry.visualStart
+    );
+    if (track === -1) {
+      track = trackEnds.length;
+      trackEnds.push(entry.visualEnd);
+    } else {
+      trackEnds[track] = entry.visualEnd;
+    }
+    entry.track = track;
+  });
+  return entries.sort((left, right) => left.index - right.index);
+}
+
+function layoutRoadmap(value, viewportValue = DEFAULT_VIEWPORT) {
+  const validation = validateAndNormalizeRoadmapSpec(value);
+  if (!validation.ok) {
+    throw new Error(`RoadmapSpec invalid:\n${validation.issues.join("\n")}`);
+  }
+  const spec = validation.normalized;
+  const viewport = normalizeViewport(viewportValue);
+  const rangeStart = plainDateToDay(spec.range.start);
+  const rangeEnd = plainDateToDay(spec.range.end);
+  const rangeDays = rangeEnd - rangeStart;
+  const plotLeft = LAYOUT.outerPadding + LAYOUT.laneLabelWidth;
+  const plotRight = viewport.width - LAYOUT.outerPadding;
+  const plotWidth = plotRight - plotLeft;
+  const headerTop = LAYOUT.outerPadding + LAYOUT.titleHeight;
+  const laneTop = headerTop + LAYOUT.headerHeight;
+  const xForDay = day => round(plotLeft + ((day - rangeStart) / rangeDays) * plotWidth);
+
+  const itemsByLane = new Map(spec.lanes.map(lane => [lane.id, []]));
+  spec.items.forEach(item => itemsByLane.get(item.lane_id).push(item));
+  const laneTrackRecords = spec.lanes.map(lane => {
+    const assigned = assignTracks(itemsByLane.get(lane.id), {
+      plotLeft,
+      plotRight,
+      xForDay,
+    });
+    const trackCount = Math.max(1, ...assigned.map(entry => entry.track + 1));
+    const contentHeight = (trackCount * LAYOUT.trackHeight)
+      + ((trackCount - 1) * LAYOUT.trackGap)
+      + (LAYOUT.lanePadding * 2);
+    return {
+      lane,
+      assigned,
+      trackCount,
+      height: Math.max(LAYOUT.minLaneHeight, contentHeight),
+    };
+  });
+  const requiredHeight = laneTop
+    + laneTrackRecords.reduce((sum, record) => sum + record.height, 0)
+    + LAYOUT.outerPadding;
+  const canvasHeight = Math.max(MIN_VIEWPORT.height, requiredHeight);
+
+  const headers = [];
+  monthSegments(rangeStart, rangeEnd).forEach((segment, index) => {
+    headers.push({
+      id: `month-${index + 1}`,
+      kind: "month",
+      label: segment.label,
+      start: dayToPlainDate(segment.start),
+      end: dayToPlainDate(segment.end),
+      x: xForDay(segment.start),
+      y: round(headerTop),
+      width: round(xForDay(segment.end) - xForDay(segment.start)),
+      height: round(LAYOUT.headerHeight / 2),
+    });
+  });
+  const halfBoundaries = halfMonthBoundaries(rangeStart, rangeEnd);
+  halfBoundaries.slice(0, -1).forEach((startDay, index) => {
+    const endDay = halfBoundaries[index + 1];
+    const date = new Date(startDay * 86400000);
+    headers.push({
+      id: `half-month-${index + 1}`,
+      kind: "half-month",
+      label: date.getUTCDate() <= 15 ? "上半月" : "下半月",
+      start: dayToPlainDate(startDay),
+      end: dayToPlainDate(endDay),
+      x: xForDay(startDay),
+      y: round(headerTop + LAYOUT.headerHeight / 2),
+      width: round(xForDay(endDay) - xForDay(startDay)),
+      height: round(LAYOUT.headerHeight / 2),
+    });
+  });
+
+  const lanes = [];
+  const bars = [];
+  const milestones = [];
+  const labels = [];
+  const continuations = [];
+  let currentY = laneTop;
+  laneTrackRecords.forEach(record => {
+    const laneY = currentY;
+    lanes.push({
+      id: record.lane.id,
+      label: record.lane.label,
+      order: record.lane.order,
+      x: round(LAYOUT.outerPadding),
+      y: round(laneY),
+      width: round(viewport.width - LAYOUT.outerPadding * 2),
+      height: round(record.height),
+      track_count: record.trackCount,
+    });
+    record.assigned.forEach(entry => {
+      const trackY = laneY
+        + LAYOUT.lanePadding
+        + entry.track * (LAYOUT.trackHeight + LAYOUT.trackGap);
+      const startX = xForDay(entry.startDay);
+      const endX = xForDay(entry.endDay);
+      if (entry.item.kind === "milestone") {
+        const x = startX;
+        milestones.push({
+          id: entry.item.id,
+          lane_id: record.lane.id,
+          title: entry.item.title,
+          date: entry.item.start,
+          track: entry.track,
+          x,
+          y: round(trackY + LAYOUT.barHeight / 2),
+          size: LAYOUT.milestoneSize,
+          certainty: entry.item.certainty,
+          progress: entry.item.progress,
+          line_style: entry.item.certainty === "tentative" ? "dashed" : "solid",
+          ...(entry.item.color ? { color: entry.item.color } : {}),
+        });
+        const labelOnLeft = entry.labelPlacement === "outside-left";
+        const preferredX = labelOnLeft
+          ? x - LAYOUT.milestoneSize / 2 - LAYOUT.labelGap - entry.labelWidth
+          : x + LAYOUT.milestoneSize / 2 + LAYOUT.labelGap;
+        labels.push({
+          id: `label-${entry.item.id}`,
+          item_id: entry.item.id,
+          lane_id: record.lane.id,
+          text: entry.item.title,
+          placement: entry.labelPlacement,
+          x: round(clamp(preferredX, plotLeft + 4, plotRight - entry.labelWidth - 4)),
+          y: round(trackY),
+          width: round(entry.labelWidth),
+          height: LAYOUT.labelHeight,
+        });
+        return;
+      }
+      const width = round(endX - startX);
+      const placement = entry.labelPlacement;
+      bars.push({
+        id: entry.item.id,
+        lane_id: record.lane.id,
+        title: entry.item.title,
+        start: entry.item.start,
+        end: entry.item.end,
+        track: entry.track,
+        x: startX,
+        y: round(trackY),
+        width,
+        height: LAYOUT.barHeight,
+        certainty: entry.item.certainty,
+        progress: entry.item.progress,
+        line_style: entry.item.certainty === "tentative" ? "dashed" : "solid",
+        ...(entry.item.color ? { color: entry.item.color } : {}),
+      });
+      const labelX = placement === "inside"
+        ? startX + LAYOUT.labelGap
+        : placement === "outside-left"
+          ? startX - LAYOUT.labelGap - entry.labelWidth
+          : endX + LAYOUT.labelGap;
+      const renderedLabelWidth = placement === "inside"
+        ? Math.max(0, width - LAYOUT.labelGap * 2)
+        : entry.labelWidth;
+      labels.push({
+        id: `label-${entry.item.id}`,
+        item_id: entry.item.id,
+        lane_id: record.lane.id,
+        text: entry.item.title,
+        placement,
+        x: round(clamp(labelX, plotLeft + 4, plotRight - renderedLabelWidth - 4)),
+        y: round(trackY),
+        width: round(renderedLabelWidth),
+        height: LAYOUT.labelHeight,
+      });
+      for (const direction of ["before", "after"]) {
+        if (!entry.item.continuation || entry.item.continuation[direction] !== true) continue;
+        continuations.push({
+          id: `continuation-${entry.item.id}-${direction}`,
+          item_id: entry.item.id,
+          lane_id: record.lane.id,
+          direction,
+          x: direction === "before" ? round(plotLeft) : round(plotRight),
+          y: round(trackY + LAYOUT.barHeight / 2),
+          size: LAYOUT.continuationSize,
+        });
+      }
+    });
+    currentY += record.height;
+  });
+
+  return {
+    schema_version: 1,
+    kind: "roadmap-geometry",
+    source_schema_version: spec.schema_version,
+    canvas: {
+      width: viewport.width,
+      height: round(canvasHeight),
+      plot_left: round(plotLeft),
+      plot_right: round(plotRight),
+      header_top: round(headerTop),
+      header_height: LAYOUT.headerHeight,
+    },
+    headers,
+    lanes,
+    bars,
+    milestones,
+    labels,
+    continuations,
+  };
+}
+
+module.exports = {
+  DEFAULT_VIEWPORT,
+  LAYOUT,
+  assignTracks,
+  estimatedLabelWidth,
+  halfMonthBoundaries,
+  layoutRoadmap,
+  monthSegments,
+  normalizeViewport,
+};
+
+;window.__roadmapGeometryCore=module.exports;})();
+  </script>
+  <script data-roadmap-runtime="editor">
+(function () {
+  "use strict";
+
+  const RUNTIME_SOURCE = "box-agent-controlled-deck";
+  const HOST_SOURCE = "officev3-controlled-deck-host";
+  const PROTOCOL_VERSION = 1;
+  const LAYOUT_ID = "roadmap-swimlane-v1";
+  const SAVE_TIMEOUT_MS = 15000;
+  const documentNode = document.querySelector("#deck-document");
+  const geometryNode = document.querySelector("#roadmap-geometry");
+  const diagnosticsNode = document.querySelector("#roadmap-diagnostics");
+  const pendingQuestionsNode = document.querySelector(
+    "#roadmap-pending-questions",
+  );
+  const paletteNode = document.querySelector("#roadmap-palette");
+  const stage = document.querySelector('[data-role="stage"]');
+  const stageShell = document.querySelector('[data-role="stage-shell"]');
+  const editorBackdrop = document.querySelector(
+    '[data-role="editor-backdrop"]',
+  );
+  const editor = document.querySelector('[data-role="editor"]');
+  const titleNode = document.querySelector('[data-role="roadmap-title"]');
+  const diagnosticBanner = document.querySelector('[data-role="diagnostics"]');
+  const toast = document.querySelector('[data-role="toast"]');
+  const actions = document.querySelector('[data-role="roadmap-actions"]');
+  const adjustButton = document.querySelector('[data-action="adjust"]');
+  const saveButton = document.querySelector('[data-action="save"]');
+  const contractCore = window.__roadmapContractCore;
+  const geometryCore = window.__roadmapGeometryCore;
+  if (
+    !documentNode ||
+    !geometryNode ||
+    !paletteNode ||
+    !stage ||
+    !stageShell ||
+    !editorBackdrop ||
+    !editor ||
+    !actions ||
+    !adjustButton ||
+    !saveButton ||
+    !contractCore ||
+    !geometryCore
+  )
+    return;
+
+  let model = JSON.parse(documentNode.textContent || "{}");
+  let geometry = JSON.parse(geometryNode.textContent || "{}");
+  let diagnostics = JSON.parse(diagnosticsNode?.textContent || "[]");
+  let pendingQuestions = JSON.parse(pendingQuestionsNode?.textContent || "[]");
+  const palette = JSON.parse(paletteNode.textContent || "{}");
+  const laneAccents =
+    Array.isArray(palette.colors) && palette.colors.length
+      ? palette.colors
+      : ["var(--roadmap-primary)"];
+  let revision = 0;
+  let savedRevision = 0;
+  let modelValid = true;
+  let hostEditAvailable = false;
+  let hostSaveAvailable = false;
+  let saveInFlight = null;
+  let saveTimer = null;
+  let toastTimer = null;
+
+  function element(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = String(text);
+    return node;
+  }
+
+  function safeColor(value) {
+    const normalized = String(value || "").trim();
+    if (/^#[0-9a-f]{3,8}$/i.test(normalized)) return normalized;
+    if (/^(?:rgb|hsl)a?\([0-9.,%\s]+\)$/i.test(normalized)) return normalized;
+    return "var(--roadmap-primary)";
+  }
+
+  function box(node, entry) {
+    node.style.left = `${Number(entry.x) || 0}px`;
+    node.style.top = `${Number(entry.y) || 0}px`;
+    node.style.width = `${Number(entry.width) || 0}px`;
+    node.style.height = `${Number(entry.height) || 0}px`;
+  }
+
+  function progressRatio(value) {
+    return { planned: 0, doing: 0.55, done: 1, blocked: 1 }[value] || 0;
+  }
+
+  function progressLabel(value) {
+    return (
+      { planned: "计划中", doing: "进行中", done: "已完成", blocked: "受阻" }[
+        value
+      ] || value
+    );
+  }
+
+  function laneAccent(index) {
+    return laneAccents[index % laneAccents.length];
+  }
+
+  function compactHeaderLabel(header) {
+    if (header.kind !== "half-month" || header.width >= 56) return header.label;
+    return header.label.startsWith("上") ? "上" : "下";
+  }
+
+  function renderStage() {
+    stage.replaceChildren();
+    stage.style.width = `${geometry.canvas.width}px`;
+    stage.style.height = `${geometry.canvas.height}px`;
+
+    const firstLane = geometry.lanes[0];
+    const axisLabel = element("div", "roadmap-axis-label");
+    axisLabel.style.left = `${firstLane?.x || 0}px`;
+    axisLabel.style.top = `${geometry.canvas.header_top}px`;
+    axisLabel.style.width = `${geometry.canvas.plot_left - (firstLane?.x || 0)}px`;
+    axisLabel.style.height = `${geometry.canvas.header_height}px`;
+    axisLabel.appendChild(element("span", "", "阶段"));
+    axisLabel.appendChild(element("small", "", "团队泳道"));
+    stage.appendChild(axisLabel);
+
+    geometry.headers.forEach((header) => {
+      const node = element("div", "roadmap-header", compactHeaderLabel(header));
+      node.dataset.kind = header.kind;
+      node.title = header.label;
+      box(node, header);
+      stage.appendChild(node);
+    });
+
+    const lanesById = new Map(model.lanes.map((lane) => [lane.id, lane]));
+    geometry.lanes.forEach((lane, index) => {
+      const node = element("div", "roadmap-lane");
+      node.dataset.laneId = lane.id;
+      node.style.setProperty("--roadmap-lane-accent", laneAccent(index));
+      box(node, lane);
+      const label = element("div", "roadmap-lane-label");
+      const labelText = lanesById.get(lane.id)?.label || lane.label;
+      label.title = labelText;
+      label.appendChild(
+        element(
+          "span",
+          "roadmap-lane-index",
+          String(index + 1).padStart(2, "0"),
+        ),
+      );
+      label.appendChild(element("span", "roadmap-lane-title", labelText));
+      node.appendChild(label);
+      stage.appendChild(node);
+    });
+
+    const halfMonthHeaders = geometry.headers.filter(
+      (header) => header.kind === "half-month",
+    );
+    const gridLineXs = [
+      ...new Set(
+        [
+          ...halfMonthHeaders.map((header) => header.x),
+          ...halfMonthHeaders.map((header) => header.x + header.width),
+        ].map((value) => Number(value.toFixed(3))),
+      ),
+    ];
+    const laneTop = geometry.canvas.header_top + geometry.canvas.header_height;
+    const laneBottom = geometry.lanes.reduce(
+      (bottom, lane) => Math.max(bottom, lane.y + lane.height),
+      laneTop,
+    );
+    gridLineXs.forEach((x) => {
+      const line = element("div", "roadmap-grid-line");
+      line.style.left = `${x}px`;
+      line.style.top = `${laneTop}px`;
+      line.style.height = `${laneBottom - laneTop}px`;
+      stage.appendChild(line);
+    });
+
+    const itemsById = new Map(model.items.map((item) => [item.id, item]));
+    const laneIndexById = new Map(
+      model.lanes.map((lane, index) => [lane.id, index]),
+    );
+    geometry.bars.forEach((bar) => {
+      const item = itemsById.get(bar.id) || bar;
+      const node = element("div", "roadmap-bar");
+      node.dataset.itemId = bar.id;
+      node.dataset.lineStyle = bar.line_style;
+      node.dataset.progress = item.progress;
+      node.title = `${bar.title} · ${bar.start} → ${bar.end} · ${progressLabel(item.progress)}`;
+      box(node, bar);
+      const color = item.color
+        ? safeColor(item.color)
+        : laneAccent(laneIndexById.get(bar.lane_id) || 0);
+      node.style.setProperty("--roadmap-item-accent", color);
+      const progress = element("div", "roadmap-bar-progress");
+      progress.style.width = `${progressRatio(item.progress) * 100}%`;
+      node.appendChild(progress);
+      stage.appendChild(node);
+    });
+
+    geometry.milestones.forEach((marker) => {
+      const node = element("div", "roadmap-milestone");
+      node.dataset.itemId = marker.id;
+      node.dataset.lineStyle = marker.line_style;
+      node.title = `${marker.title} · ${marker.date}`;
+      node.style.left = `${marker.x - marker.size / 2}px`;
+      node.style.top = `${marker.y - marker.size / 2}px`;
+      node.style.width = `${marker.size}px`;
+      node.style.height = `${marker.size}px`;
+      const item = itemsById.get(marker.id) || marker;
+      const color = item.color
+        ? safeColor(item.color)
+        : laneAccent(laneIndexById.get(marker.lane_id) || 0);
+      node.style.setProperty("--roadmap-item-accent", color);
+      stage.appendChild(node);
+    });
+
+    geometry.labels.forEach((label) => {
+      const node = element("div", "roadmap-label", label.text);
+      node.dataset.itemId = label.item_id;
+      node.dataset.placement = label.placement;
+      node.title = label.text;
+      box(node, label);
+      stage.appendChild(node);
+    });
+
+    geometry.continuations.forEach((marker) => {
+      const before = marker.direction === "before";
+      const node = element("div", "roadmap-continuation", before ? "‹" : "›");
+      node.setAttribute(
+        "aria-label",
+        before ? "开始前仍在继续" : "结束后仍将继续",
+      );
+      node.style.left = `${marker.x - marker.size}px`;
+      node.style.top = `${marker.y - marker.size}px`;
+      stage.appendChild(node);
+    });
+
+    if (Array.isArray(model.legend) && model.legend.length) {
+      const legend = element("div", "roadmap-legend");
+      model.legend.forEach((entry) =>
+        legend.appendChild(element("span", "", entry.label)),
+      );
+      stage.appendChild(legend);
+    }
+    titleNode.textContent = model.title;
+    resizeStage();
+  }
+
+  function resizeStage() {
+    const width = Math.max(1, stageShell.clientWidth || geometry.canvas.width);
+    const scale = Math.min(1, width / geometry.canvas.width);
+    stage.style.transform = `scale(${scale})`;
+    stageShell.style.height = `${Math.max(480, geometry.canvas.height * scale)}px`;
+  }
+
+  function showToast(message) {
+    toast.textContent = String(message);
+    toast.hidden = false;
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      toast.hidden = true;
+    }, 3200);
+  }
+
+  function updateDiagnostics(nextDiagnostics) {
+    diagnostics = nextDiagnostics;
+    if (diagnosticsNode)
+      diagnosticsNode.textContent = JSON.stringify(diagnostics, null, 2);
+    diagnosticBanner.hidden = diagnostics.length === 0;
+    diagnosticBanner.textContent = diagnostics
+      .map((entry) => entry.message)
+      .join("；");
+  }
+
+  function safeJsonText(value) {
+    return JSON.stringify(value, null, 2)
+      .replace(/</g, "\\u003c")
+      .replace(/\u2028/g, "\\u2028")
+      .replace(/\u2029/g, "\\u2029");
+  }
+
+  function capacityDiagnostics() {
+    const next = [];
+    if (model.items.length >= 80) {
+      next.push({
+        code: "capacity.items-at-limit",
+        severity: "warning",
+        message: "任务数量已达到 80 条上限；建议拆分为多个路线图。",
+      });
+    } else if (model.items.length >= 30) {
+      next.push({
+        code: "capacity.dense",
+        severity: "warning",
+        message: `当前包含 ${model.items.length} 条任务，已启用可滚动的密集视图。`,
+      });
+    }
+    return next;
+  }
+
+  function relayout() {
+    const started = performance.now();
+    const validation = contractCore.validateAndNormalizeRoadmapSpec(model);
+    if (!validation.ok) {
+      modelValid = false;
+      updateDiagnostics(
+        validation.issues
+          .slice(0, 6)
+          .map((message) => ({
+            code: "contract.invalid",
+            severity: "error",
+            message,
+          })),
+      );
+      updateButtons();
+      return false;
+    }
+    modelValid = true;
+    model = validation.normalized;
+    geometry = geometryCore.layoutRoadmap(model, { width: 1440, height: 900 });
+    const elapsed = performance.now() - started;
+    const next = capacityDiagnostics();
+    if (elapsed >= 100)
+      next.push({
+        code: "performance.relayout",
+        severity: "warning",
+        message: `本次重排耗时 ${Math.round(elapsed)}ms。`,
+      });
+    updateDiagnostics(next);
+    documentNode.textContent = safeJsonText(model);
+    geometryNode.textContent = safeJsonText(geometry);
+    renderStage();
+    updateButtons();
+    return true;
+  }
+
+  function inputField(labelText, value, path, type) {
+    const label = element("label", "roadmap-field");
+    label.appendChild(element("span", "", labelText));
+    const input = document.createElement("input");
+    input.type = type || "text";
+    input.value = value || "";
+    input.dataset.modelPath = path;
+    label.appendChild(input);
+    return label;
+  }
+
+  function selectField(value, path, choices) {
+    const field = element("div", "roadmap-select");
+    field.dataset.modelPath = path;
+    const menuId = `roadmap-select-${path.replace(/[^a-z0-9]+/gi, "-")}`;
+    const selected =
+      choices.find((choice) => choice.value === value) || choices[0];
+    const trigger = element(
+      "button",
+      "roadmap-select-trigger",
+      selected?.label || "请选择",
+    );
+    trigger.type = "button";
+    trigger.dataset.selectTrigger = "true";
+    trigger.setAttribute("role", "combobox");
+    trigger.setAttribute("aria-haspopup", "listbox");
+    trigger.setAttribute("aria-expanded", "false");
+    trigger.setAttribute("aria-controls", menuId);
+    const menu = element("div", "roadmap-select-menu");
+    menu.id = menuId;
+    menu.setAttribute("role", "listbox");
+    menu.setAttribute("popover", "manual");
+    choices.forEach((choice) => {
+      const option = element("button", "roadmap-select-option", choice.label);
+      option.type = "button";
+      option.dataset.selectValue = choice.value;
+      option.setAttribute("role", "option");
+      option.setAttribute("aria-selected", String(choice.value === value));
+      menu.appendChild(option);
+    });
+    field.append(trigger, menu);
+    return field;
+  }
+
+  function closeSelectMenu(field, restoreFocus) {
+    const menu = field?.querySelector(".roadmap-select-menu");
+    const trigger = field?.querySelector("[data-select-trigger]");
+    if (!menu || !trigger) return;
+    if (typeof menu.hidePopover === "function" && menu.matches(":popover-open"))
+      menu.hidePopover();
+    else menu.hidden = true;
+    trigger.setAttribute("aria-expanded", "false");
+    if (restoreFocus) trigger.focus();
+  }
+
+  function closeSelectMenus(except, restoreFocus) {
+    editor.querySelectorAll(".roadmap-select").forEach((field) => {
+      if (field !== except) closeSelectMenu(field, restoreFocus);
+    });
+  }
+
+  function openSelectMenu(field) {
+    closeSelectMenus(field, false);
+    const trigger = field.querySelector("[data-select-trigger]");
+    const menu = field.querySelector(".roadmap-select-menu");
+    const rect = trigger.getBoundingClientRect();
+    menu.hidden = false;
+    menu.style.width = `${rect.width}px`;
+    menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - rect.width - 8))}px`;
+    menu.style.top = `${rect.bottom + 4}px`;
+    if (typeof menu.showPopover === "function") menu.showPopover();
+    const menuRect = menu.getBoundingClientRect();
+    if (
+      menuRect.bottom > window.innerHeight - 8 &&
+      rect.top > menuRect.height + 12
+    ) {
+      menu.style.top = `${rect.top - menuRect.height - 4}px`;
+    }
+    trigger.setAttribute("aria-expanded", "true");
+  }
+
+  function chooseSelectOption(field, option) {
+    const path = field.dataset.modelPath;
+    const value = option.dataset.selectValue;
+    const trigger = field.querySelector("[data-select-trigger]");
+    const rerenderEditor = /\.kind$/.test(path);
+    applyMutation(() => setPath(path, value), rerenderEditor);
+    if (!rerenderEditor) {
+      trigger.textContent = option.textContent;
+      field.querySelectorAll("[data-select-value]").forEach((entry) => {
+        entry.setAttribute("aria-selected", String(entry === option));
+      });
+      closeSelectMenu(field, true);
+    }
+  }
+
+  function svgIcon(name) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    const paths =
+      {
+        close: ["M6 6l12 12", "M18 6L6 18"],
+        plus: ["M12 5v14", "M5 12h14"],
+        trash: [
+          "M3 6h18",
+          "M8 6V4h8v2",
+          "M19 6l-1 14H6L5 6",
+          "M10 11v5",
+          "M14 11v5",
+        ],
+      }[name] || [];
+    paths.forEach((value) => {
+      const path = document.createElementNS(
+        "http://www.w3.org/2000/svg",
+        "path",
+      );
+      path.setAttribute("d", value);
+      svg.appendChild(path);
+    });
+    return svg;
+  }
+
+  function actionButton(label, action, index, options = {}) {
+    const button = element("button", "roadmap-button", label);
+    button.type = "button";
+    button.dataset.editorAction = action;
+    if (index !== undefined) button.dataset.index = String(index);
+    if (options.variant) button.dataset.variant = options.variant;
+    if (options.icon) {
+      button.replaceChildren(svgIcon(options.icon));
+      if (!options.iconOnly) button.appendChild(element("span", "", label));
+    }
+    if (options.iconOnly) button.classList.add("roadmap-icon-button");
+    button.setAttribute("aria-label", label);
+    button.title = label;
+    return button;
+  }
+
+  function setEditorOpen(open) {
+    if (!open) closeSelectMenus(null, false);
+    editorBackdrop.hidden = !open;
+    editor.hidden = !open;
+    if (open) document.body.dataset.editorOpen = "true";
+    else delete document.body.dataset.editorOpen;
+  }
+
+  function renderEditor() {
+    editor.replaceChildren();
+    const header = document.createElement("header");
+    header.appendChild(element("h2", "", "调整路线图"));
+    header.appendChild(
+      actionButton("关闭", "close", undefined, {
+        icon: "close",
+        iconOnly: true,
+      }),
+    );
+    editor.appendChild(header);
+
+    const basic = element("section", "roadmap-editor-section");
+    basic.appendChild(element("h3", "", "基本信息"));
+    const grid = element("div", "roadmap-editor-grid");
+    grid.appendChild(inputField("标题", model.title, "title"));
+    grid.appendChild(
+      inputField("开始日期", model.range.start, "range.start", "date"),
+    );
+    grid.appendChild(
+      inputField("结束日期（不包含）", model.range.end, "range.end", "date"),
+    );
+    basic.appendChild(grid);
+    editor.appendChild(basic);
+
+    const lanes = element("section", "roadmap-editor-section");
+    const laneHeader = document.createElement("header");
+    laneHeader.appendChild(
+      element("h3", "", `泳道（${model.lanes.length}/8）`),
+    );
+    laneHeader.appendChild(
+      actionButton("新增泳道", "add-lane", undefined, {
+        icon: "plus",
+        variant: "primary",
+      }),
+    );
+    lanes.appendChild(laneHeader);
+    const laneTable = element("table", "roadmap-table");
+    const laneBody = document.createElement("tbody");
+    model.lanes.forEach((lane, index) => {
+      const row = document.createElement("tr");
+      const labelCell = document.createElement("td");
+      const input = document.createElement("input");
+      input.value = lane.label;
+      input.dataset.modelPath = `lanes.${index}.label`;
+      labelCell.appendChild(input);
+      const actionCell = document.createElement("td");
+      actionCell.appendChild(
+        actionButton("删除泳道", "remove-lane", index, {
+          icon: "trash",
+          iconOnly: true,
+          variant: "danger",
+        }),
+      );
+      row.append(labelCell, actionCell);
+      laneBody.appendChild(row);
+    });
+    laneTable.appendChild(laneBody);
+    lanes.appendChild(laneTable);
+    editor.appendChild(lanes);
+
+    const items = element("section", "roadmap-editor-section");
+    const itemHeader = document.createElement("header");
+    itemHeader.appendChild(
+      element("h3", "", `任务与里程碑（${model.items.length}/80）`),
+    );
+    itemHeader.appendChild(
+      actionButton("新增任务", "add-item", undefined, {
+        icon: "plus",
+        variant: "primary",
+      }),
+    );
+    items.appendChild(itemHeader);
+    const wrap = element("div", "roadmap-table-wrap");
+    const table = element("table", "roadmap-table");
+    const head = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    ["标题", "泳道", "类型", "开始", "结束", "状态", "确定性", ""].forEach(
+      (text) => headRow.appendChild(element("th", "", text)),
+    );
+    head.appendChild(headRow);
+    const body = document.createElement("tbody");
+    model.items.forEach((item, index) => {
+      const row = document.createElement("tr");
+      const values = [
+        (() => {
+          const input = document.createElement("input");
+          input.value = item.title;
+          input.dataset.modelPath = `items.${index}.title`;
+          return input;
+        })(),
+        selectField(
+          item.lane_id,
+          `items.${index}.lane_id`,
+          model.lanes.map((lane) => ({ value: lane.id, label: lane.label })),
+        ),
+        selectField(item.kind, `items.${index}.kind`, [
+          { value: "bar", label: "任务" },
+          { value: "milestone", label: "里程碑" },
+        ]),
+        (() => {
+          const input = document.createElement("input");
+          input.type = "date";
+          input.value = item.start;
+          input.dataset.modelPath = `items.${index}.start`;
+          return input;
+        })(),
+        (() => {
+          const input = document.createElement("input");
+          const isMilestone = item.kind === "milestone";
+          input.type = isMilestone ? "text" : "date";
+          input.value = isMilestone ? "无需结束日期" : item.end || "";
+          input.disabled = isMilestone;
+          input.dataset.modelPath = `items.${index}.end`;
+          return input;
+        })(),
+        selectField(item.progress, `items.${index}.progress`, [
+          { value: "planned", label: "计划中" },
+          { value: "doing", label: "进行中" },
+          { value: "done", label: "已完成" },
+          { value: "blocked", label: "受阻" },
+        ]),
+        selectField(item.certainty, `items.${index}.certainty`, [
+          { value: "confirmed", label: "已确认" },
+          { value: "tentative", label: "待确认" },
+        ]),
+        actionButton("删除任务", "remove-item", index, {
+          icon: "trash",
+          iconOnly: true,
+          variant: "danger",
+        }),
+      ];
+      values.forEach((value) => {
+        const cell = document.createElement("td");
+        cell.appendChild(value);
+        row.appendChild(cell);
+      });
+      body.appendChild(row);
+    });
+    table.append(head, body);
+    wrap.appendChild(table);
+    items.appendChild(wrap);
+    editor.appendChild(items);
+  }
+
+  function setPath(path, value) {
+    const segments = path.split(".");
+    let target = model;
+    for (let index = 0; index < segments.length - 1; index += 1)
+      target = target[segments[index]];
+    const key = segments[segments.length - 1];
+    if (/\.end$/.test(path) && !value) delete target[key];
+    else target[key] = value;
+    if (/\.kind$/.test(path) && value === "milestone") delete target.end;
+  }
+
+  function uniqueId(prefix, collection) {
+    let index = collection.length + 1;
+    while (collection.some((entry) => entry.id === `${prefix}-${index}`))
+      index += 1;
+    return `${prefix}-${index}`;
+  }
+
+  function applyMutation(callback, rerenderEditor) {
+    callback();
+    revision += 1;
+    relayout();
+    if (rerenderEditor) renderEditor();
+  }
+
+  editor.addEventListener("input", (event) => {
+    const control = event.target.closest("[data-model-path]");
+    if (!control || control.classList.contains("roadmap-select")) return;
+    applyMutation(
+      () => setPath(control.dataset.modelPath, control.value),
+      false,
+    );
+  });
+  editor.addEventListener("click", (event) => {
+    const option = event.target.closest("[data-select-value]");
+    if (option) {
+      chooseSelectOption(option.closest(".roadmap-select"), option);
+      return;
+    }
+    const trigger = event.target.closest("[data-select-trigger]");
+    if (trigger) {
+      const field = trigger.closest(".roadmap-select");
+      if (trigger.getAttribute("aria-expanded") === "true")
+        closeSelectMenu(field, false);
+      else openSelectMenu(field);
+      return;
+    }
+    const button = event.target.closest("[data-editor-action]");
+    if (!button) return;
+    const action = button.dataset.editorAction;
+    const index = Number(button.dataset.index);
+    if (action === "close") setEditorOpen(false);
+    if (action === "add-lane") {
+      if (model.lanes.length >= 8) return showToast("最多支持 8 条泳道");
+      applyMutation(
+        () =>
+          model.lanes.push({
+            id: uniqueId("lane", model.lanes),
+            label: "新泳道",
+            order: model.lanes.length + 1,
+          }),
+        true,
+      );
+    }
+    if (action === "remove-lane") {
+      const lane = model.lanes[index];
+      if (model.lanes.length <= 1) return showToast("至少保留一条泳道");
+      if (model.items.some((item) => item.lane_id === lane.id))
+        return showToast("请先移动或删除该泳道中的任务");
+      applyMutation(() => {
+        model.lanes.splice(index, 1);
+        model.lanes.forEach((entry, laneIndex) => {
+          entry.order = laneIndex + 1;
+        });
+      }, true);
+    }
+    if (action === "add-item") {
+      if (model.items.length >= 80) return showToast("最多支持 80 条任务");
+      applyMutation(
+        () =>
+          model.items.push({
+            id: uniqueId("item", model.items),
+            lane_id: model.lanes[0].id,
+            title: "新任务",
+            start: model.range.start,
+            end: model.range.end,
+            kind: "bar",
+            certainty: "tentative",
+            progress: "planned",
+          }),
+        true,
+      );
+    }
+    if (action === "remove-item") {
+      if (model.items.length <= 1) return showToast("至少保留一条任务或里程碑");
+      applyMutation(() => model.items.splice(index, 1), true);
+    }
+  });
+  editor.addEventListener("keydown", (event) => {
+    const trigger = event.target.closest("[data-select-trigger]");
+    if (trigger && ["ArrowDown", "ArrowUp"].includes(event.key)) {
+      event.preventDefault();
+      const field = trigger.closest(".roadmap-select");
+      openSelectMenu(field);
+      const options = [...field.querySelectorAll("[data-select-value]")];
+      const selectedIndex = Math.max(
+        0,
+        options.findIndex(
+          (option) => option.getAttribute("aria-selected") === "true",
+        ),
+      );
+      options[
+        event.key === "ArrowUp" ? Math.max(0, selectedIndex - 1) : selectedIndex
+      ].focus();
+      return;
+    }
+    const option = event.target.closest("[data-select-value]");
+    if (
+      !option ||
+      !["ArrowDown", "ArrowUp", "Home", "End", "Escape"].includes(event.key)
+    )
+      return;
+    event.preventDefault();
+    const field = option.closest(".roadmap-select");
+    if (event.key === "Escape") return closeSelectMenu(field, true);
+    const options = [...field.querySelectorAll("[data-select-value]")];
+    const currentIndex = options.indexOf(option);
+    const nextIndex =
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? options.length - 1
+          : event.key === "ArrowDown"
+            ? Math.min(options.length - 1, currentIndex + 1)
+            : Math.max(0, currentIndex - 1);
+    options[nextIndex].focus();
+  });
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest(".roadmap-select")) closeSelectMenus(null, false);
+  });
+  editor.addEventListener("scroll", () => closeSelectMenus(null, false), {
+    passive: true,
+  });
+  editorBackdrop.addEventListener("click", () => setEditorOpen(false));
+  window.addEventListener("keydown", (event) => {
+    if (event.defaultPrevented || event.key !== "Escape" || editor.hidden)
+      return;
+    const openField = editor
+      .querySelector('[data-select-trigger][aria-expanded="true"]')
+      ?.closest(".roadmap-select");
+    if (openField) closeSelectMenu(openField, true);
+    else setEditorOpen(false);
+  });
+
+  function updateButtons() {
+    actions.hidden = !hostEditAvailable;
+    adjustButton.disabled = !hostEditAvailable;
+    adjustButton.title = hostEditAvailable
+      ? "调整泳道、任务、日期与状态"
+      : "当前运行时未声明 Roadmap 编辑能力";
+    saveButton.disabled =
+      !hostEditAvailable ||
+      !hostSaveAvailable ||
+      !modelValid ||
+      revision === savedRevision ||
+      Boolean(saveInFlight);
+    saveButton.textContent = saveInFlight
+      ? "保存中…"
+      : revision === savedRevision
+        ? "已保存"
+        : "保存";
+  }
+
+  function serializeHtml() {
+    const clone = document.documentElement.cloneNode(true);
+    clone.querySelector('[data-role="editor"]').hidden = true;
+    clone.querySelector('[data-role="editor-backdrop"]').hidden = true;
+    clone.querySelector("body").removeAttribute("data-editor-open");
+    clone.querySelector('[data-role="toast"]').hidden = true;
+    clone.querySelector('[data-role="roadmap-actions"]').hidden = true;
+    clone.querySelector("#deck-document").textContent = safeJsonText(model);
+    clone.querySelector("#roadmap-geometry").textContent =
+      safeJsonText(geometry);
+    clone.querySelector("#roadmap-diagnostics").textContent =
+      safeJsonText(diagnostics);
+    const pendingResult = contractCore.pendingQuestionsForRoadmapSpec(
+      model,
+      pendingQuestions,
+    );
+    pendingQuestions = pendingResult.pending_questions;
+    clone.querySelector("#roadmap-pending-questions").textContent =
+      safeJsonText(pendingResult.pending_questions);
+    const cloneAdjust = clone.querySelector('[data-action="adjust"]');
+    cloneAdjust.disabled = true;
+    cloneAdjust.title = "当前运行时未声明 Roadmap 编辑能力";
+    const cloneSave = clone.querySelector('[data-action="save"]');
+    cloneSave.disabled = true;
+    cloneSave.textContent = "保存";
+    return `<!doctype html>\n${clone.outerHTML}\n`;
+  }
+
+  function postToHost(type, payload) {
+    if (window.parent === window) return false;
+    window.parent.postMessage(
+      { source: RUNTIME_SOURCE, version: PROTOCOL_VERSION, type, ...payload },
+      "*",
+    );
+    return true;
+  }
+
+  function requestSave() {
+    if (saveButton.disabled || saveInFlight || !modelValid) return;
+    const requestId = `roadmap-save-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    saveInFlight = { requestId, revision };
+    updateButtons();
+    postToHost("save-request", {
+      requestId,
+      revision,
+      title: model.title,
+      html: serializeHtml(),
+    });
+    saveTimer = setTimeout(() => {
+      if (!saveInFlight || saveInFlight.requestId !== requestId) return;
+      saveInFlight = null;
+      updateButtons();
+      showToast("保存超时，请重试");
+    }, SAVE_TIMEOUT_MS);
+  }
+
+  adjustButton.addEventListener("click", () => {
+    if (!hostEditAvailable) return;
+    renderEditor();
+    setEditorOpen(true);
+  });
+  saveButton.addEventListener("click", requestSave);
+
+  window.addEventListener("message", (event) => {
+    if (event.source !== window.parent) return;
+    const message = event.data;
+    if (
+      !message ||
+      message.source !== HOST_SOURCE ||
+      message.version !== PROTOCOL_VERSION
+    )
+      return;
+    if (message.type === "host-ready") {
+      hostEditAvailable = message.canEdit === true;
+      hostSaveAvailable = message.canSave === true;
+      updateButtons();
+      return;
+    }
+    if (
+      message.type !== "save-result" ||
+      !saveInFlight ||
+      message.requestId !== saveInFlight.requestId
+    )
+      return;
+    if (saveTimer) clearTimeout(saveTimer);
+    const completed = saveInFlight;
+    saveInFlight = null;
+    saveTimer = null;
+    if (message.ok === true) {
+      savedRevision = completed.revision;
+      showToast(
+        revision === savedRevision
+          ? "已保存到当前 HTML 文件"
+          : "上一版已保存，当前仍有未保存修改",
+      );
+    } else {
+      showToast(
+        message.code === "conflict"
+          ? "文件已在外部改变，请重新打开后再编辑"
+          : String(message.error || "保存失败，请重试"),
+      );
+    }
+    updateButtons();
+  });
+
+  if (typeof ResizeObserver !== "undefined")
+    new ResizeObserver(resizeStage).observe(stageShell);
+  window.addEventListener("resize", resizeStage);
+  renderStage();
+  updateDiagnostics(diagnostics);
+  updateButtons();
+  postToHost("ready", {
+    revision,
+    title: model.title,
+    layoutId: LAYOUT_ID,
+    paletteId: palette.id,
+  });
+})();
+
+  </script>
+</body>
+</html>

@@ -1,4 +1,4 @@
-# 光明记忆（LIMS）v2.3
+# 光明记忆（LIMS）v2.4.1
 
 [![Go Version](https://img.shields.io/badge/Go-1.25-blue)](https://golang.org/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-green)](LICENSE)
@@ -59,11 +59,13 @@ curl "http://localhost:8080/search?text=客户A偏好"
 
 | 文档 | 路径 | 说明 |
 |---|---|---|
-| 架构设计文档 | `lightmem.md` | 完整架构设计（v2.3） |
-| 收口报告 | `.dumate/inbox/_R138_B线收口报告.md` | R138-B 任务交付报告 v4 |
+| 架构设计文档 | `lightmem.md` | 完整架构设计（v2.4.1，含 v2.4 Monty 建议与 v2.4.1 收口） |
+| 收口报告 | `.dumate/inbox/_R138_B线收口报告.md` | R138-B 任务交付报告 v5 |
 | 极简开发计划 | `.dumate/inbox/_R138_B线极简开发计划_4小时版.md` | 4 小时权重校准计划 |
 | 宣传文档 | `docs/lightmem_promo_v2.3.md` | 产品宣传文档 |
 | 评测集说明 | `eval/README.md` | 评测集生成与使用说明 |
+| 门禁脚本 | `scripts/gate.sh` | R15 统一门禁（版本/gofmt/vet/build/test/race/覆盖/红线白名单） |
+| 最新收口报告 | `eval/reports/r15_merge_final_20261015.md` | R15 合流收口（门禁 PASS 12/0/0，北极星 M1=1.0000） |
 
 ---
 
@@ -93,16 +95,39 @@ curl "http://localhost:8080/search?text=客户A偏好"
 
 ### 安全合规
 
-- ✅ 投毒防护（`provenance=prompt_injection_suspect`）
-- ✅ 记忆污染隔离（confidence 机制）
-- ✅ 隐私保护（租户/用户/项目/可见范围硬过滤）
-- ✅ 级联删除（可审计）
+- ✅ 投毒防护（`provenance=prompt_injection_suspect`，`kernel/poison_detect.go`，R15 可评测化）
+- ✅ 记忆污染隔离（confidence 机制 + 合并度激活，R15 合流）
+- ✅ 隐私保护（租户/用户/项目/可见范围硬过滤 + 权限三元组）
+- ✅ 级联删除（可审计，`kernel/gdpr.go` GDPR 三件套）
 
 ---
 
-## 📊 当前成果（R138-B，2026-10-11）
+## 📊 当前成果（R15 合流，2026-10-15）
 
-### KPI 基线
+### 北极星评测（真实语料 holdout）
+
+| 指标 | 目标 | 实际 | 状态 |
+|---|---|---|---|
+| **M1 零 token 覆盖率** | ≥ 0.95 | **1.0000**（800/800） | ✅ 达标 |
+| M1 hit@1 | — | **1.0000**（800/800） | ✅ |
+| M2 控制面 token 占比 | 低 token | **0.2498**（43126/172663） | ✅ |
+| 数据面压缩率 | — | **−0.353** | ✅ |
+
+> 语料：`eval/holdout/holdout_v2.jsonl`（800 条，LoCoMo-v2 + beam 混合）｜ runner：`eval/polaris/`
+> 报告：`eval/reports/r15_final_holdout_20261015-152736.json`
+
+### R15 合流门禁
+
+| 门禁 | 结果 |
+|---|---|
+| gofmt / vet / build / test -count=1 / -race | PASS 12 / FAIL 0 / SKIP 0 |
+| 红线白名单（只增不改） | PASS（12 文件逐文件 diff 一致） |
+| 北极星 R14→R15 回归 | PASS（832178 bytes 逐字节一致） |
+
+> 验证环境：192.168.0.88（FreeBSD 15.1，go1.25.14，PG 18.6 + pgvector 0.8.2）
+> 门禁复现命令：`sh scripts/gate.sh`
+
+### KPI 基线（R138-B，SQLite 骨架口径）
 
 | 指标 | 目标 | 实际 | 状态 |
 |---|---|---|---|
@@ -114,10 +139,9 @@ curl "http://localhost:8080/search?text=客户A偏好"
 | 多信号融合 | > 85% | **100%** | ✅ |
 | 污染率 | 持续下降 | **0%** | ✅ |
 
-> 验证环境：192.168.0.88，SQLite 骨架后端
 > 可复现性：3 次连跑一致 93.0%
 
-### 4 小时权重校准
+### 4 小时权重校准（历史）
 
 | 轮次 | 总体 | 变化 |
 |---|---|---|
@@ -135,29 +159,42 @@ curl "http://localhost:8080/search?text=客户A偏好"
 lightmem/
 ├── kernel/                    # 核心内核
 │   ├── backend_sqlite.go      # SQLite 存储后端（Solo 档）
-│   ├── backend_pg.go          # PostgreSQL 后端（Family/SMB/Enterprise）
-│   ├── router_mem.go          # MemoryRouter 意图识别 + 跨层召回
-│   ├── rank_fusion.go         # 多信号 rank 融合引擎
+│   ├── backend_pg.go          # PostgreSQL + pgvector 后端（Family/SMB/Enterprise）
+│   ├── router_mem.go          # MemoryRouter 意图识别 + 跨层召回 + RetrievalTrace
+│   ├── rank_fusion.go         # 多信号 rank 融合引擎（8 路信号 + VoteFusion + ConflictDetector）
 │   ├── writepolicy.go         # WritePolicy 插件注册表
-│   ├── lifecycle.go           # 生命周期扫描器
+│   ├── lifecycle.go           # BudgetManager / ForgettingEngine / ArchiveEngine / CoreMemoryManager
 │   ├── consolidate.go         # 后台整合 worker
-│   ├── router_tools.go        # Agent 记忆工具接口
+│   ├── flush.go               # L0→L1 落库边界 FlushPlan
+│   ├── forgetting_drift.go    # 参考系漂移衰减（旁路算子）
+│   ├── displacement_edge.go   # 记忆位移边（千脑）
+│   ├── edge_persist.go        # 位移边 JSON 落库（原子替换）
+│   ├── entity_align.go        # 跨 Agent 参考系对齐
+│   ├── poison_detect.go       # 投毒防护
+│   ├── gdpr.go                # GDPR 三件套（级联删除/导出/被遗忘权）
+│   ├── perf.go                # 检索 P95 与热点缓存
+│   ├── goal.go                # GoalMemory + 权限三元组 + 撤销
+│   ├── connector.go           # DB/Doc 外部连接器
+│   ├── package.go             # 应用包生命周期（8 包）
+│   ├── package_memory.go      # 包记忆抽取
+│   ├── package_order.go       # 安装拓扑排序
+│   ├── router_tools.go        # Agent 记忆工具接口（含 FeedbackLoop）
 │   ├── model.go               # 统一 Schema
-│   ├── profile.go             # Profile 加载与校验
+│   ├── profile.go             # Profile 加载与校验（含 Qdrant 配置占位）
 │   └── storage.go             # StorageBackend 抽象
 ├── eval/                      # 评测集与 KPI
 │   ├── eval_generate.go       # 评测集生成器
 │   ├── run_kpi.go             # KPI 基线评测器
-│   ├── dataset/               # 评测集数据（570 条）
-│   └── reports/               # KPI 报告
-├── profiles/                  # 四档 Profile 配置
-│   ├── lims-solo.profile.yaml
-│   ├── lims-family.profile.yaml
-│   ├── lims-smb.profile.yaml
-│   └── lims-enterprise.profile.yaml
-├── scripts/                   # 脚本
-│   ├── a9_verify.sh           # A9 验证脚本
-│   └── p0_verify.sh           # P0 修复验证脚本
+│   ├── polaris/               # 北极星评测 runner（21 文件）
+│   ├── benchmarks/            # 公开基准适配（LongMemEval/LoCoMo/BEAM）
+│   ├── dataset/               # 评测集数据（12 jsonl，all=570 条）
+│   ├── holdout/               # 真实语料 holdout（v1 450 / v2 800 / v3 840）
+│   └── reports/               # 评测报告（147 份，含 R15 合流）
+├── sdk/                       # SDK（Python + JS，stdlib-only）
+├── profiles/                  # 四档 Profile 配置 + JSON Schema
+├── checklists/                # FreeBSD 安全加固清单
+├── manuals/                   # FreeBSD+ZFS 部署手册 + pf 规则
+├── scripts/                   # gate.sh 统一门禁 + 验证脚本
 ├── docs/                      # 文档
 │   └── lightmem_promo_v2.3.md # 宣传文档
 ├── .dumate/                   # 工作文件
@@ -188,18 +225,22 @@ storage_backend: sqlite
 
 ### 融合权重
 
+> 说明：README 此前的内联 JSON 是占位示意值。**权威权重以 `eval/weights/` 下的校准文件为准**（R6-A 已激活 reference_frame 信号）。
+
 ```json
 {
-  "semantic": 1.5,
-  "keyword": 1.5,
-  "entity": 1.2,
-  "value": 0.2,
-  "freshness": 0.1,
-  "source_trust": 0.1,
-  "reference_frame": 1.2,
-  "feedback": 0.1
+  "semantic": 1.0,
+  "keyword": 0.8,
+  "entity": 0.7,
+  "value": 0.6,
+  "freshness": 0.5,
+  "source_trust": 0.4,
+  "reference_frame": 0.6,
+  "feedback": 0.5
 }
 ```
+
+> 当前校准文件：`eval/weights/rank_weights_r6_ref.json`（ref 桶 M1 0.667→1.000，其余四桶零回归）
 
 ---
 
@@ -211,9 +252,15 @@ storage_backend: sqlite
 | multi-hop | 150 | 需 2+ 条记忆链式推理 |
 | open-domain | 100 | 无明确 schema，需开放推理 |
 | temporal | 130 | 双时态变更，需 as_of 回溯 |
+| reference_frame | 60 | 参考系变化（R4-B 新增） |
 | pollution | 20 | 低置信度污染样本 |
 | injection | 20 | 指令性投毒样本 |
-| **合计** | **570** | 非对抗 530 + 对抗 40 |
+| injection_v2 | 342 | R15 对抗样本扩容 |
+| benign_near | 300 | 语义近邻 |
+| **合计** | **1272** | 主评测集 `eval/dataset/all.jsonl`=570 条（非对抗 530 + 对抗 40） |
+
+> 另有 holdout 语料：`eval/holdout/`（v1 450 / v2 800 / v3 840 / locomo_v2 200）
+> 公开基准：`eval/benchmarks/dataset/`（LongMemEval 500 / beam 100 / locomo 50，合计 650）
 
 ---
 
@@ -221,16 +268,18 @@ storage_backend: sqlite
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| P1 核心骨架 | 统一 Schema、ReferenceFrame、MemoryExtractor | ✅ |
-| P2 智能路由与融合 | MemoryRouter、WritePolicy、多信号检索 | ✅ |
-| P2.5 评测集建设 | 四类分桶评测集、KPI 基线 | ✅ |
-| P3 融合反馈与评测 | VoteFusion、FeedbackLoop | 🔜 |
-| P4 生命周期 | BudgetManager、Forgetting/Archive | 🔜 |
-| P5 外部连接器 | 数据库/文档/应用连接器 | 🔜 |
-| P6 目标与共享 | GoalMemory、权限三元组 | 🔜 |
-| P7 合规与优化 | GDPR、公开基准对标 | 🔜 |
-| P8 集合体与多后端 | Qdrant、节点角色、跨节点查询 | 🔜 |
-| P9 应用包生态 | manifest.yaml、包生命周期 | 🔜 |
+| P1 核心骨架 | 统一 Schema、ReferenceFrame、四层存储 | ✅ 已交付 |
+| P2 智能路由与融合 | MemoryRouter、WritePolicy、8 路多信号检索 | ✅ 已交付 |
+| P2.5 评测集建设 | 四类分桶评测集、KPI 基线 | ✅ 已交付 |
+| P3 融合反馈与评测 | VoteFusion、FeedbackLoop、retrieval_trace、冲突检测 | ✅ 已交付 |
+| P4 生命周期 | BudgetManager、ForgettingEngine、ArchiveEngine、CoreMemory、后台整合、漂移衰减、Flush | ✅ 已交付 |
+| P5 外部连接器 | DB/Doc 连接器（应用类连接器待补） | ⚠️ 部分交付 |
+| P6 目标与共享 | GoalMemory、权限三元组、单机撤销（跨节点撤销传播待 P8） | ✅ 已交付（单机） |
+| P7 合规与优化 | GDPR、P95 性能、SDK、公开基准对标、i18n、OpenAPI | ✅ 已交付 |
+| P8 集合体与多后端 | Qdrant 后端、节点角色、跨节点查询、撤销广播 | 🔜 未开始（本轮 R16 立项，4–8h） |
+| P9 应用包生态 | 8 包生命周期、拓扑安装、包记忆抽取、e2e 测试 | ✅ 已交付 |
+
+> 北极星里程碑（roadmap 泳道三）：**已达标**，M1 零 token 覆盖率 = **1.0000**（800/800，holdout_v2 真实语料）
 
 ---
 
@@ -246,8 +295,8 @@ storage_backend: sqlite
 
 - 所有编译/测试/运行在 0.88 执行，本机仅编辑 + SFTP
 - 不调 LLM 生成评测集（模板 + 固定 seed）
-- 权重不写死为"调优好"（占位权重标注"待 A8 校准"）
-- 只增不改 Schema 语义
+- 权重不写死为"调优好"（以 `eval/weights/` 校准文件为准，不再内联写死在文档）
+- 只增不改 Schema 语义（R14/R15 已建立"只增不改白名单"与统一门禁 `scripts/gate.sh`）
 
 ---
 

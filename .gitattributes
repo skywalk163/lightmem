@@ -12,6 +12,8 @@
 *.md    text eol=lf
 *.yaml  text eol=lf
 *.yml   text eol=lf
+*.txt    text eol=lf
+*.golden text eol=lf
 
 # 二进制（勿做行尾/编码转换）
 *.docx  binary

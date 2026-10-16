@@ -197,7 +197,7 @@ POST /lifecycle/run  运行生命周期扫描
 | P1 核心骨架 | 统一 Schema、ReferenceFrame、MemoryExtractor、L0/L1/L2 存储 | ✅ |
 | **P2 智能路由与融合** | MemoryRouter、WritePolicy、多信号检索、晋升/降级、Agent 工具 | ✅ |
 | **P2.5 评测集建设** | 四类分桶评测集、KPI 基线 | ✅ |
-| P3 融合反馈与评测 | VoteFusion、冲突检测、FeedbackLoop、retrieval_trace | 🔜 |
+| P3 融合反馈与评测 | VoteFusion、冲突检测、FeedbackLoop、retrieval_trace | ✅ 已交付 |
 | P4 生命周期 | BudgetManager、Forgetting/Archive/Compression、核心记忆块 | 🔜 |
 | P5 外部连接器 | 数据库/文档/应用连接器 | 🔜 |
 | P6 目标与共享 | GoalMemory、权限三元组、撤销传播 | 🔜 |

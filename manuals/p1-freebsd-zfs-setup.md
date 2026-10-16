@@ -467,6 +467,135 @@ zfs send tank/lims@daily-20261010 | ssh backup-node zfs receive -F tank/lims-bac
 
 ---
 
+## 10. ZFS 快照与容灾实操（R16-S7）
+
+> **对应任务**：R16 S7 —「配 ZFS snapshot 策略 + `zfs send` 容灾链路脚本」
+> **交付物**：`scripts/zfs_backup.sh`（新增）+ 本章
+> **验收标准**：快照可恢复、`zfs send` 到目标池可用
+>
+> 第 9 节给出的是策略骨架（手写 cron 行），本节把它落成**一条命令即可复现**的脚本，
+> 覆盖「打快照 → 按保留策略清理 → 增量发送到容灾池 → 恢复验证」全链路。
+
+### 10.1 快照命名与保留矩阵
+
+命名规范：`<dataset>@<type>-<YYYYMMDDHHMMSS>`，其中 `type ∈ {hourly, daily, weekly}`。
+脚本的 `prune` **只删本规范内**（`@<type>-` 前缀）的快照，人工或其他工具创建的快照不受影响。
+
+| 类型 | 触发频率 | 默认保留 | 恢复窗口/用途 |
+|---|---|---|---|
+| `hourly` | 每小时 | 48 | 48h 内误删/误改回滚 |
+| `daily` | 每日 00:00 | 7 | 一周内日级恢复点 |
+| `weekly` | 每周日 01:00 | 4 | 月度归档点 |
+
+### 10.2 脚本用法
+
+```sh
+# 语法/动作自检（dry-run：只打印将执行的命令，不落盘）
+sh scripts/zfs_backup.sh snapshot -p zroot/lims -r -t hourly -n
+
+# 打一次递归小时快照（-r 含全部子数据集）
+sh scripts/zfs_backup.sh snapshot -p zroot/lims -r -t hourly
+
+# 按保留策略清理（只删 @hourly-* ，保留最近 48 个）
+sh scripts/zfs_backup.sh prune -p zroot/lims -r -t hourly -k 48
+
+# 查看当前本类型快照
+sh scripts/zfs_backup.sh list -p zroot/lims -r -t hourly
+
+# 一条命令：打快照 + 清理 + 增量复制到容灾池
+sh scripts/zfs_backup.sh all -p zroot/lims -r -t hourly -k 48 -d backup01:tank/lims-backup
+
+# 人工恢复：回滚到指定快照（会丢弃该快照之后的源数据，属显式动作）
+sh scripts/zfs_backup.sh rollback -s zroot/lims/pg@hourly-20261016070000
+```
+
+### 10.3 cron 接线
+
+```sh
+# 先确认脚本所在绝对路径（示例：/opt/lims/scripts/zfs_backup.sh）
+cat >> /etc/crontab <<'EOF'
+0 * * * * root sh /opt/lims/scripts/zfs_backup.sh all -p zroot/lims -r -t hourly -k 48 -d backup01:tank/lims-backup
+0 0 * * * root sh /opt/lims/scripts/zfs_backup.sh snapshot -p zroot/lims -r -t daily
+0 0 * * * root sh /opt/lims/scripts/zfs_backup.sh prune    -p zroot/lims -r -t daily -k 7
+0 1 * * 0 root sh /opt/lims/scripts/zfs_backup.sh snapshot -p zroot/lims -r -t weekly
+0 1 * * 0 root sh /opt/lims/scripts/zfs_backup.sh prune    -p zroot/lims -r -t weekly -k 4
+EOF
+```
+
+> **注意**：`send`/`all` 需通过免密 SSH 访问容灾机（`BatchMode=yes`，失败即非零退出，便于 cron 告警）。
+
+### 10.4 zfs send 容灾链路（脚本判定逻辑）
+
+`send` 子命令对每个源数据集按如下顺序判定，避免无谓的全量传输：
+
+1. 目标数据集不存在 → **全量** `zfs send`；
+2. 目标存在且最新同名快照 == 源最新快照 → **跳过**（up-to-date）；
+3. 目标存在且与源存在**共同快照** → `zfs send -i <common>` 发**增量**；
+4. 目标存在但无共同快照 → **全量覆盖**（`zfs receive -F`）。
+
+首次建链（源端执行）：
+
+```sh
+# 1) 在容灾机准备目标池与根数据集
+ssh backup01 zfs create -p tank/lims-backup
+
+# 2) 一条命令建立全量基线并纳入每日增量
+sh scripts/zfs_backup.sh all -p zroot/lims -r -t daily -k 7 -d backup01:tank/lims-backup
+```
+
+手动全量 + 增量验证（等价命令，便于核对）：
+
+```sh
+# 全量
+zfs snapshot -r zroot/lims@daily-20261016000000
+zfs send -R zroot/lims@daily-20261016000000 | ssh backup01 zfs receive -F -u tank/lims-backup
+
+# 增量（仅发送两个快照之差）
+zfs snapshot -r zroot/lims@daily-20261017000000
+zfs send -i zroot/lims@daily-20261016000000 zroot/lims@daily-20261017000000 \
+  | ssh backup01 zfs receive -F -u tank/lims-backup
+```
+
+### 10.5 恢复流程
+
+**场景 A — 单库误删，源端原地回滚：**
+
+```sh
+zfs list -t snapshot -o name zroot/lims/pg
+zfs rollback -r zroot/lims/pg@hourly-20261016070000
+```
+
+**场景 B — 整池恢复到容灾节点（只读派生核对，不覆盖现网）：**
+
+```sh
+# 在容灾机 backup01
+zfs list -t snapshot tank/lims-backup
+zfs clone tank/lims-backup/pg@daily-20261016000000 tank/lims-restore/pg
+# 核对无误后再切换读写或重放增量
+```
+
+> **说明**：`zfs clone` 从快照派生为可写副本，便于在容灾机上先验证数据完整性；确认后再提升为正式数据集。
+
+### 10.6 可恢复性验证（证据清单）
+
+| # | 验证项 | 命令 | 预期 |
+|---|---|---|---|
+| 1 | 本类型快照存在 | `zfs list -t snapshot -o name zroot/lims \| grep '@hourly-'` | 至少 1 行 |
+| 2 | 写入→快照→回滚恢复 | 见下方脚本 | 打印 `RECOVERED` |
+| 3 | 容灾链路连通 | `zfs send zroot/lims/pg@hourly-<STAMP> \| ssh backup01 zfs receive -F -u tank/lims-backup/pg` | 退出码 0 |
+| 4 | 目标池收到快照 | `ssh backup01 zfs list -t snapshot tank/lims-backup/pg \| grep '@hourly-'` | 含同名快照 |
+
+```sh
+# 验证项 2：写入探针文件 → 打快照 → 删除 → 回滚 → 探针恢复
+echo probe > /var/db/pgdata/.r16_probe
+sh scripts/zfs_backup.sh snapshot -p zroot/lims/pg -t hourly
+rm /var/db/pgdata/.r16_probe
+zfs rollback -r zroot/lims/pg@hourly-<STAMP>
+test -f /var/db/pgdata/.r16_probe && echo RECOVERED
+```
+
+---
+
 ## 11. R11 C.1 执行记录（Family 档真机验收）
 
 > **对应任务**：R11 C 路 — 生产部署硬化（ZFS + jail + pf + Family 档真机验收）
@@ -530,6 +659,131 @@ R11 C.1 本节为任务书 C.1 的**执行记录**，仅核验 Family 档启动�
 
 ---
 
+## 11A. R16-S5：jail vnet 修复与 PG 迁入 runbook（2026-10-16 实机执行）
+
+> **对应任务**：R16 S5 —「按 r11c 诊断修复 epair 接口、vnet 配置、jail.conf；把 PG 18 从宿主机迁入 lims-pg jail；补 pf 规则」
+> **执行主机**：192.168.0.88（FreeBSD 15.1-RELEASE-p1，go1.25.14）
+> **执行用户**：workbuddy（wheel，sudo NOPASSWD）
+> **状态**：jail vnet 网络已修复并实测连通（host↔jail、jail↔jail 双向 0% loss）；PG 迁入 jail 为待维护窗口执行的 runbook。
+
+### 11A.1 问题根因（r11c 诊断的三个叠加问题）
+
+R11 C.1 验收时 5 个 jail 全部 ACTIVE，但 `jls` IP 列全空、`jail_attach: Operation not permitted`、PG 暂在宿主机 127.0.0.1。R16 实机复核后定位为三个叠加根因：
+
+| # | 根因 | 证据 | 影响 |
+|---|---|---|---|
+| 1 | **jail.conf 缺 IP 配置** | 原 jail.conf 只有 `vnet; vnet.interface=epairXb;`，无 `ip4.addr`、无 `exec.start` 配 IP | jail 起来后 epairXb 无 IP，`jls` IP 列空 |
+| 2 | **epair 命名错位（rc.conf 与线上不一致）** | rc.conf `cloned_interfaces="bridge0 epair10 epair20 epair30 epair40 epair50"`、`ifconfig_bridge0=...addm epair10a...`；但线上实际跑的是手工早期创建的 `epair0a~4a`（b 端在 jail 内），a/b MAC 与 rc.conf 声明对不上 | bridge0 桥接的 a 端与 jail 内 b 端不是同一对，二层断裂，ARP 请求发出无应答（tcpdump 证实） |
+| 3 | **bridge member a 端未显式 up** | bridge0 addm 的 epair a 端 flags 缺 `UP`（只有 PROMISC） | 二层帧不转发，host→jail ping 100% loss |
+
+> 教训：rc.conf 改了 `cloned_interfaces` 命名后，必须重启 netif 或重建 jail；hot-add 到运行中的 bridge 上的 member 需要显式 `ifconfig <if> up`。
+
+### 11A.2 修复步骤（已在 0.88 实机执行）
+
+```sh
+# 0) 备份
+sudo cp /etc/jail.conf /etc/jail.conf.r16bak
+
+# 1) 停掉 5 个空壳 jail（当时 jail 内只有 syslogd/cron，无业务）
+for j in lims-pg lims-redis lims-rabbit lims-minio lims-router; do sudo jail -r "$j"; done
+
+# 2) 销毁命名错位的旧 epair0~4（a/b 都 destroy）
+for i in 0 1 2 3 4; do
+  sudo ifconfig epair${i}a destroy 2>/dev/null
+  sudo ifconfig epair${i}b destroy 2>/dev/null
+done
+
+# 3) 按 rc.conf 声明创建 epair10~50
+for i in 10 20 30 40 50; do sudo ifconfig epair${i} create; done
+
+# 4) 写新 jail.conf（vnet.interface=epair10b~50b，IP 由 exec.start 配置）
+#    完整内容见 /etc/jail.conf（R16 已落盘）；核心块：
+#    lims-pg { vnet; vnet.interface=epair10b;
+#              exec.start += "/sbin/ifconfig epair10b 10.0.10.10/24 up;
+#                           /sbin/route add default 10.0.10.1; /bin/sh /etc/rc"; }
+
+# 5) bridge0 桥接新 a 端并给 IP
+sudo ifconfig bridge0 addm epair10a addm epair20a addm epair30a addm epair40a addm epair50a
+sudo ifconfig bridge0 10.0.10.1/24 up
+# 关键：hot-add 的 member a 端要显式 up（根因 3）
+for i in 10 20 30 40 50; do sudo ifconfig epair${i}a up; done
+
+# 6) 宿主机转发打开（jail→外网需要）
+sudo sysrc gateway_enable=YES
+sudo sysctl net.inet.ip.forwarding=1
+
+# 7) 启动 5 个 jail
+for j in lims-pg lims-redis lims-rabbit lims-minio lims-router; do sudo jail -c "$j"; done
+```
+
+IP 分配表（与 `manuals/pf.rules` 的 `<lims_jails>` 表一致）：
+
+| jail | vnet 接口 | IP | 角色 |
+|---|---|---|---|
+| lims-pg | epair10b | 10.0.10.10/24 | PG 18 + pgvector |
+| lims-redis | epair20b | 10.0.10.20/24 | Redis |
+| lims-rabbit | epair30b | 10.0.10.30/24 | RabbitMQ |
+| lims-minio | epair40b | 10.0.10.40/24 | MinIO 对象存储 |
+| lims-router | epair50b | 10.0.10.50/24 | nginx 网关（443/8443） |
+| 宿主机 bridge0 | — | 10.0.10.1/24 | 内网网关 |
+
+### 11A.3 修复后验证（已实测）
+
+```sh
+# host -> jail
+ping -c 2 10.0.10.10   # 0% loss
+ping -c 2 10.0.10.50   # 0% loss
+# jail -> host
+jexec lims-pg ping -c 2 10.0.10.1    # 0% loss
+# jail -> jail
+jexec lims-pg ping -c 2 10.0.10.50   # 0% loss
+# pf 规则（实机已合规）
+pfctl -sr   # 只暴露 443/8443 + 管理段 192.168.0.0/24 SSH，其余 block drop
+```
+
+### 11A.4 PG 18 迁入 lims-pg jail runbook（待维护窗口执行）
+
+> 现状：PG 18.6 在宿主机 127.0.0.1:5432（postgresql_enable="YES" in /etc/rc.conf），lightmem-k(8443) 正在使用。迁移需停 PG，**请在低峰维护窗口执行，并先 `zfs snapshot zroot/lims/pg@pre-migration`**。
+
+```sh
+# 1) 预演：确认 lims-pg jail 内 pkg 可用（出网已通）
+jexec lims-pg pkg install -y postgresql18-server postgresql18-contrib
+# pgvector 从 ports 编译（或 pkg 仓库若有）
+jexec lims-pg pkg install -y postgresql14-pgvector   # 按实际 PG 主版本选
+
+# 2) 宿主机停 PG（维护窗口开始）
+sudo service postgresql stop
+
+# 3) 数据迁移：PGDATA 整体搬迁（ZFS dataset 已在 zroot/lims/pg）
+#    方案 A：dataset 直接挂载进 jail（推荐，零拷贝）
+#    在 /etc/jail.conf lims-pg 块加：
+#       mount.fstab = /usr/jails/lims-pg/etc/fstab.lims;
+#    /usr/jails/lims-pg/etc/fstab.lims 加：
+#       zroot/lims/pg  /var/db/pgdata  zfs  rw,noatime  0 0
+#    方案 B：pg_dumpall 逻辑导出/导入（数据量大时慢）
+#       sudo -u postgres pg_dumpall > /tmp/pg_all.sql
+#       jexec lims-pg psql -f /tmp/pg_all.sql
+
+# 4) jail 内起 PG
+jexec lims-pg service postgresql initdb   # 仅首次；迁移 dataset 时跳过
+jexec lims-pg service postgresql start
+# postgresql.conf 改 listen_addresses = '10.0.10.10'（不再绑 127.0.0.1）
+
+# 5) 宿主机停用 PG（避免双实例抢数据）
+sudo sysrc postgresql_enable=NO
+
+# 6) 改 lightmem-k 连接串：127.0.0.1:5432 -> 10.0.10.10:5432
+#    （应用配置在 lightmem-k 的 env / config）
+
+# 7) 验证
+jexec lims-pg psql -h 10.0.10.10 -U postgres -c 'select version();'
+# /memories、/search 走 lims-pg jail 内 PG+pgvector
+```
+
+**回滚**：若 jail 内 PG 起不来，`sudo service postgresql start` 回宿主机实例，连接串改回 127.0.0.1。
+
+---
+
 ## 12. 与后续阶段的关系
 
 | P1 搭建项 | 后续阶段衔接 |
@@ -566,4 +820,5 @@ R11 C.1 本节为任务书 C.1 的**执行记录**，仅核验 Family 档启动�
 | 第 6 节 pf | §5.7「网络隔离」+ §5.5「集合体」 |
 | 第 7 节 安全 | §5.7「安全组件」 |
 | 第 9 节 快照容灾 | §5.6「快照与容灾」 |
+| 第 10 节 快照容灾实操（R16-S7） | §5.6「快照与容灾」 |
 | 全部 | §4.2 一致性骨架（写入链路）|

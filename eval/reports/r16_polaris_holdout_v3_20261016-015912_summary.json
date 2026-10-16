@@ -1,0 +1,100 @@
+{
+  "report": "r16_polaris_holdout_v3_20261016-015912",
+  "generated_at": "2026-10-16T00:00:00Z",
+  "config": {
+    "embedder": "vector",
+    "embedder_name": "vector:BAAI/bge-m3",
+    "holdout": "eval/holdout/holdout_v3.jsonl",
+    "now_fixed": "2026-10-23",
+    "topk": 5,
+    "weights": "eval/weights/rank_weights_en_r5.json"
+  },
+  "corpus_note": "真实语料 holdout_v3.jsonl（正式判定，840 条）",
+  "official_corpus": true,
+  "mode": "holdout-official",
+  "m1": {
+    "n": 840,
+    "hits": 840,
+    "coverage": 1,
+    "hit_at_1": 840,
+    "hit_at_1_rate": 1,
+    "id_hit": 276,
+    "id_hit_rate": 0.32857142857142857,
+    "mean_rr": 0.14444444444444443,
+    "topk": 5,
+    "buckets": {
+      "multi-hop": {
+        "n": 275,
+        "hits": 275,
+        "coverage": 1,
+        "hit_at_1": 275
+      },
+      "open-domain": {
+        "n": 236,
+        "hits": 236,
+        "coverage": 1,
+        "hit_at_1": 236
+      },
+      "single-hop": {
+        "n": 156,
+        "hits": 156,
+        "coverage": 1,
+        "hit_at_1": 156
+      },
+      "temporal": {
+        "n": 173,
+        "hits": 173,
+        "coverage": 1,
+        "hit_at_1": 173
+      }
+    }
+  },
+  "m2": {
+    "queries": 840,
+    "control_tokens": 33624,
+    "data_tokens": 118263,
+    "total_tokens": 151887,
+    "m2_control_share": 0.22137510122656975,
+    "by_bucket": {
+      "multi-hop": {
+        "queries": 275,
+        "control_tokens": 11013,
+        "data_tokens": 38891,
+        "total_tokens": 49904,
+        "m2_control_share": 0.2206837127284386
+      },
+      "open-domain": {
+        "queries": 236,
+        "control_tokens": 9420,
+        "data_tokens": 33271,
+        "total_tokens": 42691,
+        "m2_control_share": 0.2206554074629313
+      },
+      "single-hop": {
+        "queries": 156,
+        "control_tokens": 6264,
+        "data_tokens": 21607,
+        "total_tokens": 27871,
+        "m2_control_share": 0.22474973987298627
+      },
+      "temporal": {
+        "queries": 173,
+        "control_tokens": 6927,
+        "data_tokens": 24494,
+        "total_tokens": 31421,
+        "m2_control_share": 0.22045765570796602
+      }
+    }
+  },
+  "data_plane_compression": {
+    "tokens_before": 127336,
+    "tokens_after": 118263,
+    "saved": 9073,
+    "reduction_rate": 0.07125243450398945
+  },
+  "fp_audit": {
+    "v4_hits": 840,
+    "vetoed": 0,
+    "residual_fp": 840
+  }
+}

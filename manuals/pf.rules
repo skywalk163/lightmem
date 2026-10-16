@@ -33,11 +33,11 @@ ext_if = "em0"          # 宿主机外网接口，按实机调整
 int_if = "bridge0"      # jail vnet 桥接接口
 
 # ---- 表定义 ----
-# jail vnet 内网 IP（与 profile network.components 一致）
+# jail vnet 内网 IP（与 profile network.components 一致；R16-S5 修复后实测）
 table <lims_jails> { 10.0.10.10, 10.0.10.20, 10.0.10.30, 10.0.10.40, 10.0.10.50 }
 
-# 管理网段（SSH 来源）
-table <management_net> { 192.168.1.0/24 }
+# 管理网段（SSH 来源；实机 0.88 为 192.168.0.0/24）
+table <management_net> { 192.168.0.0/24 }
 
 # ---- 全局设置 ----
 set block-policy return

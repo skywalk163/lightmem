@@ -392,6 +392,10 @@ func NewStorageBackend(ctx context.Context, p *Profile) (StorageBackend, error) 
 		return newSQLiteBackend(ctx, p.Storage)
 	case BackendPgVector, BackendPgShard:
 		return newPgBackend(ctx, p.Storage)
+	case BackendQdrant:
+		// R16 S1：Qdrant 档位正式接线（§5.4 多后端可插拔）。
+		// 未配置 Qdrant 时 newQdrantBackend 返回明确 error（不静默降级，R15 口径）。
+		return newQdrantBackend(ctx, p.Storage)
 	default:
 		return nil, fmt.Errorf("storage backend %q not yet wired in kernel skeleton; see docs §5.4", p.StorageBackend)
 	}

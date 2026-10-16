@@ -1,0 +1,100 @@
+{
+  "report": "r16_polaris_holdout450_20261016-015846",
+  "generated_at": "2026-10-16T00:00:00Z",
+  "config": {
+    "embedder": "auto",
+    "embedder_name": "vector:BAAI/bge-m3",
+    "holdout": "eval/holdout/holdout.jsonl",
+    "now_fixed": "2026-10-15",
+    "topk": 5,
+    "weights": "eval/weights/rank_weights_en_r5.json"
+  },
+  "corpus_note": "真实语料 holdout.jsonl（正式判定，450 条）",
+  "official_corpus": true,
+  "mode": "holdout-official",
+  "m1": {
+    "n": 450,
+    "hits": 363,
+    "coverage": 0.8066666666666666,
+    "hit_at_1": 354,
+    "hit_at_1_rate": 0.7866666666666666,
+    "id_hit": 442,
+    "id_hit_rate": 0.9822222222222222,
+    "mean_rr": 0.9498888888888886,
+    "topk": 5,
+    "buckets": {
+      "multi-hop": {
+        "n": 131,
+        "hits": 126,
+        "coverage": 0.9618320610687023,
+        "hit_at_1": 126
+      },
+      "open-domain": {
+        "n": 54,
+        "hits": 54,
+        "coverage": 1,
+        "hit_at_1": 54
+      },
+      "single-hop": {
+        "n": 165,
+        "hits": 120,
+        "coverage": 0.7272727272727273,
+        "hit_at_1": 112
+      },
+      "temporal": {
+        "n": 100,
+        "hits": 63,
+        "coverage": 0.63,
+        "hit_at_1": 62
+      }
+    }
+  },
+  "m2": {
+    "queries": 450,
+    "control_tokens": 23272,
+    "data_tokens": 65261,
+    "total_tokens": 88533,
+    "m2_control_share": 0.26286243547603716,
+    "by_bucket": {
+      "multi-hop": {
+        "queries": 131,
+        "control_tokens": 6953,
+        "data_tokens": 25407,
+        "total_tokens": 32360,
+        "m2_control_share": 0.21486402966625465
+      },
+      "open-domain": {
+        "queries": 54,
+        "control_tokens": 3196,
+        "data_tokens": 13090,
+        "total_tokens": 16286,
+        "m2_control_share": 0.19624217118997914
+      },
+      "single-hop": {
+        "queries": 165,
+        "control_tokens": 7693,
+        "data_tokens": 14715,
+        "total_tokens": 22408,
+        "m2_control_share": 0.3433148875401642
+      },
+      "temporal": {
+        "queries": 100,
+        "control_tokens": 5430,
+        "data_tokens": 12049,
+        "total_tokens": 17479,
+        "m2_control_share": 0.3106585044911036
+      }
+    }
+  },
+  "data_plane_compression": {
+    "tokens_before": 130802,
+    "tokens_after": 65261,
+    "saved": 65541,
+    "reduction_rate": 0.5010703200256876
+  },
+  "fp_audit": {
+    "v4_hits": 363,
+    "vetoed": 0,
+    "residual_fp": 363
+  }
+}

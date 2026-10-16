@@ -5,8 +5,9 @@
 #       任一 FAIL 则以非零码退出（可直接接 CI）。
 #
 # 用法：
-#   sh scripts/gate.sh              # 全部门禁（默认计分 13 项 + [1b] 报告行）
-#   sh scripts/gate.sh -S           # 严格模式：[1b] 全仓 gofmt 升级为硬门禁
+#   sh scripts/gate.sh              # 全部门禁（[1b] 全仓 gofmt 默认硬门禁，R16 S4 翻转）
+#   sh scripts/gate.sh -S           # 显式严格模式（与默认等价，幂等保留）
+#   GATE_STRICT_FMT=0 sh scripts/gate.sh  # 应急回退：[1b] 回到观测期 INFO
 #   sh scripts/gate.sh -n           # 跳过 [5] -race（调试期加速，记 SKIP）
 #   sh scripts/gate.sh -q           # 只在 FAIL / SKIP 时打印（调试期）
 #
@@ -26,8 +27,9 @@
 #      未配置 PG 环境变量 → 明确输出 SKIP 并计入汇总（绝不静默当通过）；
 #      已配置 → 测试失败即 FAIL 阻断；已配置却 0 项执行 → 同样 FAIL
 #      （真机覆盖等于没做，不能算绿）。
-#   7. [1b] 全仓 gofmt 采用两步升级：默认 INFO + 阈值观测（GATE_FMT_MAX，默认 0），
-#      确认全仓持续归零且无合理例外后，用 -S / GATE_STRICT_FMT=1 翻成硬门禁。
+#   7. [1b] 全仓 gofmt：R16 S4 已完成两步升级的第二步——默认即为硬门禁
+#      （全仓 gofmt -l 持续归零后翻转，GATE_FMT_MAX 默认 0）。
+#      应急回退：GATE_STRICT_FMT=0 回到观测期 INFO（仅在历史噪音未修完时用）。
 #
 # 退出码：0 = 全部门禁通过（SKIP 不阻断）；1 = 至少一项 FAIL。
 set -u
@@ -44,11 +46,11 @@ if [ ! -f "$ROOT/go.mod" ]; then
 fi
 QUIET=0
 SKIP_RACE=0
-# 严格模式：[1b] 全仓 gofmt 由 INFO 升级为硬门禁（两步升级的第二步）。
-# 默认关——确认全仓持续归零且无合理例外后再翻。
-STRICT_FMT=0
-if [ "${GATE_STRICT_FMT:-0}" = "1" ]; then
-    STRICT_FMT=1
+# 严格模式：[1b] 全仓 gofmt 硬门禁（R16 S4：由观测期 INFO 翻为默认硬门禁）。
+# 默认开——基线已确认全仓 gofmt -l 归零；GATE_STRICT_FMT=0 应急回退到观测期。
+STRICT_FMT=1
+if [ "${GATE_STRICT_FMT:-1}" = "0" ]; then
+    STRICT_FMT=0
 fi
 # 全仓 gofmt 容忍阈值：观测期允许的上限（默认 0 = 期望全仓归零）。
 FMT_MAX="${GATE_FMT_MAX:-0}"
@@ -582,9 +584,9 @@ printf '\n========== R15 门禁矩阵 ==========\n'
 printf 'PASS: %-4d  FAIL: %-4d  SKIP: %-3d  模块数: %s\n' \
     "$PASS" "$FAIL" "$SKIP" "$MOD_COUNT"
 if [ $STRICT_FMT -eq 1 ]; then
-    printf '[1b] 全仓 gofmt：严格模式（阈值 %s）\n' "$FMT_MAX"
+    printf '[1b] 全仓 gofmt：硬门禁（默认；阈值 %s；GATE_STRICT_FMT=0 可回退观测期）\n' "$FMT_MAX"
 else
-    printf '[1b] 全仓 gofmt：观测期 INFO（阈值 %s；-S 升级为硬门禁）\n' "$FMT_MAX"
+    printf '[1b] 全仓 gofmt：观测期 INFO（阈值 %s；R16 默认应为硬门禁——确认为何被 GATE_STRICT_FMT=0 回退）\n' "$FMT_MAX"
 fi
 printf '===================================\n'
 
