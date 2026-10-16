@@ -20,10 +20,10 @@
 | P2.5 评测集建设 | ✅ | ✅ 已交付 | `eval/eval_generate.go`、`run_kpi.go`、`dataset/all.jsonl`（570 条） |
 | P3 融合反馈与评测 | ✅ | ✅ 已交付 | `rank_fusion.go:509/556`、`router.go:97/294`、`router_mem.go:154/236`、`router_tools.go:250` |
 | P4 生命周期 | 🔜 | ✅ **已交付** | `lifecycle.go:252/286/316/347`、`consolidate.go`、`flush.go`、`forgetting_drift.go` + 5 测试文件 |
-| P5 外部连接器 | 🔜 | ⚠️ **部分交付** | `kernel/connector.go:18/53/160`（DB+Doc）；应用类连接器未实现 |
-| P6 目标与共享 | 🔜 | ✅ 已交付（单机） | `kernel/goal.go:15/149/181/205`、`model.go:64`；跨节点撤销传播未实现 |
+| P5 外部连接器 | 🔜 | ⚠️ **部分→骨架补全（R16 S3）** | `kernel/connector.go:18/53/160`（DB+Doc）；**R16 S3 新增 `kernel/connector_app.go`**（AppConnector + git 元数据扫描，7 项单测） |
+| P6 目标与共享 | 🔜 | ✅ 已交付（单机） | `kernel/goal.go:15/149/181/205`、`model.go:64`；跨节点撤销传播骨架（R16 S2 `topology.go` RevocationStore） |
 | P7 合规与优化 | 🔜 | ✅ **已交付** | `kernel/gdpr.go`、`perf.go`、`i18n/`、`metrics.go`、`sdk/{python,js}`、`eval/benchmarks/`、`docs/api.md` + `api.openapi.yaml` |
-| P8 集合体与多后端 | 🔜 | 🔜 **未开始**（本轮 R16 立项，4–8h） | 仅 `kernel/profile.go:36/128/271` 配置占位；无 backend_qdrant.go、无节点角色、无跨节点查询 |
+| P8 集合体与多后端 | 🔜 | ✅ **骨架已交付（R16 收口）** | **S1** `kernel/backend_qdrant.go`（Qdrant REST 后端全接口实现 + profile 接线）；**S2** `kernel/node_role.go` + `kernel/topology.go`（四角色 + 拓扑 + 撤销广播）；门禁 [1b] 硬翻转；北极星三语料补评；ZFS 快照容灾 |
 | P9 应用包生态 | 🔜 | ✅ **已交付** | `kernel/package*.go`、`eval/packages/manifests/`（8 包齐）、`eval/e2e/packages/package_e2e_test.go` |
 
 > ✅ **本轮已同步**：`README.md` 开发计划表已按上表真实状态更新（P4/P5/P6/P7/P9 由 🔜 更正，P1 移除未实现的 MemoryExtractor）。
