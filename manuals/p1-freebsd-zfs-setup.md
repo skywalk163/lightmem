@@ -784,6 +784,142 @@ jexec lims-pg psql -h 10.0.10.10 -U postgres -c 'select version();'
 
 ---
 
+### 11A.6 R17-S2 实机执行记录（2026-10-16，0.88 已完成）：Qdrant 部署 + 真机联调验收
+
+> **对应任务**：R17 S2 ——「在 0.88 部署 Qdrant，跑真机 HTTP 联调验收，补齐 R16 遗留的『真机未部署』缺口」
+> **执行主机**：192.168.0.88（FreeBSD 15.1-RELEASE-p1，go1.25.14，ZFS pool zroot）
+> **执行用户**：workbuddy（wheel，sudo NOPASSWD），Agent 通过 SSH 实机执行
+> **状态**：✅ 完成（部署 + 真机联调验收；详见 §11A.6.5 验收表）
+> **复用资产**：§11A.1~11A.2 的 jail vnet/epair/bridge0 模式（R16-S5 修复）直接复用，未重造轮子
+
+#### 11A.6.1 前置盘点（与任务书假设的差异）
+
+| 项 | 任务书假设 | 实机现状 | 处理 |
+|---|---|---|---|
+| jail 出网 | 「pf 出网已通（R16 S5 验证）」 | **pf 无 NAT 规则 + `net.inet.ip.forwarding=0` + jail 无默认路由**，所有 jail 出网 100% loss | 根因修复三件套（见 §11A.6.2 步骤 3），惠及全部 jail |
+| lims-qdrant jail | 需新建 | 已按 §11A.2 模式建好（JID 47，10.0.10.60/24，epair60b 桥接 bridge0） | 沿用，仅补存储挂载 |
+| SMB 档 qdrant.host | 逻辑示例 10.0.20.70 | 实机 bridge0 段为 10.0.10.0/24 | 改 10.0.10.60（profile 对齐） |
+| Qdrant pkg | 「按实际 pkg 仓库名」 | FreeBSD ports `databases/qdrant`，quarterly 仓 1.19.1_1,1（19.3MB） | `pkg install -y qdrant`（依赖 rocksdb 181MB，慢速 uplink ~130KB/s，下载约 50 分钟） |
+
+> **关于「出网已通」的更正**：R16 §11A.3 验证的是 jail↔host、jail↔jail（L2 本地转发，**不经过 pf NAT**）；
+> 任务书中「出网已通（R16 S5 验证）」系过度声明。 jail 访问外网需要 pf NAT + IP forwarding + jail 内默认路由
+> 三者齐备，本次实机全部补齐（修复前 `pkg install` 报 "Transient resolver failure"）。
+
+#### 11A.6.2 执行步骤（0.88 实机，命令已逐条跑通）
+
+```sh
+# 0) 部署脚本化交付：scripts/deploy_qdrant.sh（幂等，以下步骤均已收入脚本）
+#    ZFS dataset → jail 基座 → jail.conf → epair/bridge → jail 运行 →
+#    出网三件套 → pkg install → 配置/启动 → pf 放行 + 健康检查
+#    实机验证：全量重跑 20 处 SKIP + 端到端验证 PASS + exit 0；--verify 只读模式全过
+
+# 1) Qdrant 存储 dataset（profile storage.zfs.datasets 的 lims/qdrant 落地）
+sudo zfs create -o mountpoint=/var/db/qdrant -o recordsize=128k -o compression=lz4 zroot/lims/qdrant
+sudo mkdir -p /usr/jails/lims-qdrant/var/db/qdrant
+# nullfs 挂进 jail（ports 默认 storage 路径即 /var/db/qdrant，配置零改动）
+sudo mount -t nullfs -o rw,noatime /var/db/qdrant /usr/jails/lims-qdrant/var/db/qdrant
+# 持久化：jail.conf 加 mount.fstab + allow.mount/nullfs；fstab.lims 写 nullfs 行
+#   （/var/db/qdrant  /usr/jails/lims-qdrant/var/db/qdrant  nullfs  rw,noatime  0 0）
+
+# 2) 安装 Qdrant（jail 内；quarterly 仓 1.19.1_1,1）
+sudo jexec lims-qdrant pkg install -y qdrant
+#    布局：bin/qdrant；etc/qdrant/config.yaml（@sample 复制）；默认存储 /var/db/qdrant（nobody:nobody 0750）
+
+# 3) 出网三件套（R17 S2 根因修复，缺一不可）
+sudo sysctl net.inet.ip.forwarding=1                 # 运行时 0→1
+sudo sh -c 'echo "net.inet.ip.forwarding=1" >> /etc/sysctl.conf'   # 持久化（rc.conf gateway_enable=YES 已在位）
+# pf NAT（/etc/pf.conf，scrub 之后、pass 之前；改写前备份 /etc/pf.conf.r17bak，pfctl -nf 校验后才加载）
+#   nat on $ext_if from 10.0.10.0/24 to any -> ($ext_if)
+sudo sh -c 'echo "defaultrouter=\"10.0.10.1\"" >> /usr/jails/lims-qdrant/etc/rc.conf'  # jail 默认路由
+sudo jexec lims-qdrant route add default 10.0.10.1   # 运行时立即生效
+#    验证：jail 内 ping 192.168.1.5 0% loss；getent hosts pkg.freebsd.org 正常
+
+# 4) 配置 + 启动（storage_path 指向 dataset 挂载点）
+sudo jexec lims-qdrant sysrc qdrant_enable=YES
+sudo jexec lims-qdrant service qdrant start
+#    监听：0.0.0.0:6333（HTTP）/ 0.0.0.0:6334（gRPC）；宿主机→10.0.10.60:6333 通（bridge0 全放行）
+
+# 5) pf 放行与转发（manuals/pf.rules 同步定稿，实机 /etc/pf.conf 逐行等价）：
+#    <lims_jails> 表加 10.0.10.60；管理网段→宿主机 IP 的 6333/6334 经 rdr 转发进 jail；
+#    源网段 { 192.168.0.0/24, 192.168.1.0/24 }；放行 pass 排在 block 之后（末条匹配胜出）。
+#      rdr on $ext_if proto tcp from { 192.168.0.0/24, 192.168.1.0/24 } to ($ext_if) port { 6333, 6334 } -> 10.0.10.60
+#      pass in on $ext_if proto tcp from { 192.168.0.0/24, 192.168.1.0/24 } to 10.0.10.60 port { 6333, 6334 } flags S/SA keep state
+#    备份链：/etc/pf.conf.r17bak、r17bak3~r17bak8（r17bak7 为规则定稿态，一键回退）
+
+# 6) profile 对齐（profiles/lims-smb.profile.yaml）
+#    qdrant.enabled: false → true；qdrant.host: 10.0.20.70 → 10.0.10.60；
+#    network.components.lims-qdrant → 10.0.10.60；zfs datasets lims/qdrant enabled → true
+#    （enterprise 档为 10.30.1.10-12 集群逻辑拓扑，与 0.88 单机实验环境无关，按任务书
+#      「如确需调整」口径不动）
+```
+
+#### 11A.6.3 关键教训（后续 jail 复用的坑）
+
+| # | 坑 | 症状 | 修复 |
+|---|---|---|---|
+| 1 | **jail 出网三件套缺失**（存量基础设施缺口） | jail 内 `pkg install` 全部 "Transient resolver failure" | pf NAT + `net.inet.ip.forwarding=1` + jail `defaultrouter`，三者缺一不可；本次修复惠及所有 jail |
+| 2 | pf `nat` 规则位置 | 写在 `block` 之后不生效/顺序混乱 | translation 段放 scrub 之后、首条 pass 之前；每次改写 `pfctl -nf` 校验后才 `pfctl -f`（防锁死 SSH） |
+| 3 | FreeBSD `sed -i` 语法 | `sed -i "s/a/b/" f` 把脚本当备份扩展名吞掉（`invalid command code j`） | FreeBSD 必须 `sed -i "" "s/a/b/" f`（空扩展名参数） |
+| 4 | nullfs 源必须是 mountpoint | 直接挂 jail 内目录失败 | 源 = 宿主机 ZFS 挂载点 `/var/db/qdrant`；目标 = `/usr/jails/<jail>/var/db/qdrant` 宿主绝对路径 |
+| 5 | Qdrant 点 ID 契约（R16 遗留缺口） | 透传 MemoryID（29 位十六进制字符串）作点 ID，真机全部 400 "not a valid point ID" | `backend_qdrant.go` 增加 `qdrantPointID`：UUIDv5 确定性映射（namespace `lightmem-qdrant1` + SHA-1），stdlib-only；httptest mock 接受任意字符串 ID，掩盖了该问题（mock 与真机契约偏差，见 #10） |
+| 6 | Qdrant 写操作默认异步 | upsert 后立即 GET 可能 404（读不到己之写） | 写路径统一 `?wait=true`（Upsert/UpdateLayer/DeleteByID/DeleteByScope/ensureCollection） |
+| 7 | 慢速 uplink + 大依赖 | rocksdb pkg 181MB @ ~130KB/s ≈ 25 分钟 | 属链路带宽非配置问题；pkg install 给足超时，断点续传由 pkg 自身完成 |
+| 8 | Qdrant Cosine 集合归一化语义 | 预置向量首分量 0.647 读回 0.03493356（≈0.647/18.5，即 /\|v\|） | Cosine 距离集合落库时归一化；「向量保留」断言须按**方向保持**（读回与预置余弦相似度 ≈ 1），逐分量比对必失败 |
+| 9 | 零值 Visibility 默认拒绝 | `canView` 对 `Visibility == ""` 落 `return false`（fail-closed）；R16 httptest fixture 未设 Visibility，`TestQdrantHTTPEndToEnd` 自 c5ca737 起即红（存量，非 S2 引入；S3 交付报告已归因路由） | 修复落在测试 fixture：`mkMemory` 显式 `Visibility: VisPrivate`（与全代码库 30+ fixture 惯例一致）；未动 `backend_sqlite.go`（PROTECTED 白名单） |
+| 10 | httptest mock 保真度偏差 | mock 按裸 ID 存点；S2 的 UUID 映射后 `TestQdrantHTTPUpsertPreservesVector` **空转通过**（重新命中自己预置的裸 ID 点，未真正验证保留路径） | 真机行为由新增 `TestQdrantRealVectorPreserve` 覆盖（探针实测：GET 单点默认返回 vector + 方向保持断言） |
+| 11 | FreeBSD pf 对本地产生流量的局限 | 宿主机 lo0 上 rdr 前向翻译成功但反向翻译/状态回写失败，宿主机对 jail 的 SYN-ACK 回 RST（curl exit 28） | 已回退 lo0 rdr 规则（备份链可证）；工作站访问走 jail IP 直连（见 §11A.6.4） |
+
+#### 11A.6.4 真机网络拓扑发现（pf/rdr 排查实录）
+
+> 本节解释「为何某些理论路径不通」——后续任何涉及 0.88 防火墙/转发的任务先读本节，避免重复排查。
+
+1. **工作站是宿主机 VirtualBox 内的 VM**（10.0.2.15，用户态 NAT；socketstat 显示 SSH 连接由 VirtualBox 进程持有）。VM 访问「宿主机自身 IP」（192.168.0.88）时被 NAT **回环为 lo0 流量**（源/目的均为 192.168.0.88），完全不经 em0——宿主机上的 pf/rdr 对该流量不生效（tcpdump em0 零包证实）。
+   **正确访问路径：直接用 jail IP 10.0.10.60:6333**（宿主机路由可达，实测 curl 返回 `{"title":"qdrant - vector search engine","version":"1.19.1"}`；6334 亦通）。
+2. **lo0 rdr 尝试已回退**：曾尝试对 lo0 加 rdr 让「宿主机 IP:6333」也可转发，前向翻译成功（SYN 到达 jail、SYN-ACK 返回）但反向翻译失败（宿主机回 RST，curl exit 28）——FreeBSD pf 对本地产生流量的已知局限，规则已回退（r17bak7 之前的迭代态）。
+3. **Gitea（192.168.1.5，FreeBSD 14.3）无到 192.168.0.0/24 的路由**：traceroute 显示包经 192.168.1.1 漏到互联网（100.120.0.1→运营商骨干），不能作为 rdr 的外部测试客户端；规则中保留 192.168.1.0/24 源网段备用。
+4. **192.168.0.0/24 段内其他活主机**（ping sweep + ARP 实测：.1/.12/.13/.82/.86/.101/.103/.104/.105/.109，其中 08:00:27 为 VirtualBox MAC）均无 workbuddy 密钥访问权限，不能代为验证。
+5. **pf 计数器噪音**：rdr/pass 规则上百次 evaluations 来自互联网对 22 端口的扫描流量（em0 分钟级十万级匹配包），**非真实 6333 客户端**，勿据此判读规则命中情况。
+
+#### 11A.6.5 验收核对（任务书 S2 验收标准逐条）
+
+| # | 验收标准（任务书 §三/S2） | 结果 | 证据（0.88 实测） |
+|---|---|---|---|
+| 1 | `go test -count=1 -run 'TestQdrantReal' ./kernel/` 全 PASS（真机） | ✅ 4/4 PASS | `LIGHTMEM_QDRANT_HOST=10.0.10.60 LIGHTMEM_QDRANT_PORT=6333`：TestQdrantRealConfigGate / Connection / EndToEnd / VectorPreserve 全 PASS（0.582s） |
+| 2 | 未配置 env 时真机测试显式 SKIP（不假 PASS） | ✅ 3 项显式 SKIP | 无 env 跑 `-run TestQdrant`：RealConnection / RealEndToEnd / RealVectorPreserve 均 `t.Skip`（与门禁 [11] PG 同口径），ConfigGate 照常 PASS |
+| 3 | 部署脚本幂等（重复执行不报错） | ✅ | `deploy_qdrant.sh` 全量重跑：20 处 `[SKIP]`（已就绪）+ 端到端验证 PASS + exit 0；`--verify` 只读模式全部通过 |
+| 4 | 北极星 holdout_v2 在 qdrant 档位跑通（可选） | ➖ 可选未执行 | 任务书标注可选（M1 不与既有比对冲突）；qdrant 档读写路径已由真机 EndToEnd（Upsert/Get/Query/VectorSearch/UpdateLayer/ScanLayer/CountByKind/Export/Delete）覆盖 |
+| 5 | （合流总验收）`sh scripts/gate.sh` PASS ≥ 12 / FAIL 0 | ✅ PASS 13 / FAIL 0 / SKIP 1 | 双口径验证：无 env 与带 `LIGHTMEM_QDRANT_HOST` 各跑一次，均 PASS 13 / FAIL 0 / SKIP 1（[11] PG env 未配置，属任务书允许的「SKIP 或 PASS」口径） |
+
+**附：R16 存量基线缺陷修复（S3 交付报告 §3 路由项，本次合流处理）**
+
+| 缺陷 | 根因 | 修复 | 归属 |
+|---|---|---|---|
+| [4]/[5] `TestQdrantHTTPEndToEnd` FAIL | `mkMemory` fixture 未设 Visibility，零值被 `canView` 拒绝（c5ca737 起即红） | fixture 显式 `Visibility: VisPrivate`（一行，无语义变更） | R16 遗留 → S3 报告路由 S2/主 Agent → 本次修复，单独 commit 归因 |
+| [1b] gofmt 严格门禁 FAIL | `backend_qdrant.go` + `backend_qdrant_httptest_test.go` 未 gofmt（c5ca737 带入） | `gofmt -w` 两文件（纯格式） | 同上 |
+| `TestQdrantHTTPUpsertPreservesVector` 空转通过 | mock 按裸 ID 存点，UUID 映射后未真正走保留路径（见 §11A.6.3 #10） | 不动 R16 测试；真机覆盖由 `TestQdrantRealVectorPreserve` 承担 | 记录不修（mock 保真度局限，真机测试已闭环） |
+
+#### 11A.6.6 回滚（如需）
+
+```sh
+# 停 Qdrant（数据在 zroot/lims/qdrant，不丢）
+sudo jexec lims-qdrant service qdrant stop
+# 卸 nullfs + 保留 dataset（或 zfs destroy 重建）
+sudo umount /usr/jails/lims-qdrant/var/db/qdrant
+# pf 回滚（r17bak7 为规则定稿态；r17bak8 仅注释修订）
+sudo cp /etc/pf.conf.r17bak7 /etc/pf.conf && sudo pfctl -f /etc/pf.conf
+# profile 回滚：qdrant.enabled 改回 false（代码侧 backend_qdrant.go 的点 ID 映射保留，
+#   属正确性修复，与是否启用 qdrant 档无关）
+```
+
+> **红线确认**：本泳道未触碰 `kernel/profile.go`、`kernel/node_rpc.go`、`kernel/proto/`（S3 文件域）；
+> 未修改 `model.go` / `storage.go` / `lifecycle.go` / `compliance.go`（红线①）；`backend_qdrant.go`
+> 的点 ID 映射 + `wait=true` 属真机联调暴露的最小根因修复（该文件不在任何泳道禁止触碰清单）；
+> R16 已交付的两个 Qdrant 测试文件中，`backend_qdrant_test.go` 零改动，`backend_qdrant_httptest_test.go`
+> 仅按 S3 报告路由做了「fixture 补 Visibility + gofmt」的基线缺陷修复（单独 commit，归因见 §11A.6.5 附表）；
+> commit 后不自动 push（红线⑧）。
+
+---
+
 ### 11A.7 R17-S3 跨节点 gRPC 通信部署（P8 节点 mesh 落地 runbook）
 
 > **对应任务**：R17 S3 ——「把 P8 跨节点 rank merge 的骨架（`InMemoryNodeRegistry` / `InMemoryBroadcaster` / `NoopPreFilter` + `topology.go`）替换为真实 gRPC 通信，默认关、本地回环」
@@ -980,4 +1116,4 @@ nc -vz 10.30.7.1 9443                     # connected；pf 拦截时应 timeout
 | 第 7 节 安全 | §5.7「安全组件」 |
 | 第 9 节 快照容灾 | §5.6「快照与容灾」 |
 | 第 10 节 快照容灾实操（R16-S7） | §5.6「快照与容灾」 |
-| 全部 | §4.2 一致性骨架（写入链路）|
+| 全部 | §4.2 一致性骨架（写入链路）|

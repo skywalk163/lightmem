@@ -1,18 +1,21 @@
 # ============================================================
-# 光明记忆（LIMS）Family 档 pf 防火墙规则
+# 光明记忆（LIMS）Family 档 pf 防火墙规则（0.88 实机 /etc/pf.conf 镜像）
 # ============================================================
-# 对应任务：R11 C.2
-# 对应文档：manuals/p1-freebsd-zfs-setup.md §6
+# 对应任务：R11 C.2；R17 S2 修订（jail 出网 NAT + lims-qdrant + Qdrant 6333/6334 放行/转发）
+# 对应文档：manuals/p1-freebsd-zfs-setup.md §6 / §11A.6
 # 对应架构：lightmem.md §5.7「网络隔离」+ §5.5「集合体」
-# 适用平台：FreeBSD 15.1-RELEASE-p1（0.88 实机）
+# 适用平台：FreeBSD 15.1-RELEASE-p1（0.88 实机，go1.25.14）
+# 实机状态：本文件与 0.88 /etc/pf.conf 逐行等价（2026-10-16 R17 S2 定稿加载）
 # ============================================================
 #
 # 设计原则：
-#   1. 默认拒绝所有外部入站
+#   1. 默认拒绝所有外部入站（末条 block in on $ext_if）
 #   2. 仅网关（lims-router jail）暴露 443/8443
-#   3. SSH 仅管理网段（192.168.1.0/24）可达
+#   3. SSH 仅管理网段（192.168.0.0/24）可达
 #   4. jail vnet 内网（10.0.10.0/24）全放行（组件间通信）
 #   5. 外发流量全放行（update / pkg install 等）
+#   6. Qdrant 6333/6334 仅管理网段（192.168.0.0/24 + 192.168.1.0/24）可达，
+#      经 rdr 转发进 lims-qdrant jail（10.0.10.60）
 #
 # 用法：
 #   1. 语法校验（必做，否则可能锁死 SSH）：
@@ -22,50 +25,89 @@
 #   3. 验证：
 #      pfctl -s rules    # 查看规则
 #      pfctl -s states   # 查看状态表
-#      pfctl -s Interfaces  # 查看接口统计
+#      pfctl -s info     # 查看接口统计
 #
 # 回滚：
 #   本地控制台执行：pfctl -d（禁用 pf）
+#   历史备份链：/etc/pf.conf.r17bak、r17bak3 ~ r17bak7（R17 S2 历次修订前快照；
+#               r17bak7 为最终定稿态，pfctl -f /etc/pf.conf.r17bak7 可一键回退）
 # ============================================================
 
 # ---- 接口定义 ----
-ext_if = "em0"          # 宿主机外网接口，按实机调整
-int_if = "bridge0"      # jail vnet 桥接接口
+ext_if = "em0"          # 宿主机外网接口
+mgmt_net = "192.168.0.0/24"  # 本网段（SSH/Qdrant 管理来源）
 
 # ---- 表定义 ----
 # jail vnet 内网 IP（与 profile network.components 一致；R16-S5 修复后实测）
-table <lims_jails> { 10.0.10.10, 10.0.10.20, 10.0.10.30, 10.0.10.40, 10.0.10.50 }
+# R17 S2：追加 10.0.10.60（lims-qdrant，Qdrant 向量库 jail）
+table <lims_jails> { 10.0.10.10, 10.0.10.20, 10.0.10.30, 10.0.10.40, 10.0.10.50, 10.0.10.60 }
 
-# 管理网段（SSH 来源；实机 0.88 为 192.168.0.0/24）
-table <management_net> { 192.168.0.0/24 }
+scrub in all
 
-# ---- 全局设置 ----
-set block-policy return
-set skip on lo0
+# ---- jail 出网 NAT（R17 S2 新增）----
+# 背景：R17 S2 实机部署 lims-qdrant 时发现存量基础设施缺口——此前 pf 无 NAT 规则、
+#       net.inet.ip.forwarding=0、jail 无默认路由，三项叠加导致所有 jail（含存量
+#       lims-redis/lims-pg 等）出网 100% loss，jail 内 pkg install 全部失败
+#       （"Transient resolver failure"）。R16 §11A.3 只验证了 jail↔host、jail↔jail
+#       （L2 本地，不需转发），任务书中「出网已通」系过度声明。
+# 配套（缺一不可，均已实机验证，deploy_qdrant.sh [6] 步自动补齐）：
+#   1) /etc/sysctl.conf: net.inet.ip.forwarding=1（运行时 sysctl 同步置 1）
+#   2) jail 内默认路由：/usr/jails/<jail>/etc/rc.conf defaultrouter="10.0.10.1"
+#      （bridge0 为 10.0.10.1/24；jail.conf exec.start 亦含 route add default 兜底）
+#   3) 本 NAT 规则（宿主机代 jail 出网）
+nat on $ext_if from 10.0.10.0/24 to any -> ($ext_if)
 
-# ---- 默认策略 ----
-# 外部入站默认拒绝
-block in on $ext_if all
-block out on $ext_if all
+# ---- Qdrant rdr（R17 S2）----
+# 管理网段→宿主机 IP 的 6333/6334 转发进 lims-qdrant jail（10.0.10.60）。
+# 源网段含 192.168.1.0/24：Gitea（192.168.1.5）等服务段属管理网段，实测其流量
+# 经 em0 到达（虽 Gitea 本身无到 192.168.0.0/24 的路由，规则预留备用）。
+rdr on $ext_if proto tcp from { 192.168.0.0/24, 192.168.1.0/24 } to ($ext_if) port { 6333, 6334 } -> 10.0.10.60
 
-# ---- 内网放行 ----
-# jail vnet 桥接：组件间全放行
-pass in on $int_if from 10.0.10.0/24 to any keep state
-pass out on $int_if from any to 10.0.10.0/24 keep state
+# ---- 回环与内网全放行 ----
+pass in quick on lo0 all
+pass in quick on bridge0 all
+pass quick from <lims_jails> to <lims_jails>
 
-# ---- 对外暴露 ----
-# HTTPS（nginx 网关）：443 + 8443
-pass in on $ext_if proto tcp from any to ($ext_if) port { 443, 8443 } flags S/SA keep state
+# ---- 对外暴露：HTTPS 服务 ----
+pass in quick on $ext_if proto tcp from any to $ext_if port { 443, 8443 }
 
-# SSH 管理：仅管理网段
-pass in on $ext_if proto tcp from <management_net> to ($ext_if) port 22 flags S/SA keep state
+# ---- SSH：仅管理网段 ----
+pass in quick on $ext_if proto tcp from $mgmt_net to $ext_if port ssh
 
 # ---- 外发全放行 ----
-# 系统更新、pkg install、DNS 查询等
 pass out all keep state
 
 # ---- 拒绝其他外部入站 ----
-block in on $ext_if all
+block in on $ext_if
+
+# ---- Qdrant 放行（R17 S2，须排在 block 之后）----
+# rdr 转发后的入站放行。注意 pf「末条匹配胜出」语义：本条位于 block 之后，
+# 翻译后的流量（目的 10.0.10.60:6333/6334）命中本条即放行；
+# 顺序若调换到 block 之前虽也可达（quick 语义），现位置为实机验证态，勿随意调整。
+# 仅管理网段（192.168.0.0/24 + 192.168.1.0/24）。
+pass in on $ext_if proto tcp from { 192.168.0.0/24, 192.168.1.0/24 } to 10.0.10.60 port { 6333, 6334 } flags S/SA keep state
+
+# ============================================================
+# R17 S2 拓扑发现（pf 排查实录，勿删——解释「为何有些路径不通」）
+# ============================================================
+# 1. 工作站是宿主机 VirtualBox 内的 VM（10.0.2.15，用户态 NAT）。VM 访问
+#    「宿主机自身 IP」（192.168.0.88）时被 NAT 回环为 lo0 流量（源/目的均为
+#    192.168.0.88），完全不经 em0——因此宿主机上的 pf/rdr 对该流量不生效。
+#    工作站访问 Qdrant 的正确路径：直接用 jail IP 10.0.10.60:6333（宿主机
+#    路由可达，实测通过，curl 返回 {"title":"qdrant - vector search engine",
+#    "version":"1.19.1"}）。
+# 2. 曾尝试对 lo0 加 rdr 规则让「宿主机 IP:6333」也能转发：前向翻译成功
+#    （SYN 到达 jail、SYN-ACK 返回），但反向翻译/状态回写失败，宿主机对
+#    jail 的 SYN-ACK 回 RST（curl exit 28）。FreeBSD pf 对本地产生流量的
+#    已知局限，已回退该规则（备份 r17bak7 前的迭代态）。
+# 3. Gitea（192.168.1.5，FreeBSD 14.3）无到 192.168.0.0/24 的路由：包经
+#    192.168.1.1 漏到互联网（traceroute 100.120.0.1→运营商骨干），不能作为
+#    rdr 外部测试客户端；规则中保留 192.168.1.0/24 源网段备用。
+# 4. 192.168.0.0/24 段内其他活主机（.12/.13/.82/.86/.101/.103/.104/.105/.109，
+#    ping sweep + ARP 实测）均无 workbuddy 密钥访问权限，不能代为验证。
+# 5. pf 计数器噪音：rdr/pass 规则上百次 evaluations 来自互联网对 22 端口的
+#    扫描流量（em0 分钟级十万级匹配包），非真实 6333 客户端，勿据此判读。
+# ============================================================
 
 # ---- 日志（可选，调试用）----
 # 在 block/pass 行末尾加 log 可开启日志

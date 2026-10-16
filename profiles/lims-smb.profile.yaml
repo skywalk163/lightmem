@@ -35,13 +35,16 @@ storage:
       ef_construction: 200
       ef_search: 128
   # Qdrant：按 §6 迁移阈值触发（单租户向量行数 > 500 万，或 P95 超 200ms 的 60%）
+  # R17 S2：0.88 实机已部署 lims-qdrant jail（10.0.10.60，bridge0 为 10.0.10.1/24），
+  #         host 由逻辑示例 10.0.20.70 改为实机 IP；enabled 置 true（真机联调验收通过）。
+  #         其余组件的 10.0.20.x 仍为逻辑示例 IP，待各自泳道对齐。
   qdrant:
-    enabled: false
+    enabled: true
     # 迁移阈值契约
     trigger:
       max_rows_per_tenant: 5000000
       p95_latency_ms: 200
-    host: 10.0.20.70
+    host: 10.0.10.60
     port: 6333
     # Qdrant 侧 payload 过滤 + pre-filter
     payload_filter: true
@@ -67,8 +70,8 @@ storage:
         mountpoint: /var/db/qdrant
         recordsize: "128k"
         compression: lz4
-        # 迁移触发后启用
-        enabled: false
+        # R17 S2：0.88 实机已创建 zroot/lims/qdrant（nullfs 挂进 lims-qdrant jail）
+        enabled: true
       - name: lims/redis
         mountpoint: /var/db/redis
         recordsize: "8k"
@@ -143,7 +146,8 @@ network:
   components:
     lims-pg: 10.0.20.10
     lims-redis: 10.0.20.20
-    lims-qdrant: 10.0.20.70
+    # R17 S2：lims-qdrant 实机 IP（0.88 bridge0 段 10.0.10.0/24）
+    lims-qdrant: 10.0.10.60
     lims-minio: 10.0.20.40
     lims-rabbit: 10.0.20.50
     lims-router: 10.0.20.60
