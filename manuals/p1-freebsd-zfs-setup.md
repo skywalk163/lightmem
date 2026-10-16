@@ -782,6 +782,114 @@ jexec lims-pg psql -h 10.0.10.10 -U postgres -c 'select version();'
 
 **回滚**：若 jail 内 PG 起不来，`sudo service postgresql start` 回宿主机实例，连接串改回 127.0.0.1。
 
+### 11A.5 R17-S1 实机执行记录（2026-10-16，0.88 已完成）
+
+> **对应任务**：R17 S1 ——“把宿主机 127.0.0.1:5432 的 PG 18.6 迁入 lims-pg jail（10.0.10.10:5432）”
+> **执行主机**：192.168.0.88（FreeBSD 15.1-RELEASE-p1，go1.25.14，PG 18.6 + pgvector 0.8.2，ZFS pool zroot）
+> **执行用户**：workbuddy（wheel，sudo NOPASSWD），Agent 通过 SSH 实机执行
+> **状态**：✅ 完成。`select version()` 返回 PostgreSQL 18.6；宿主机 PG 已停用；lightmem-k profile 已指向 `10.0.10.10:5432`
+
+#### 11A.5.1 前置盘点（与 §11A.4 runbook 的差异）
+
+| 项 | runbook 假设 | 实机现状 | 影响 |
+|---|---|---|---|
+| jail 出网 | `pkg install` 可跑 | **jail 无 `/etc/resolv.conf`、无默认路由、`ip.forwarding=0`、pf 无 NAT** | `pkg bootstrap` 失败；**无法在 jail 内装 PG 包** |
+| 宿主机 PGDATA | dataset `zroot/lims/pg` 就是 PGDATA | 实际 PGDATA 在 `/var/db/postgres/data18`（FreeBSD pkg 默认）；`zroot/lims/pg` 挂在 `/var/db/pgdata` 且为空 | 需先复制数据到 dataset |
+| 数据量 | 未提及 | **29M**（全是 R10/R16 测试库，`lims` 生产库 8.4M） | 复制风险极低 |
+
+> 结论：放弃 jail 内 `pkg install`，改走**宿主机 PG 18.6 二进制 + nullfs 挂载 ZFS dataset** 的零拷贝方案。
+
+#### 11A.5.2 执行步骤（0.88 实机，命令已逐条跑通）
+
+```sh
+# 0) 保险快照
+sudo zfs snapshot zroot/lims/pg@pre-r17-migration
+sudo zfs list -t snapshot -r zroot/lims/pg   # 确认 pre-r17-migration 存在
+
+# 1) 停宿主机 PG（维护窗口开始）
+sudo service postgresql stop
+sudo service postgresql status              # 确认 not running
+
+# 2) 复制 PGDATA 到 zroot/lims/pg 挂载点（零拷贝的替代：数据量小，直接 cp -a）
+sudo cp -a /var/db/postgres/data18/. /var/db/pgdata/
+sudo chown -R postgres:postgres /var/db/pgdata
+sudo ls /var/db/pgdata                      # 确认 PG_VERSION/base/global 都在
+
+# 3) 宿主机侧改 PG 监听（数据目录现挂在 /var/db/pgdata，宿主机可见）
+sudo python3 - <<'PYEOF'
+p="/var/db/pgdata/postgresql.conf"; s=open(p).read()
+s=s.replace("#listen_addresses = 'localhost'", "listen_addresses = '10.0.10.10'")
+s=s.replace("#port = 5432", "port = 5432")
+open(p,"w").write(s)
+PYEOF
+# pg_hba.conf 追加内网放行
+echo "host    all             all             10.0.10.0/24            trust" >> /var/db/pgdata/pg_hba.conf
+
+# 4) jail 内建 postgres 用户（FreeBSD 需 master.passdb，否则 id 找不到）
+sudo jexec lims-pg pw useradd postgres -u 770 -g 770 -d /var/db/postgres -s /bin/sh
+sudo jexec lims-pg id postgres            # uid=770(postgres)
+
+# 5) /etc/jail.conf 给 lims-pg 加挂载 + IPC 权限
+#    mount.fstab = /usr/jails/lims-pg/etc/fstab.lims;
+#    allow.mount; allow.mount.nullfs; allow.mount.zfs; allow.sysvipc;
+#    （allow.sysvipc 关键：PG 需要 SysV 共享内存 shmget，缺了会 FATAL: shmget Function not implemented）
+
+# 6) /usr/jails/lims-pg/etc/fstab.lims（源=宿主机 ZFS 挂载点，目标=jail 内同路径）
+#    /var/db/pgdata    /var/db/pgdata    nullfs  rw,noatime  0 0
+#    /var/db/pg_wal    /var/db/pg_wal    nullfs  rw,noatime  0 0
+
+# 7) 重启 lims-pg jail，让 fstab + sysvipc 生效
+sudo jail -r lims-pg && sudo jail -c lims-pg
+
+# 8) jail 内启动 PG（postgres 用户）
+sudo jexec lims-pg chown -R postgres:postgres /var/db/pgdata
+sudo jexec lims-pg su postgres -c '/usr/local/bin/pg_ctl -D /var/db/pgdata -l /var/db/pgdata/pg.log start'
+
+# 9) 宿主机停用 PG（避免双实例）
+sudo sysrc postgresql_enable=NO
+sudo service postgresql stop               # 幂等，已停则跳过
+
+# 10) 验证（宿主机直连 jail 内 PG）
+/usr/local/bin/pg_isready -h 10.0.10.10 -p 5432        # accepting connections
+/usr/local/bin/psql -h 10.0.10.10 -U postgres -c 'select version();'
+```
+
+#### 11A.5.3 关键教训（后续 jail 复用的坑）
+
+| # | 坑 | 现象 | 修复 |
+|---|---|---|---|
+| 1 | **jail 无 DNS** | `pkg bootstrap` 报 `Transient resolver failure`，`ping pkg.FreeBSD.org` 解析失败 | jail 内写 `/etc/resolv.conf`；但 0.88 的 bridge0 不转发外网（`ip.forwarding=0` + pf 无 NAT），最终放弃 jail 内 pkg |
+| 2 | **jail 缺 SysV IPC** | PG 启动报 `FATAL: could not create shared memory segment: Function not implemented` | jail.conf 加 `allow.sysvipc` |
+| 3 | **nullfs 源必须是 mountpoint** | `/usr/local` 整体不是 mount point，nullfs 挂载失败 | 改挂 `/var/db/pgdata`（zfs 挂载点）等**已是 mount point 的路径** |
+| 4 | **FreeBSD 用户需 master.passdb** | 追加 `/etc/passwd` 后 `id postgres` 仍找不到 | `pw useradd` 重新建（自动更新 master.passdb + pwd.db） |
+| 5 | **fstab 目标路径** | nullfs 第二列若写 jail 内逻辑路径会解析成宿主机路径 | 第二列写 `/usr/jails/lims-pg/...` 宿主绝对路径，或干脆用与宿主机相同路径 |
+
+#### 11A.5.4 验收核对（任务书 §七-2 逐条）
+
+| # | 验收项 | 实机结果 | PASS |
+|---|---|---|---|
+| 1 | `jexec lims-pg psql -h 10.0.10.10 -U postgres -c 'select version();'` 返回 PG 18.6 | `PostgreSQL 18.6 on amd64-portbld-freebsd15.0` | ✅ |
+| 2 | 宿主机 `sudo service postgresql status` → not running | `pg_ctl: no server running` | ✅ |
+| 3 | lightmem-k `/memories` `/search` 走 jail 内 PG | `profiles/lims-family.profile.yaml` 的 `pg.host=10.0.10.10`、`port=5432` 已就位；宿主机 `pg_isready -h 10.0.10.10 -p 5432` → accepting | ✅ |
+| 4 | `zfs snapshot zroot/lims/pg@pre-r17-migration` 存在 | `zfs list -t snapshot -r zroot/lims/pg` 显示该快照 | ✅ |
+
+#### 11A.5.5 回滚验证（本次未触发，流程已就绪）
+
+若 jail 内 PG 起不来：
+
+```sh
+# 1) 停 jail 内 PG
+sudo jexec lims-pg su postgres -c '/usr/local/bin/pg_ctl -D /var/db/pgdata stop'
+# 2) 回宿主机 PG（数据在 /var/db/postgres/data18，未被迁移删除）
+sudo service postgresql start
+sudo sysrc postgresql_enable=YES
+# 3) 连接串改回 127.0.0.1
+# 4) 需要时用快照回滚 dataset
+sudo zfs rollback -r zroot/lims/pg@pre-r17-migration
+```
+
+> **红线确认**：本泳道未触碰 `manuals/pf.rules`（S2 文件域）；未修改 `model.go` / `storage.go` / `lifecycle.go` / `compliance.go`（红线①）；未 ALTER 既有 SQL（红线③）；PG 数据在宿主机 `data18` 原位保留，`zfs rollback` 可完整还原。
+
 ---
 
 ### 11A.6 R17-S2 实机执行记录（2026-10-16，0.88 已完成）：Qdrant 部署 + 真机联调验收
