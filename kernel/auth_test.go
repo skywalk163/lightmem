@@ -253,7 +253,7 @@ auth:
 		AuthMiddleware,
 		RequireIdentity,
 	)
-	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req := httptest.NewRequest(http.MethodGet, "/search", nil)
 	req.Header.Set("Authorization", "Bearer t-dsh-8f3a9c2e")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -261,7 +261,7 @@ auth:
 		t.Fatalf("valid token: code=%d identity=%+v", w.Code, got)
 	}
 
-	req2 := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req2 := httptest.NewRequest(http.MethodGet, "/search", nil)
 	w2 := httptest.NewRecorder()
 	h.ServeHTTP(w2, req2)
 	if w2.Code != http.StatusUnauthorized {
@@ -298,7 +298,7 @@ func TestAuthMiddleware_ValidTokenInjectsIdentity(t *testing.T) {
 		got, _ = IdentityFromContext(r.Context())
 		w.WriteHeader(http.StatusOK)
 	}))
-	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req := httptest.NewRequest(http.MethodGet, "/search", nil)
 	req.Header.Set("Authorization", "Bearer t-trae-000001")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -324,7 +324,7 @@ func TestAuthMiddleware_MissingToken401(t *testing.T) {
 	h := AuthMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		reached = true
 	}))
-	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req := httptest.NewRequest(http.MethodGet, "/search", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusUnauthorized || reached {
@@ -345,7 +345,7 @@ func TestAuthMiddleware_WrongToken401(t *testing.T) {
 	h := AuthMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		reached = true
 	}))
-	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req := httptest.NewRequest(http.MethodGet, "/search", nil)
 	req.Header.Set("Authorization", "Bearer t-forged-999")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -363,7 +363,7 @@ func TestAuthMiddleware_PassthroughWhenUnconfigured(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
-	req := httptest.NewRequest(http.MethodGet, "/healthz", nil) // 无 Authorization
+	req := httptest.NewRequest(http.MethodGet, "/search", nil) // 无 Authorization
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -382,7 +382,7 @@ func TestAuthMiddleware_TokenPrefixRejected(t *testing.T) {
 	h := AuthMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		reached = true
 	}))
-	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req := httptest.NewRequest(http.MethodGet, "/search", nil)
 	req.Header.Set("Authorization", "Bearer "+full[:len(full)-2]) // 前缀
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -401,7 +401,7 @@ func TestAuthMiddleware_BearerSchemeCaseInsensitive(t *testing.T) {
 	h := AuthMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		reached = true
 	}))
-	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req := httptest.NewRequest(http.MethodGet, "/search", nil)
 	req.Header.Set("Authorization", "bearer t-wb-000001")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -414,7 +414,7 @@ func TestAuthMiddleware_BearerSchemeCaseInsensitive(t *testing.T) {
 		h2 := AuthMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 			hit = true
 		}))
-		req2 := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+		req2 := httptest.NewRequest(http.MethodGet, "/search", nil)
 		req2.Header.Set("Authorization", bad)
 		w2 := httptest.NewRecorder()
 		h2.ServeHTTP(w2, req2)
@@ -614,7 +614,7 @@ func TestAuthMiddleware_MultiTokenIsolation(t *testing.T) {
 		"t-dsh-000001": "deepseek-harness",
 		"t-wb-000002":  "workbuddy",
 	} {
-		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+		req := httptest.NewRequest(http.MethodGet, "/search", nil)
 		req.Header.Set("Authorization", "Bearer "+tk)
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, req)
@@ -644,7 +644,7 @@ func TestAuthMiddleware_Concurrent(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+			req := httptest.NewRequest(http.MethodGet, "/search", nil)
 			if i%2 == 0 {
 				req.Header.Set("Authorization", "Bearer t-conc-0001")
 			}
@@ -675,4 +675,124 @@ func TestAuthMiddleware_Concurrent(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+// ------------------------------------------------------------------
+// R21 T3：运维端点鉴权豁免（G10 回归守护）
+// ------------------------------------------------------------------
+
+// TestAuthMiddleware_OperationalEndpointsExempt 运维端点（/healthz、/health、/metrics）
+// 必须**免鉴权**：否则 rc.d supervisor 的 `fetch /healthz` 会 401，服务永远无法启动（T3 实测）。
+func TestAuthMiddleware_OperationalEndpointsExempt(t *testing.T) {
+	resetAuthState(t)
+	InitAgentTokens(map[string]AgentIdentity{
+		"t-trae-000001": {AgentID: "trae", UserID: "skywalk", TenantID: "dshteam"},
+	})
+	for _, path := range []string{"/healthz", "/health", "/metrics"} {
+		reached := false
+		h := AuthMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			reached = true
+		}))
+		req := httptest.NewRequest(http.MethodGet, path, nil) // 故意不带 token
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusOK || !reached {
+			t.Errorf("%s: want 200 且 handler 可达（免鉴权），got code=%d reached=%v", path, w.Code, reached)
+		}
+	}
+}
+
+// TestAuthMiddleware_BusinessEndpointsStillGuarded 豁免**只针对运维端点**；
+// 业务端点（/search、/tools/*、/audit）在配置 token 后仍必须 401。
+func TestAuthMiddleware_BusinessEndpointsStillGuarded(t *testing.T) {
+	resetAuthState(t)
+	InitAgentTokens(map[string]AgentIdentity{
+		"t-trae-000001": {AgentID: "trae", UserID: "skywalk", TenantID: "dshteam"},
+	})
+	for _, path := range []string{
+		"/search", "/tools/memory/save", "/tools/memory/recall",
+		"/tools/memory/plan", "/audit", "/memories",
+	} {
+		reached := false
+		h := AuthMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			reached = true
+		}))
+		req := httptest.NewRequest(http.MethodGet, path, nil) // 不带 token
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized || reached {
+			t.Errorf("%s: want 401 且 handler 不可达，got code=%d reached=%v", path, w.Code, reached)
+		}
+	}
+}
+
+// TestRequireIdentity_OperationalEndpointsExempt RequireIdentity 同口径豁免，
+// 否则 LIMS_REQUIRE_AUTH=1 时健康检查同样会被挡住（服务起不来）。
+func TestRequireIdentity_OperationalEndpointsExempt(t *testing.T) {
+	resetAuthState(t)
+	t.Setenv(EnvRequireAuth, "1")
+	for _, path := range []string{"/healthz", "/metrics"} {
+		reached := false
+		h := RequireIdentity(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			reached = true
+		}))
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusOK || !reached {
+			t.Errorf("%s under RequireIdentity: want 200 reached, got code=%d reached=%v", path, w.Code, reached)
+		}
+	}
+	// 业务端点仍应 401
+	reached := false
+	h := RequireIdentity(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		reached = true
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/search", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized || reached {
+		t.Errorf("/search under RequireIdentity: want 401 unreached, got code=%d reached=%v", w.Code, reached)
+	}
+}
+
+// TestSingleIdentity 校验 stdio 单身份解析（R21 T3 解 D-1）：
+// 恰好一条 → 返回该 token 与身份；0 条或多条 → 不返回（不猜测，避免身份错配）。
+func TestSingleIdentity(t *testing.T) {
+	resetAuthState(t)
+	if _, _, ok := SingleIdentity(); ok {
+		t.Error("空表不应返回单身份")
+	}
+	InitAgentTokens(map[string]AgentIdentity{
+		"t-codearts-000001": {AgentID: "codearts", UserID: "skywalk", TenantID: "dshteam"},
+	})
+	tok, id, ok := SingleIdentity()
+	if !ok || tok != "t-codearts-000001" || id.AgentID != "codearts" ||
+		id.UserID != "skywalk" || id.TenantID != "dshteam" {
+		t.Fatalf("单条表解析错误: tok=%q id=%+v ok=%v", tok, id, ok)
+	}
+	// 多条 → 必须拒绝（stdio 无法区分身份，宁可无身份也不冒充）
+	InitAgentTokens(map[string]AgentIdentity{
+		"t-a-000001": {AgentID: "a", UserID: "u", TenantID: "t"},
+		"t-b-000002": {AgentID: "b", UserID: "u", TenantID: "t"},
+	})
+	if _, _, ok := SingleIdentity(); ok {
+		t.Error("多条 token 时不应返回单身份（否则身份可能错配）")
+	}
+}
+
+// TestInjectIdentityArgsWithFallback stdio 无 context 身份时，
+// 回退到进程级单身份注入 tenant_id/user_id/agent_id（否则 REST 端 400 tenant_id required）。
+func TestInjectIdentityArgsWithFallback(t *testing.T) {
+	resetAuthState(t)
+	fb := Identity{AgentID: "codearts", UserID: "skywalk", TenantID: "dshteam"}
+	args := injectIdentityArgsWith(context.Background(), map[string]any{}, &fb)
+	if args["tenant_id"] != "dshteam" || args["user_id"] != "skywalk" || args["agent_id"] != "codearts" {
+		t.Fatalf("回退身份未注入: %+v", args)
+	}
+	// 无回退且无 context → 原样返回（零回归）
+	args2 := injectIdentityArgsWith(context.Background(), map[string]any{}, nil)
+	if _, exists := args2["tenant_id"]; exists {
+		t.Fatalf("无身份时不应注入 tenant_id: %+v", args2)
+	}
 }

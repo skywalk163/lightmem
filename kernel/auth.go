@@ -99,6 +99,31 @@ func InitAgentTokens(tokens map[string]AgentIdentity) {
 	registry.load(tokens)
 }
 
+// SingleIdentity 在 token 表恰好只有**一条**时返回其 token 与身份，供 stdio 通道使用。
+//
+// R21 T3（解 D-1）：stdio 没有请求头，无法像 HTTP 那样从 Authorization 解析身份。
+// 部署约定：stdio 场景下每个 Agent 各起一个进程，进程的 LIMS_AGENT_TOKENS 只装
+// **该 Agent 自己那一条** token —— 于是「进程身份」唯一确定，可用于：
+//   - 向 REST 上游带 Authorization（否则非回环调用会 401）；
+//   - 透传 X-Lightmem-* 身份（agent/user/tenant）。
+//
+// 表内多于一条时返回 ok=false：多身份无法在 stdio 下区分，**不猜测**（避免冒充风险）。
+func SingleIdentity() (string, Identity, bool) {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	if len(registry.tokens) != 1 {
+		return "", Identity{}, false
+	}
+	for tok, v := range registry.tokens {
+		return tok, Identity{
+			AgentID:  v.AgentID,
+			UserID:   v.UserID,
+			TenantID: v.TenantID,
+		}, true
+	}
+	return "", Identity{}, false
+}
+
 // LoadAgentTokens 从环境变量 LIMS_AGENT_TOKENS 或 profile auth 段装配 token 表。
 // 环境变量优先；值为 JSON 字符串或指向 JSON 文件路径时均支持。
 // 返回空表表示未配置（AuthMiddleware 走透传路径）。

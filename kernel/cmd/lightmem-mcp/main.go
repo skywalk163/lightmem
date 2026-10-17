@@ -44,6 +44,22 @@ func main() {
 	mcpSrv.SetServerVersion("0.2.0")
 	_ = timeout
 
+	// R21 T3（解 D-1）：stdio 没有请求头，无法像 HTTP 那样从 Authorization 解析身份。
+	// 部署约定：stdio 场景每个 Agent 各起一个进程，其 LIMS_AGENT_TOKENS 只装该 Agent
+	// 自己那一条 token。此时「进程身份」唯一确定，用它：
+	//   ① 向 REST 上游带 Authorization（否则 Windows→0.88 非回环调用必 401）；
+	//   ② 透传 X-Lightmem-* 身份。
+	// 表内多于一条（多身份无法区分）时**不猜测**，保持无身份（会被上游 401 拒），
+	// 以免把身份错配给错误的 Agent。
+	if tok, id, ok := kernel.SingleIdentity(); ok {
+		mcpSrv.SetUpstreamCredentials(tok, &id)
+		log.Printf("[mcp] stdio 单身份已装配：agent=%s user=%s tenant=%s",
+			id.AgentID, id.UserID, id.TenantID)
+	} else {
+		log.Printf("[mcp] 未装配 stdio 单身份（token 表 0 条或多条）→ 上游调用可能 401；" +
+			"stdio 部署请让每个 Agent 各带自己那一条 token")
+	}
+
 	switch *transport {
 	case "stdio":
 		log.Printf("[mcp] stdio transport: lightmem-mcp v0.2.0 base=%s", *restBase)
