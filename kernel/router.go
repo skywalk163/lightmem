@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -146,12 +147,38 @@ func (s *APIServer) handleUpsert(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, saved)
 }
 
+// handleSearch GET /search 文本检索（§4.4）。
+//
+// 参数口径（R19-A 定稿，四处消费者统一：README / SDK-Python / SDK-JS / MCP 桥）：
+//   - 文本参数以 `q` 为准；`text` 为历史别名（早期 README 示例用 `text`）。
+//     二者同时出现时 **`q` 优先**，`q` 为空才回落到 `text`——两个名字都不得移除。
+//   - 空查询语义：`q` 与 `text` 均缺失、或仅含空白 → **400 {"error":"q or text required"}**。
+//     原因：后端对空 needle 不做文本过滤（`backend_sqlite.go` 每条 score=0.1、
+//     `backend_pg.go` 不加 LIKE 条件），空查询等于「列举作用域全部」，
+//     极易被误用成全量导出（R160 I-12 的直接诱因）。
+//   - `tenant_id` 必填（缺 → 400）；无 `tenant_id` 时可见性过滤会把结果静默清空，
+//     与文档承诺的 400 不符，故在此显式拒绝。
+//   - 无命中返回 `[]`（不返回 `null`），保证「空集」是可解析的数组。
 func (s *APIServer) handleSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	tenant := q.Get("tenant_id")
+	if tenant == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "tenant_id required"})
+		return
+	}
+	// `q` 优先、`text` 兜底；两端空白一律裁剪，避免 `% 词 %` 永远匹配不上。
+	text := strings.TrimSpace(q.Get("q"))
+	if text == "" {
+		text = strings.TrimSpace(q.Get("text"))
+	}
+	if text == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "q or text required"})
+		return
+	}
 	params := QueryParams{
-		TenantID:    q.Get("tenant_id"),
+		TenantID:    tenant,
 		Viewer:      q.Get("viewer"),
-		Text:        q.Get("q"),
+		Text:        text,
 		MemoryKinds: parseKinds(q.Get("kind")),
 		TopK:        atoi(q.Get("top_k"), 10),
 	}
@@ -161,6 +188,10 @@ func (s *APIServer) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	if res == nil {
+		// 后端无命中时返回 nil slice，JSON 会编码成 null；统一成空数组。
+		res = []QueryResult{}
 	}
 	writeJSON(w, http.StatusOK, res)
 }

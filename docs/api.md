@@ -1,7 +1,8 @@
 # LightMem API 文档
 
-> 版本：v0.2.0 ｜ 更新日期：2026-10-14 ｜ 对应 kernel 版本：R8 收口态
+> 版本：v0.2.1 ｜ 更新日期：2026-10-17 ｜ 对应 kernel 版本：R19-A 收口态
 > 本文档与 `kernel/router.go` 路由表逐位对齐，不臆造端点。
+> R19-A 变更：`GET /search` 参数口径统一（`q` 权威、`text` 兼容别名、空查询 400、无命中 `[]`）。
 
 ## 目录
 
@@ -70,7 +71,7 @@ LightMem 采用**租户隔离 + 用户可见性**双层权限模型，不依赖�
 | `GET` | `/healthz` | 生产级健康检查（R9-A，main.go 外层挂载） | §5.3 |
 | `GET` | `/profile` | 获取当前 profile 配置 | — |
 | `POST` | `/memories` | 创建 / 幂等写入一条记忆 | §4.4 |
-| `GET` | `/search` | 文本检索 | §4.4 |
+| `GET` | `/search` | 文本检索（`q` 权威 / `text` 别名；空查询 400） | §4.4 |
 | `POST` | `/search/vector` | 向量检索（需 embedder） | §4.2 |
 | `POST` | `/mem/router` | 记忆路由 + 多信号融合（Agent 直连） | §3.1 / §3.4 |
 | `POST` | `/tools/memory/recall` | 跨层召回 + 多信号融合 | §3.1 / §3.4 |
@@ -245,11 +246,16 @@ Content-Type: application/json
 
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `q` | string | ✅ | 查询文本 |
+| `q` | string | ✅ | 查询文本（权威参数） |
+| `text` | string | ❌ | `q` 的历史别名；仅当 `q` 为空时生效（R19-A 兼容期，未定移除时间） |
 | `tenant_id` | string | ✅ | 租户 ID |
 | `viewer` | string | ❌ | 可见性过滤的观察者 ID |
 | `top_k` | int | ❌ | 返回条数，默认 10 |
 | `kind` | string | ❌ | 记忆类型过滤（逗号分隔，如 `fact,preference`） |
+
+> **参数优先级**：`q` 优先，`q` 为空（含仅空白）时回落到 `text`；两者同时出现时 `text` 被忽略。
+> **空查询语义**：`q` 与 `text` 均缺失或仅含空白 → `400 {"error":"q or text required"}`。
+> 后端对空文本不做过滤（等价于列举作用域全部），故不提供隐式全量列表；导出请用 `POST /api/v1/gdpr/export`。
 
 **请求示例**
 
@@ -271,12 +277,14 @@ GET /search?q=中文交流&tenant_id=demo-tenant&viewer=demo-user&top_k=10
 ]
 ```
 
+> 无命中返回空数组 `[]`（不是 `null`）。
+
 **状态码**
 
 | 状态码 | 含义 |
 |---|---|
-| 200 | 检索成功 |
-| 400 | 缺少 `tenant_id` 或 `q` |
+| 200 | 检索成功（含无命中的 `[]`） |
+| 400 | 缺少 `tenant_id`，或 `q`/`text` 均为空 |
 | 500 | 后端错误 |
 
 ---

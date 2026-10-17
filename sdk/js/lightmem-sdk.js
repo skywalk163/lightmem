@@ -162,6 +162,10 @@ export class LightMemClient {
   /**
    * GET /search 文本检索。
    *
+   * 参数口径（R19-A 统一）：发送 `q`（权威参数）；服务端同时接受历史别名
+   * `text`，两者并存时 `q` 优先。空查询 / 缺 tenant_id 返回 400；
+   * 无命中返回空数组 `[]`（不是 `null`）。
+   *
    * @param {string} q - 查询文本
    * @param {string} tenantId - 租户 ID
    * @param {Object} [opts] - 选项
