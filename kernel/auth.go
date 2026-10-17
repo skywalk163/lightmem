@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -42,11 +43,25 @@ var profileRequireAuth atomic.Bool
 
 // Identity 由 token 解析出的可信身份；服务端唯一真源。
 // TokenID 是匹配到的 token 键（脱敏展示用，不应出现在业务字段里）。
+//
+// R22 扩展（docs/token-management-design.md §4）：
+//   - Kind：Agent（AI）还是 User（人）——为未来"人也可用"的论坛属性预留；
+//   - ID / Roles / Scope / Issuer / ExpiresAt：细粒度授权与审计。
+//   以下 R22 字段全部"只增不改"：既有 4 个字段语义不变，既有调用零改动。
 type Identity struct {
+	// 既有字段（R21，语义冻结）
 	AgentID  string // 哪个 Agent 在操作
 	UserID   string // 以哪个用户身份（决定 private 可见性）
 	TenantID string // 租户边界
 	TokenID  string // 命中的 token 标识（脱敏展示）
+
+	// R22 新增字段（缺省零值 = 与 R21 行为完全一致）
+	Kind      IdentityKind // Agent 或 User；零值 = Agent（兼容 R21）
+	ID        string       // 主体内部 id（agent_id 或 user_id）
+	Roles     []string     // RBAC：admin / user / auditor（空 = 普通主体）
+	Scope     []string     // 细粒度授权，如 memories:write（空 = 全部权限）
+	Issuer    string       // internal | ory_kratos | sso:<provider>（空 = internal）
+	ExpiresAt time.Time    // 零值 = 永不过期
 }
 
 // AgentIdentity token 映射目标（profile auth.agent_tokens 值形态）
@@ -253,6 +268,11 @@ func isOperationalEndpoint(path string) bool {
 //	未配置 token → 透传（红线④，零回归）；已配置 → 缺/错 token 401。
 //	运维端点（/healthz、/health、/metrics）豁免（见 isOperationalEndpoint）。
 func AuthMiddleware(next http.Handler) http.Handler {
+	// R22：注入的 Authenticator 优先（外部 IdP / Ory Kratos / 前台服务）。
+	// 缺省未注入时走下方既有静态表路径（零回归）。
+	if a := activeAuthenticator(); a != nil {
+		return authMiddlewareWith(a, next)
+	}
 	if registry.empty() {
 		log.Printf("[auth] LIMS_AGENT_TOKENS / profile auth 未配置，AuthMiddleware 透传（R21-B 默认关，红线④）")
 		// 即便未启用 token 鉴权，仍接受**回环来源**的身份头，使 lightmem-mcp(:18444)

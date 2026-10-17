@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -547,10 +548,10 @@ func TestIdentityFromContextAndMust(t *testing.T) {
 	}
 	id := Identity{AgentID: "trae", UserID: "skywalk", TenantID: "dshteam"}
 	got, ok := IdentityFromContext(withIdentity(context.Background(), id))
-	if !ok || got != id {
+	if !ok || !reflect.DeepEqual(got, id) {
 		t.Fatalf("roundtrip: got %+v ok=%v", got, ok)
 	}
-	if MustIdentity(withIdentity(context.Background(), id)) != id {
+	if !reflect.DeepEqual(MustIdentity(withIdentity(context.Background(), id)), id) {
 		t.Error("MustIdentity mismatch")
 	}
 	func() {
