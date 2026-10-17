@@ -94,6 +94,13 @@ func (s *APIServer) Handler() http.Handler {
 	mux.HandleFunc("POST /tools/memory/update", s.handleToolUpdate)
 	mux.HandleFunc("POST /tools/memory/feedback", s.handleToolFeedback)
 	mux.HandleFunc("POST /tools/memory/forget", s.handleToolForget)
+	// R21-C 工作流记忆工具面（计划/步骤/总结/进度/列计划）
+	mux.HandleFunc("POST /tools/memory/goal", s.handleGoalCreate)
+	mux.HandleFunc("POST /tools/memory/goal/progress", s.handleGoalProgress)
+	mux.HandleFunc("POST /tools/memory/goal/state", s.handleGoalState)
+	mux.HandleFunc("GET /tools/memory/plan", s.handlePlanList)
+	mux.HandleFunc("POST /tools/memory/step", s.handleStepAdd)
+	mux.HandleFunc("POST /tools/memory/summary", s.handleSummaryAdd)
 	// P3 检索 trace（§3.4）
 	mux.HandleFunc("GET /search/trace", s.handleSearchTrace)
 	// P4 审计 + 监控（§3.10/§5.3）

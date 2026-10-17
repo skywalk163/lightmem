@@ -54,12 +54,18 @@ func CanTransition(from, to GoalState) bool {
 	return false
 }
 
-// CreateGoal 创建目标记忆
+// CreateGoal 创建目标记忆（旧签名，保留转发，零破坏）。
+// 新代码请用 CreateGoalWithTenant 显式传 tenant。
 func (m *GoalManager) CreateGoal(ctx context.Context, goal, deadline string, kpi *KPI, constraints []string, actor string) (*Memory, error) {
+	return m.CreateGoalWithTenant(ctx, goal, deadline, kpi, constraints, actor, "default")
+}
+
+// CreateGoalWithTenant 创建目标记忆（解 G5：tenant 由调用方传入）。
+func (m *GoalManager) CreateGoalWithTenant(ctx context.Context, goal, deadline string, kpi *KPI, constraints []string, actor, tenant string) (*Memory, error) {
 	m2 := &Memory{
 		MemoryID:       newMemoryID(),
 		IdempotencyKey: newMemoryID(),
-		TenantID:       "default",
+		TenantID:       tenant,
 		UserID:         actor,
 		MemoryKind:     KindGoal,
 		Fact:           goal,
@@ -84,9 +90,15 @@ func (m *GoalManager) CreateGoal(ctx context.Context, goal, deadline string, kpi
 	return m2, nil
 }
 
-// UpdateGoalProgress 更新目标进度（状态机驱动）
+// UpdateGoalProgress 更新目标进度（旧签名，保留转发，零破坏）。
+// 新代码请用 UpdateGoalProgressWithTenant 显式传 tenant。
 func (m *GoalManager) UpdateGoalProgress(ctx context.Context, memoryID string, progress float64, actor string) error {
-	existing, err := m.backend.Get(ctx, memoryID, actor, "default")
+	return m.UpdateGoalProgressWithTenant(ctx, memoryID, progress, actor, "default")
+}
+
+// UpdateGoalProgressWithTenant 更新目标进度（解 G5：tenant/viewer 由调用方传入）。
+func (m *GoalManager) UpdateGoalProgressWithTenant(ctx context.Context, memoryID string, progress float64, actor, tenant string) error {
+	existing, err := m.backend.Get(ctx, memoryID, actor, tenant)
 	if err != nil {
 		return err
 	}
@@ -120,9 +132,15 @@ func (m *GoalManager) UpdateGoalProgress(ctx context.Context, memoryID string, p
 	return nil
 }
 
-// SetGoalState 设置目标状态
+// SetGoalState 设置目标状态（旧签名，保留转发，零破坏）。
+// 新代码请用 SetGoalStateWithTenant 显式传 tenant。
 func (m *GoalManager) SetGoalState(ctx context.Context, memoryID string, state GoalState, actor string) error {
-	existing, err := m.backend.Get(ctx, memoryID, actor, "default")
+	return m.SetGoalStateWithTenant(ctx, memoryID, state, actor, "default")
+}
+
+// SetGoalStateWithTenant 设置目标状态（解 G5：tenant/viewer 由调用方传入）。
+func (m *GoalManager) SetGoalStateWithTenant(ctx context.Context, memoryID string, state GoalState, actor, tenant string) error {
+	existing, err := m.backend.Get(ctx, memoryID, actor, tenant)
 	if err != nil {
 		return err
 	}
