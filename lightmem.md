@@ -1880,3 +1880,19 @@ R14 任务书 §九.3 写"holdout_v2 全 L1 且无 entity / recorded_at"，其�
 > 说明：本节同时覆盖 R17 §5.2 登记的「pg e2e 夹具隔离问题（R10-B P3 同款）」——已在 R18 A1 通过 `uniqueTenant` / `uniqueID`（`os.Getpid()` + `time.Now().UnixNano()`）前缀彻底隔离，fresh 库与历史残留库上均可确定性 PASS，无需 TRUNCATE 也无需改迁移 SQL。
 
 | 配套交付物（本文档之外） | `docs/光明记忆应用包生态与差异化定位_v1.0.md`（包生态设计 + 竞品对照 + M1–M10 口径） |
+
+### D.9 缺陷账 L-217 关闭记录（R19-B 新增，如实登记）
+
+**缺陷编号**：L-217（来源：R160 联调 I-15 — Solo / SQLite 后端不持久化）
+**状态**：✅ 已关闭（R19 B 线，方案 a 真 SQLite）
+
+| 字段 | 内容 |
+|---|---|
+| 现象 | Solo 档写入成功，但进程重启后全部记忆丢失；`data/` 目录始终为空，磁盘上不存在任何 `.sqlite` 文件 |
+| 根因 | `kernel/backend_sqlite.go` 原是内存骨架（`path` 只赋值、从不 I/O，数据存于 `map[string]*Memory`）；`/health` 后端名 `sqlite-skeleton/sqlite-vec` 已如实暴露非持久化 |
+| 裁定结论 | **方案 a（真 SQLite）**：2026-10-17 业主裁定，允许触碰红线⑦（破「grpc/protobuf 唯一例外」纪律），引入 `modernc.org/sqlite` 纯 Go 驱动（无 cgo） |
+| 实际处置 | ① `kernel/backend_sqlite.go` 重写为真实磁盘持久化后端：完整 `Memory` 以 JSON 存入 `memories(memory_id PK, data)`；`newSQLiteBackend` 对 nil/空路径用 `:memory:`（测试隔离、零临时文件残留），显式路径落盘（生产 `./data/lims.sqlite`，WAL）；② `kernel/go.mod`+`go.sum`（root 与 kernel 双 module）新增 `modernc.org/sqlite v1.34.4` 及传递依赖；③ `Name()` 由 `sqlite-skeleton/sqlite-vec` 改为 `sqlite`，`/health` 不再含 `skeleton`；④ 新增 `kernel/backend_sqlite_persist_test.go` 真实证明「写入 → Close → 重开同路径 → 数据仍在」（含跨实例隔离、幂等键、并发写入、17 接口持久化行为）；⑤ `server_metrics_test.go` 旧断言 `sqlite-skeleton` 同步改为 `sqlite` |
+| 验收 | `sh scripts/gate.sh` 在 0.88 跑通：**PASS 13 / FAIL 0 / SKIP 1**（PG env 未配置 → [11] SKIP）；`go test -count=1 -run 'Persist' ./kernel/` 全 PASS；`go vet ./...` rc=0；`gofmt -l` 全仓归零 |
+| 遗留 | 方案 a 仅落地标量/JSON 持久化，**未接入 sqlite-vec 向量**（VectorSearch 仍降级为文本，调度层 fail-open）；profile 中 `vector_extension: sqlite-vec` 暂为占位、不构成能力承诺 |
+
+> 说明：R160 的 MCP 桥 `mcp__lightmem__lightmem_search` 文本过滤问题属 A 线（参数口径），与本 B 线（持久化）正交；B 线不解决检索语义。R19 A 线另走任务书 §三 收口。
