@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "lightmem": {
+      "type": "streamable_http",
+      "url": "http://192.168.0.88:18444/mcp",
+      "headers": {
+        "Authorization": "Bearer <YOUR_TOKEN>"
+      },
+      "alwaysLoad": true,
+      "disabled": false,
+      "connect_timeout": 15,
+      "execute_timeout": 60
+    }
+  },
+  "boxAgentManagedMcpVersion": 1
+}

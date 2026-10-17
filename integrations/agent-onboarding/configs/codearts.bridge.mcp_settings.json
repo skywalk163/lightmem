@@ -1,0 +1,19 @@
+{
+  "mcp": {
+    "lightmem": {
+      "enabled": true,
+      "timeout": 60000,
+      "type": "local",
+      "command": [
+        "<PYTHON_EXE>",
+        "<BRIDGE_PY>"
+      ],
+      "environment": {
+        "LIGHTMEM_BASE_URL": "http://192.168.0.88:18443",
+        "LIGHTMEM_TENANT_ID": "<TENANT_ID>",
+        "LIGHTMEM_USER_ID": "<USER_ID>",
+        "LIGHTMEM_AGENT_ID": "<AGENT_ID>"
+      }
+    }
+  }
+}

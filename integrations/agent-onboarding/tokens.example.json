@@ -1,0 +1,12 @@
+{
+  "_note": "示例 token 表：把每个值换成 B 线签发的真实 token 后再传给 gen_configs.ps1 -TokenFile。本文件里的值全部是占位符，不是可用凭据。",
+  "_note2": "键名 = 模板里的 agent 键（见 gen_configs.ps1 -ListAgents）。值会替换模板中的 <YOUR_TOKEN>。",
+  "dsh": "t-dsh-REPLACE-ME-0001",
+  "trae": "t-trae-REPLACE-ME-0002",
+  "trae-solo": "t-trae-solo-REPLACE-ME-0003",
+  "workbuddy": "t-workbuddy-REPLACE-ME-0004",
+  "raccoon": "t-raccoon-REPLACE-ME-0005",
+  "opencode": "t-opencode-REPLACE-ME-0006",
+  "codearts": "t-codearts-REPLACE-ME-0007",
+  "roo-cline": "t-roo-cline-REPLACE-ME-0008"
+}
