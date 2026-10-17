@@ -19,6 +19,10 @@
 #   sudo sh install_lims_rc_d.sh --binary /path/to/lightmem-kernel   # 用已编译好的二进制
 #   sudo sh install_lims_rc_d.sh --no-start           # 只安装不启动
 #   sudo sh install_lims_rc_d.sh --pg-db lims_dsh --port 18443
+#   sudo sh install_lims_rc_d.sh --tokens-file /tmp/agent-tokens.json  # R21 T3：启用鉴权
+#
+# R21 T3 新增 --tokens-file：安装 agent token 表到 $PREFIX/agent-tokens.json（0600），
+# 服务启动时注入 LIMS_AGENT_TOKENS。**未提供且无既有表** → 透传态（无鉴权）。
 #
 # 重要：本脚本**不以 root 编译**。0.88 无外网，Go 依赖只能命中 module cache，
 # 而 `sudo` 会重置环境（丢掉 workbuddy 的 GOPATH/GOMODCACHE），root 下编译必然
@@ -41,6 +45,7 @@ PG_DB=lims_dsh
 SVC_USER=workbuddy
 DO_START=1
 BINARY=""
+TOKENS_FILE=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -51,6 +56,7 @@ while [ $# -gt 0 ]; do
         --pg-db)    PG_DB="$2"; shift 2 ;;
         --user)     SVC_USER="$2"; shift 2 ;;
         --binary)   BINARY="$2"; shift 2 ;;
+        --tokens-file) TOKENS_FILE="$2"; shift 2 ;;
         --no-start) DO_START=0; shift ;;
         -h|--help)  sed -n '2,32p' "$0"; exit 0 ;;
         *) echo "未知参数：$1" >&2; exit 2 ;;
@@ -99,6 +105,26 @@ install -m 644 "$SRC/profiles/lims-family.profile.yaml" "$PREFIX/profiles/"
 install -m 644 "$SRC/profiles/lims-solo.profile.yaml"   "$PREFIX/profiles/"
 install -m 644 "$SRC/kernel/migrations/001_pgvector.up.sql" "$PREFIX/migrations/"
 
+# ---------------------------------------------------------------------------
+# 2b) agent token 表（R21 T3；仅显式给出时更新；0600 + 服务用户属主）
+#     目的：业务端点（/search、/tools/*）要求 Bearer token，避免 18443 裸奔；
+#     运维端点（/healthz、/metrics）由 kernel 侧豁免，supervisor 健康检查不受影响。
+# ---------------------------------------------------------------------------
+if [ -n "$TOKENS_FILE" ]; then
+    [ -r "$TOKENS_FILE" ] || { echo "token 文件不可读：$TOKENS_FILE" >&2; exit 1; }
+    if ! python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert isinstance(d,dict) and d' "$TOKENS_FILE" 2>/dev/null; then
+        echo "token 文件不是非空 JSON 对象：$TOKENS_FILE" >&2; exit 1
+    fi
+    install -o "$SVC_USER" -g "$(id -g "$SVC_USER" 2>/dev/null || echo wheel)" -m 600 \
+        "$TOKENS_FILE" "$PREFIX/agent-tokens.json"
+    _n=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$TOKENS_FILE")
+    say "agent token 表已安装：$PREFIX/agent-tokens.json（$_n 条，0600，物主 $SVC_USER）"
+elif [ -f "$PREFIX/agent-tokens.json" ]; then
+    say "保留既有 token 表（未传 --tokens-file）"
+else
+    say "未提供 token 表 → REST 以**透传态**运行（无鉴权；生产不建议）"
+fi
+
 {
     echo "installed_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
     echo "source_commit=$(cd "$SRC" && git rev-parse HEAD 2>/dev/null || echo unknown)"
@@ -143,9 +169,11 @@ sysrc lightmem_pg_user="$PG_USER"  >/dev/null
 sysrc lightmem_pg_db="$PG_DB"      >/dev/null
 sysrc lightmem_log=/var/log/lightmem.log            >/dev/null
 sysrc lightmem_pidfile=/var/run/lightmem/lightmem.pid >/dev/null
+sysrc lightmem_tokens_file="$PREFIX/agent-tokens.json" >/dev/null
 echo "  已设置："
 for k in lightmem_enable lightmem_chdir lightmem_user lightmem_listen \
-         lightmem_pg_host lightmem_pg_port lightmem_pg_user lightmem_pg_db; do
+         lightmem_pg_host lightmem_pg_port lightmem_pg_user lightmem_pg_db \
+         lightmem_tokens_file; do
     printf '    %s="%s"\n' "$k" "$(sysrc -n "$k" 2>/dev/null)"
 done
 
