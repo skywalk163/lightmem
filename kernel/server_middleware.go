@@ -165,3 +165,37 @@ func TraceIDFromContext(ctx context.Context) uint64 {
 	}
 	return 0
 }
+
+// ------------------------------------------------------------------
+// R21-B：AuthMiddleware 装配说明（仅追加；上述三个中间件语义零改动）
+// ------------------------------------------------------------------
+//
+// 真源：`lightmem/.dumate/inbox/_R21_并行任务书.md` §3.1 / §五 B 线；
+// 实现见 `kernel/auth.go`（Identity / IdentityFromContext / AuthMiddleware /
+// RequireIdentity），本文件只登记装配约定，不承载鉴权逻辑。
+//
+// 推荐装配顺序（main.go 与 cmd/lightmem-mcp 一致）：
+//
+//	handler := WithMiddleware(mux,
+//	    LoggingMiddleware,     // 最外层：401 也记访问日志
+//	    MetricsMiddleware(m),  // 计数覆盖 401（鉴权失败也是请求）
+//	    RecoverMiddleware,     // panic 兜底
+//	    TraceIDMiddleware,     // 先分 trace id：401 响应也带 X-Trace-Id
+//	    AuthMiddleware,        // token → Identity 注入 context（未配置则透传）
+//	    RequireIdentity,       // LIMS_REQUIRE_AUTH=1 时强制已认证（默认透传）
+//	)
+//
+// 默认态（未配置 LIMS_AGENT_TOKENS 且 profile 无 auth.agent_tokens）：
+//
+//	AuthMiddleware 透传、RequireIdentity 放行 → 与 R20 行为逐位一致（红线④）。
+//
+// 写方身份强制（handler 侧契约，C 线 router_tools.go 消费）：
+//
+//	所有写路径（save/update/feedback/forget）的 actor/tenant 一律经
+//	ResolveActor(ctx, bodyUserID, bodyTenantID) 解析：身份存在时以 token
+//	为准、忽略 body（防冒充，G4 修法）；private 记忆的 owner 必须是 token
+//	的 user_id（EnforcePrivateOwner 判定，违反应 403）。
+//
+// 启动装配（main.go）：kernel.ConfigureAuth(kernel.AuthOptions{ProfilePath: …})
+// 一键完成「env LIMS_AGENT_TOKENS（JSON 或文件路径）优先 → profile auth.agent_tokens
+// 回落 → 两者皆无则透传」的装配；配置损坏返回 error，由 main fail-fast。

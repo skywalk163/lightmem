@@ -180,3 +180,22 @@ scaling:
   nodes: 1
   # 预留：后续可升 SMB 主备
   upgrade_path: smb
+# ---------- Agent 鉴权（R21-B 新增） ----------
+# 共享记忆大脑的可信边界：每个 Agent 一份 token，服务端按 token 定身份
+# （agent_id / user_id / tenant_id），杜绝 body 冒充（G4 修法）。
+#
+# 默认态：agent_tokens 为空 → AuthMiddleware 透传，行为与 R20 逐位一致（红线④）。
+# 启用方式（二选一，env 优先）：
+#   1) env LIMS_AGENT_TOKENS='{"t-xxx":{"agent_id":"…","user_id":"…","tenant_id":"…"}}'
+#      （也可是指向 JSON 文件的路径）
+#   2) 在下方 agent_tokens 填入 token → 身份绑定（生产建议放文件权限 0600 的 profile）
+# require_auth: true（或 env LIMS_REQUIRE_AUTH=1）→ 未认证请求一律 401。
+#
+# ⚠️ token 是凭证：勿提交真实 token 到 git；示例一律注释。
+auth:
+  # require_auth: false
+  agent_tokens: {}
+  # agent_tokens:
+  #   "t-dsh-8f3a...":   {agent_id: deepseek-harness, user_id: dsh-agent, tenant_id: dshteam}
+  #   "t-trae-...":      {agent_id: trae,            user_id: skywalk,   tenant_id: dshteam}
+  #   "t-workbuddy-...": {agent_id: workbuddy,       user_id: skywalk,   tenant_id: dshteam}

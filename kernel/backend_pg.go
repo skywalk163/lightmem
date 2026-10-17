@@ -223,16 +223,47 @@ func (b *pgBackend) Get(ctx context.Context, memoryID, viewer, tenant string) (*
 	}
 	return &m, nil
 }
+
+// pgVisibilityPredicate 生成 PG 后端的可见性硬过滤谓词（R21-B 修 G8，P0 越权读）。
+//
+// 逐条对齐 backend_sqlite.go 的 canView 规范语义（SQLite/Qdrant 本就正确，仅 PG 分叉；
+// 0.88 生产档 family+pgvector 正踩此分叉）：
+//
+//	private      → viewer 非空 且 user_id = viewer（仅 owner 本人）
+//	shared_user  → viewer 非空 且 (user_id = viewer 或 readers 含 viewer)
+//	tenant       → tenant 非空 且 tenant_id = tenant
+//	cross_tenant → tenant 非空 且 shared_with_tenants 含 tenant
+//
+// 修复前的缺陷（G8，E 线 0.88 实测复现）：
+//
+//	(visibility = $1 OR (visibility='shared_user' AND permission->'readers' ? $2)
+//	 OR tenant_id = $3 OR $3 = ANY(shared_with_tenants))
+//
+// 两个独立错误：① $1 传的是 q.Viewer（用户名）却与 visibility 枚举比较 → 恒假，
+// owner 校验形同虚设；② tenant_id = $3 无差别放行 → private 行对同租户所有人
+// （含不传 viewer）可见。既有单测跑在 SQLite 上，永远测不到此分叉（绿灯假象）。
+//
+// 参数名由调用方给（$N 占位），便于 Query 与 VectorSearch 复用同一谓词。
+func pgVisibilityPredicate(viewerParam, tenantParam string) string {
+	return fmt.Sprintf(`(
+       (visibility = 'private'      AND user_id = %[1]s AND %[1]s <> '')
+    OR (visibility = 'shared_user' AND %[1]s <> '' AND (user_id = %[1]s OR permission->'readers' ? %[1]s))
+    OR (visibility = 'tenant'      AND tenant_id = %[2]s AND %[2]s <> '')
+    OR (visibility = 'cross_tenant' AND %[2]s <> '' AND %[2]s = ANY(shared_with_tenants))
+)`, viewerParam, tenantParam)
+}
+
 func (b *pgBackend) Query(ctx context.Context, q QueryParams) ([]QueryResult, error) {
 	topK := q.TopK
 	if topK <= 0 {
 		topK = 10
 	}
+	// R21-B 修 G8：谓词改用 $1=viewer / $2=tenant 两个独立参数（对齐 canView）。
 	where := []string{
-		"(visibility = $1 OR (visibility = 'shared_user' AND permission->'readers' ? $2) OR tenant_id = $3 OR $3 = ANY(shared_with_tenants))",
+		pgVisibilityPredicate("$1", "$2"),
 	}
-	args := []any{q.Viewer, q.Viewer, q.TenantID}
-	argIdx := 3
+	args := []any{q.Viewer, q.TenantID}
+	argIdx := 2
 
 	if q.Text != "" {
 		argIdx++
@@ -306,17 +337,18 @@ func (b *pgBackend) VectorSearch(ctx context.Context, q QueryParams) ([]QueryRes
 	}
 	vecStr := vectorToString(q.Vector)
 
+	// R21-B 修 G8：与 Query 同一谓词（$2=viewer / $3=tenant，$1 为向量，LIMIT $4）。
 	sqlStr := fmt.Sprintf(`
 	SELECT memory_id, fact, confidence, source, occurred_at, recorded_at,
 	       valid_from, valid_until, superseded_by, is_historical,
 	       1 - (embedding <=> $1::vector) AS score
 	FROM %s
 	WHERE vector_status = 'vectorized'
-	AND (visibility = $2 OR (visibility = 'shared_user' AND permission->'readers' ? $3) OR tenant_id = $4 OR $4 = ANY(shared_with_tenants))
+	AND %s
 	ORDER BY embedding <=> $1::vector
-	LIMIT $5`, b.table)
+	LIMIT $4`, b.table, pgVisibilityPredicate("$2", "$3"))
 
-	rows, err := b.db.QueryContext(ctx, sqlStr, vecStr, q.Viewer, q.Viewer, q.TenantID, topK)
+	rows, err := b.db.QueryContext(ctx, sqlStr, vecStr, q.Viewer, q.TenantID, topK)
 	if err != nil {
 		return nil, fmt.Errorf("pg vector search: %w", err)
 	}

@@ -7,7 +7,8 @@
 //
 // 相对 R8 骨架（d1e458f）的增量（任务书 §1.A）：
 //   - graceful shutdown（SIGTERM/SIGINT → http.Server.Shutdown → drain consolidate → 关后端）
-//   - 中间件链：Logging → Metrics → Recover → TraceID → 业务路由
+//   - 中间件链：Logging → Metrics → Recover → TraceID → Auth → RequireIdentity → 业务路由
+//     （R21-B：Auth/RequireIdentity 默认透传，未配置 token 时与 R9-A 行为逐位一致）
 //   - /metrics 升级：默认输出 Prometheus 文本（R9 指标 + 既有 lims_* 指标）；?format=json 保留旧 JSON
 //   - /healthz 升级：JSON {status, backend, embedder, last_consolidate}
 //   - -embedder hash|vector（默认 hash 占位，零依赖启动）
@@ -142,11 +143,22 @@ func main() {
 	}
 	mux.Handle("/", srv.Handler())
 
+	// 6b) R21-B：鉴权装配（task book §3.1/§五 B 线）。
+	//     token 源：env LIMS_AGENT_TOKENS（JSON 或文件路径）优先，
+	//     回落 profile auth.agent_tokens；两者皆无 = 透传（红线④，与 R20 逐位一致）。
+	//     配置损坏 → fail-fast（绝不带病启动后静默无鉴权）。
+	if err := kernel.ConfigureAuth(kernel.AuthOptions{ProfilePath: *profilePath}); err != nil {
+		_ = backend.Close()
+		log.Fatalf("[boot] auth config: %v", err)
+	}
+
 	handler := kernel.WithMiddleware(mux,
 		kernel.LoggingMiddleware,
 		kernel.MetricsMiddleware(metrics),
 		kernel.RecoverMiddleware,
 		kernel.TraceIDMiddleware,
+		kernel.AuthMiddleware,
+		kernel.RequireIdentity,
 	)
 
 	// 7) 后台整合 goroutine
