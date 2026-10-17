@@ -52,6 +52,8 @@ load_rc_config $name
 : ${lightmem_pidfile:="/var/run/lightmem/lightmem.pid"}
 : ${lightmem_pg_wait:="60"}
 : ${lightmem_start_wait:="20"}
+# R21 T3：agent token 表（供 AuthMiddleware 鉴权）。文件不存在 → 不注入 → 透传态。
+: ${lightmem_tokens_file:="${lightmem_chdir}/agent-tokens.json"}
 
 # --- 用户与 HOME -----------------------------------------------------------
 # 不要给 daemon(8) 传 -u：当 ${name}_user 被设置时，rc.subr 自己已经通过
@@ -167,13 +169,32 @@ lightmem_status() {
 # 这样它不会继承调用方的任何 fd（否则非交互 SSH 会因管道被持有而一直不返回）。
 lightmem_start() {
     rm -f "${pidfile}"
+    # R21 T3：token 表由 install 脚本落到 ${lightmem_tokens_file}（0600）。
+    # 缺失 → 不注入 LIMS_AGENT_TOKENS → AuthMiddleware 透传（开发阶段/零回归）。
+    # 存在 → 业务端点需要 Bearer token；运维端点（/healthz、/metrics）豁免，
+    # 故下面的健康检查仍能通过。
+    _tokens=""
+    if [ -r "${lightmem_tokens_file}" ]; then
+        _tokens=$(cat "${lightmem_tokens_file}")
+    fi
     # -u 必须显式给：自定义 start_cmd 走的是 rc.subr 的 *_cmd 分支，
     # 不会套用 ${name}_user 的 su 包装，否则服务会以 root 身份运行。
-    /usr/sbin/daemon -f -u "${lightmem_user}" -P "${pidfile}" -o "${lightmem_log}" \
-        "${lightmem_binary}" \
-        -profile "${lightmem_profile}" \
-        -listen "${lightmem_listen}" \
-        -embedder "${lightmem_embedder}" &
+    if [ -n "${_tokens}" ]; then
+        /usr/sbin/daemon -f -u "${lightmem_user}" -P "${pidfile}" -o "${lightmem_log}" \
+            env "HOME=${lightmem_home}" \
+                "LIMS_AGENT_TOKENS=${_tokens}" \
+            "${lightmem_binary}" \
+            -profile "${lightmem_profile}" \
+            -listen "${lightmem_listen}" \
+            -embedder "${lightmem_embedder}" &
+    else
+        /usr/sbin/daemon -f -u "${lightmem_user}" -P "${pidfile}" -o "${lightmem_log}" \
+            env "HOME=${lightmem_home}" \
+            "${lightmem_binary}" \
+            -profile "${lightmem_profile}" \
+            -listen "${lightmem_listen}" \
+            -embedder "${lightmem_embedder}" &
+    fi
     _i=0
     while [ "${_i}" -lt "${lightmem_start_wait}" ]; do
         if fetch -q -T 2 -o - "http://127.0.0.1${lightmem_listen}/healthz" >/dev/null 2>&1; then
