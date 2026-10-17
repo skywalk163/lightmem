@@ -297,7 +297,7 @@ fi
 COV_FAIL=0
 COV_NOTE=""
 COV_TESTONLY=""
-NEW_FILES="forgetting_drift flush edge_persist edge_persist_pg poison_detect drift_pipeline flush_pipeline backend_qdrant:4 node_role:4 topology:3 connector_app:4"
+NEW_FILES="forgetting_drift flush edge_persist edge_persist_pg poison_detect drift_pipeline flush_pipeline backend_qdrant:4 node_role:4 topology:3 connector_app:4 auth:12 mcp:12 workflow:12"
 for entry in $NEW_FILES; do
     case "$entry" in
         *:*) f="${entry%%:*}"; THRESH="${entry##*:}" ;;

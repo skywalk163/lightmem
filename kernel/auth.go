@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -208,13 +209,27 @@ func constantTimeEqual(a, b string) bool {
 func AuthMiddleware(next http.Handler) http.Handler {
 	if registry.empty() {
 		log.Printf("[auth] LIMS_AGENT_TOKENS / profile auth 未配置，AuthMiddleware 透传（R21-B 默认关，红线④）")
-		return next
+		// 即便未启用 token 鉴权，仍接受**回环来源**的身份头，使 lightmem-mcp(:18444)
+		// 转发过来的身份能沿链路传到 REST handler（否则 C 线 handler 拿不到身份）。
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if id, ok := identityFromLoopbackHeaders(r); ok {
+				next.ServeHTTP(w, r.WithContext(withIdentity(r.Context(), id)))
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
 	}
 	registry.mu.RLock()
 	n := len(registry.tokens)
 	registry.mu.RUnlock()
 	log.Printf("[auth] agent token 鉴权已启用（tokens=%d）", n)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 优先：回环来源的身份头（lightmem-mcp → lightmem-kernel 内部跳转）。
+		// 该路径下 MCP 侧已按 Bearer token 认证完成，转发只用身份头承载，不带原始 token。
+		if id, ok := identityFromLoopbackHeaders(r); ok {
+			next.ServeHTTP(w, r.WithContext(withIdentity(r.Context(), id)))
+			return
+		}
 		token := bearerToken(r)
 		if token == "" {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
@@ -243,6 +258,41 @@ func AuthMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(withIdentity(r.Context(), id)))
 	})
+}
+
+// identityFromLoopbackHeaders 从 X-Lightmem-{User,Tenant,Agent} 头取身份，
+// **仅当请求来自回环地址**时成立。
+//
+// 用途：lightmem-mcp(:18444) 已按 Bearer token 完成认证并解析出 Identity，
+// 它再以 loopback HTTP 调用 lightmem-kernel(:18443) 的 REST 端点（A/C 解耦约定），
+// 此时用这三个头承载身份，避免 REST 侧二次解析 token。
+//
+// 安全前提（**关键**）：只信任 127.0.0.1 / ::1。若放任任意来源，则任何远端
+// 调用方只需伪造一个头即可冒充任意 Agent（等同 G4）。非回环一律忽略。
+func identityFromLoopbackHeaders(r *http.Request) (Identity, bool) {
+	if r == nil || !isLoopbackRequest(r) {
+		return Identity{}, false
+	}
+	user := r.Header.Get("X-Lightmem-User")
+	tenant := r.Header.Get("X-Lightmem-Tenant")
+	agent := r.Header.Get("X-Lightmem-Agent")
+	if user == "" && tenant == "" && agent == "" {
+		return Identity{}, false
+	}
+	return Identity{UserID: user, TenantID: tenant, AgentID: agent}, true
+}
+
+// isLoopbackRequest 判断请求来源是否为回环地址（127.0.0.0/8 或 ::1）。
+func isLoopbackRequest(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(strings.TrimSpace(host))
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback()
 }
 
 // RequireIdentity 强制要求已认证身份。
