@@ -1,6 +1,12 @@
 {
-  "_note": "示例 token 表：把每个值换成 B 线签发的真实 token 后再传给 gen_configs.ps1 -TokenFile。本文件里的值全部是占位符，不是可用凭据。",
-  "_note2": "键名 = 模板里的 agent 键（见 gen_configs.ps1 -ListAgents）。值会替换模板中的 <YOUR_TOKEN>。",
+  "_DEPRECATED": true,
+  "_deprecated_reason": "本文件是**旧格式**的 token 表示例（键 = agent 键），只被已废弃的 gen_configs.ps1 使用。新流程请用 issue_token.py 签发，它产出的 agent-tokens.json 是**服务端/新生成器格式**（键 = token，值 = {agent_id,user_id,tenant_id}）。",
+  "_migration": [
+    "1) 签发真实 token：  python3 issue_token.py --tenant <你的租户> --user <你> --out ./mytokens",
+    "2) 生成配置片段：    python3 gen_configs.py --server http://<主机>:<端口> --tokens ./mytokens/agent-tokens.json",
+    "3) 旧工具已废弃：    gen_configs.ps1 不再维护，Windows 上请直接用 python gen_configs.py"
+  ],
+  "_warning": "下面的值全部是 REPLACE-ME 占位符，**不是可用凭据**。真实 token 含明文，请勿提交进 git。",
   "dsh": "t-dsh-REPLACE-ME-0001",
   "trae": "t-trae-REPLACE-ME-0002",
   "trae-solo": "t-trae-solo-REPLACE-ME-0003",

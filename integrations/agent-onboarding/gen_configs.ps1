@@ -1,7 +1,19 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    lightmem Agent 接入配置生成器（R21 D 线）。
+    ⚠️【已废弃 / DEPRECATED】lightmem Agent 接入配置生成器（R21 D 线）。
+
+    **请改用跨平台的 Python 版：`gen_configs.py`**
+
+        python3 gen_configs.py --server http://<主机>:<端口> --tokens ./agent-tokens.json
+
+    为什么废弃本脚本：
+      - 本脚本只能跑在 **Windows + PowerShell 5.1+**，macOS / Linux / FreeBSD 用不了；
+      - 它读的 token 表格式（键=agent 键）与服务端实际格式（键=token）**不一致**，
+        需要手工转换，容易配错；
+      - Python 版还能额外产出 `agent-prompt.md`（可直接粘给 AI 的自我安装指令）。
+
+    本文件保留仅为 Windows 用户的历史兼容，**不再更新**。
 
 .DESCRIPTION
     读取 configs/ 下的模板，把 token / 主机 / 端口 / 二进制路径替换成真实值，
@@ -372,6 +384,24 @@ foreach ($m in $selected) {
 # ---------------------------------------------------------------------------
 # 4. 汇总
 # ---------------------------------------------------------------------------
+# DEPRECATED 横幅：把这个脚本跑起来的人，应当立刻知道有更好的选择。
+# 注意：`'=' * 78` 不能直接跟在 Write-Host 后面（会被当成 -ForegroundColor 之类的参数），
+#       必须先算好再传。
+$bar = ('=' * 78)
+Write-Host ''
+Write-Host $bar -ForegroundColor Yellow
+Write-Host '  ⚠️  本脚本（gen_configs.ps1）已废弃 / DEPRECATED' -ForegroundColor Yellow
+Write-Host ''
+Write-Host '     请改用跨平台的 Python 版（Windows 上同样能跑）：' -ForegroundColor White
+Write-Host '         python gen_configs.py --server http://<主机>:<端口> --tokens .\agent-tokens.json' -ForegroundColor Cyan
+Write-Host ''
+Write-Host '     废弃原因：' -ForegroundColor White
+Write-Host '       1) 本脚本仅支持 Windows + PowerShell 5.1+；' -ForegroundColor DarkGray
+Write-Host '       2) 它读的 token 表格式（键=agent）与服务端格式（键=token）不一致；' -ForegroundColor DarkGray
+Write-Host '       3) Python 版还会产出 agent-prompt.md，可让 AI 自行安装配置。' -ForegroundColor DarkGray
+Write-Host ''
+Write-Host '     token 请用 issue_token.py 签发（本目录内，零依赖）。' -ForegroundColor White
+Write-Host $bar -ForegroundColor Yellow
 Write-Host ''
 Write-Host "输出目录：$OutDir" -ForegroundColor Cyan
 if ($rows.Count -gt 0) {
