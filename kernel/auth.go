@@ -206,6 +206,27 @@ func constantTimeEqual(a, b string) bool {
 //
 // 中间件语义与 LoggingMiddleware / RecoverMiddleware / TraceIDMiddleware 互不干扰；
 // 未通过鉴权的请求不会进入业务 handler。
+// T3 部署（R21）：运维端点豁免。
+//
+// 理由：这些端点不读写任何记忆数据，却必须在「未认证」状态下可访问，否则
+//  1. rc.d 的 supervisor 用 `fetch http://127.0.0.1:<port>/healthz` 做启动健康检查，
+//     鉴权一旦覆盖 /healthz 就会 401 → **服务永远无法启动**（T3 实测重现）；
+//  2. 进程外监控/告警探针通常不带 agent token。
+//
+// 注意：只豁免**无数据语义**的运维端点。业务端点（/search、/tools/*、/audit …）
+// 一律仍需鉴权；/healthz 只回后端连通性与 profile 名，不含记忆正文。
+func isOperationalEndpoint(path string) bool {
+	switch path {
+	case "/healthz", "/health", "/metrics":
+		return true
+	}
+	return false
+}
+
+// AuthMiddleware 校验 agent token 并注入 Identity。
+//
+//	未配置 token → 透传（红线④，零回归）；已配置 → 缺/错 token 401。
+//	运维端点（/healthz、/health、/metrics）豁免（见 isOperationalEndpoint）。
 func AuthMiddleware(next http.Handler) http.Handler {
 	if registry.empty() {
 		log.Printf("[auth] LIMS_AGENT_TOKENS / profile auth 未配置，AuthMiddleware 透传（R21-B 默认关，红线④）")
@@ -224,6 +245,11 @@ func AuthMiddleware(next http.Handler) http.Handler {
 	registry.mu.RUnlock()
 	log.Printf("[auth] agent token 鉴权已启用（tokens=%d）", n)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 运维端点豁免：不读记忆正文，供 supervisor / 监控探针使用。
+		if isOperationalEndpoint(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		// 优先：回环来源的身份头（lightmem-mcp → lightmem-kernel 内部跳转）。
 		// 该路径下 MCP 侧已按 Bearer token 认证完成，转发只用身份头承载，不带原始 token。
 		if id, ok := identityFromLoopbackHeaders(r); ok {
@@ -304,6 +330,12 @@ func RequireIdentity(next http.Handler) http.Handler {
 	}
 	log.Printf("[auth] RequireIdentity 已启用（%s=1 或 profile auth.require_auth）：未认证请求一律 401", EnvRequireAuth)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 运维端点豁免（与 AuthMiddleware 同口径）：否则 supervisor 健康检查会 401，
+		// 服务无法启动（T3 实测）。
+		if isOperationalEndpoint(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if _, ok := IdentityFromContext(r.Context()); !ok {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return

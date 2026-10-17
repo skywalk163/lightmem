@@ -88,10 +88,30 @@ func NewMCPHTTPServer(mcp *MCPServer) *HTTPServer {
 }
 
 // Handler 返回 http.Handler，路由到 /mcp 端点（支持 POST/GET/DELETE）。
+//
+// T3 部署（R21）：额外提供 /healthz 供 rc.d supervisor 与监控探针使用。
+// 该端点**不暴露任何记忆数据**（只回进程存活与 REST 后端地址），
+// 且被 AuthMiddleware 的运维端点豁免规则放行——否则 supervisor 的
+// `fetch /healthz` 会 401，lightmem-mcp 服务无法启动。
 func (s *HTTPServer) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/mcp", s.handleMCP)
+	mux.HandleFunc("/healthz", s.handleHealthz)
 	return mux
+}
+
+// handleHealthz 返回 MCP 服务自身存活状态与上游 REST 地址（不含记忆数据）。
+func (s *HTTPServer) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	upstream := ""
+	if s != nil && s.MCP != nil {
+		upstream = s.MCP.baseURL
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":   "ok",
+		"service":  "lightmem-mcp",
+		"version":  "0.2.0",
+		"upstream": upstream,
+	})
 }
 
 func (s *HTTPServer) handleMCP(w http.ResponseWriter, r *http.Request) {
