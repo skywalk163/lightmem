@@ -345,14 +345,30 @@ AuthMiddleware ──► authenticator.AuthenticateRequest(ctx, r)
 
 ---
 
-## 11. 待决策（实现前需确认）
+## 11. 已确认决策（R22 定稿）
 
-1. **管理 API 鉴权**：用「管理员 session token」还是「管理员 agent token」？
-   建议：管理员自己也是一个 `user`，登录后拿 `auth_tokens`；管理操作校验 `roles 含 admin`。
-2. **缓存 TTL**：建议 60s（吊销最快 60s 生效）。是否接受"吊销后最多 60s 内仍可能生效"？
-3. **`expires_in_seconds` 缺省**：建议**永不过期**（兼容现有测试版习惯），但 audit 记录签发时间以便追溯。是否要默认过期？
-4. **`scope` 粒度**：粗粒度（`memories:*`）还是细粒度（`memories:write,goals:read`）？建议先粗粒度，细粒度后置。
-5. **Ory Kratos 适配器**是否本轮（R22）就写，还是留到 R22.4？建议**本轮只定接口 + 文档**，实现留到确实需要对接 IdP 时。
+> 以下 5 项已由负责人确认，作为实现依据。
+
+| # | 决策项 | 结论 |
+|---|---|---|
+| 1 | **管理 API 鉴权** | 管理员**自己也当 `user`**，登录后拿 `auth_tokens`；管理操作校验 `roles 含 admin`。不引入独立的"管理员 agent token"概念 |
+| 2 | **缓存 TTL** | **60s**。吊销/轮换后最多 60s 全局生效（接受"吊销后 60s 内可能仍生效"的窗口） |
+| 3 | **`expires_in_seconds` 缺省** | **永不过期**（兼容现有测试版习惯）；`created_at` 仍记入审计以便追溯 |
+| 4 | **`scope` 粒度** | **细粒度**（如 `memories:write`、`goals:read`），不采用粗粒度通配 |
+| 5 | **Ory Kratos 适配器** | R22 **只定接口 `Authenticator` + 文档**；适配器实现**留到确实需要对接 IdP 时**再写（默认不编译进路由） |
+
+**细粒度 scope 词汇表**（决策 #4 落地）：以 `<域>:<动作>` 表示。
+
+| 域 | 动作 | 含义 |
+|---|---|---|
+| `memories` | `read` / `write` | 记忆读写 |
+| `goals` | `read` / `write` | 工作计划 |
+| `procedures` | `read` / `write` | 工作步骤 |
+| `events` | `read` / `write` | 工作总结 |
+| `admin` | `manage` | 管理 API（仅 admin role 需要） |
+
+> scope 为空 = 该主体全部权限（保留测试版"一条 token 干所有事"的便利）；
+> 需要收紧时逐个加 `memories:read` 等条目即可。
 
 ---
 
