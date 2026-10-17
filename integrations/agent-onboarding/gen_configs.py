@@ -48,6 +48,13 @@ import json
 import os
 import sys
 
+# Windows 控制台默认 GBK 打不出 ⚠️ 等字符 → 让 stdout/stderr 走 UTF-8
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 # agent 键 -> agent_id（与 issue_token.py 保持一致）
 AGENT_ID_MAP = {"dsh": "deepseek-harness"}
 

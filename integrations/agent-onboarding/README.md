@@ -3,25 +3,31 @@
 > 目标：让几乎所有 AI Agent 都能连上 lightmem，把**工作计划 / 步骤 / 总结**存进去，成为大家的共享 AI 记忆大脑。
 > 本目录（`integrations/agent-onboarding/`）是 R21 D 线交付：**各家配置模板 + 生成器 + 验证手册**。
 
+> **⚠️ 新用户请先看仓库根的 [`GETTING_STARTED.md`](../../GETTING_STARTED.md)**（5 分钟一键接入）。
+> 本文件是**逐家细节与原理**，适合排障或想了解每家差异时读。
+
 ---
 
 ## 0. 三十秒版
 
 1. **两条通道，按 Agent 能力二选一**（不能反过来）：
-   - 能发 HTTP 的 → `http://192.168.0.88:18444/mcp`（原生 MCP，**主通道**，一个端点服务所有 Agent）
+   - 能发 HTTP 的 → `http://<你的主机>:<端口>/mcp`（原生 MCP，**主通道**，一个端点服务所有 Agent）
    - 只能吃 stdio 的 → `lightmem-mcp -transport stdio`（原生兜底）；Windows 上没有该二进制，用 Python 桥过渡（见 §8）
 2. 从 `configs/` 里挑对应那家的文件，把 `<YOUR_TOKEN>` 换成真 token，粘到 §1 表里的**绝对路径**。
 3. 重载该 Agent，看到 `mcp__lightmem__*` 工具即成功；调 `lightmem_health` 应返回 `status=ok`。
 
-不想手工改？`gen_configs.ps1` 一次生成全部（只产出待粘贴文件，**不碰你的配置目录**）：
+不想手工改？**用跨平台的 Python 生成器** `gen_configs.py`（只产出待粘贴文件，**不碰你的配置目录**）：
 
-```powershell
-cd G:\dswork\duan-light-merge\lightmem\integrations\agent-onboarding
-powershell -NoProfile -ExecutionPolicy Bypass -File .\gen_configs.ps1 -TokenFile .\tokens.example.json
-# 产物在 .\out\，并附 MANIFEST.md（哪个文件搬到哪个路径）
+```bash
+cd integrations/agent-onboarding
+python3 gen_configs.py --server http://192.168.0.88:18444 --tokens ./agent-tokens.json
+# 产物在 ./out/，附 MANIFEST.md（哪个文件搬到哪个路径）
+#         与 agent-prompt.md（可直接粘给 AI 的自我安装指令）
 ```
 
-> **为什么要 `-ExecutionPolicy Bypass`**：本机 PowerShell 执行策略为 `Restricted`，直接 `.\gen_configs.ps1` 会被拒绝（`UnauthorizedAccess`）。这是实测踩到的，不是建议写法。
+> **Windows 用户注意**：本目录另有一个 `gen_configs.ps1`，
+> **已废弃（DEPRECATED）**，仅 Windows 能跑、且 token 表格式与服务端不一致。
+> **请统一用上面的 `gen_configs.py`**（Windows 上同样能跑 `python gen_configs.py`）。
 
 ---
 
@@ -80,8 +86,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\gen_configs.ps1 -TokenFile
 **⑤ WorkBuddy 需要额外审批。** 写进 `mcp.json` 后还要在 `mcp-approvals.json` 里放行，否则工具列表里看不到。
 
 **⑥ 生成文件的编码。** 所有 `*.json` 必须是 **UTF-8 无 BOM**——带 BOM 的 JSON 会被部分 Agent 的解析器直接拒绝
-（`Unexpected token`）。`gen_configs.ps1` 已强制无 BOM。
-反例：`*.ps1` 相反，Windows PowerShell 5.1 **必须**有 BOM 才按 UTF-8 解析，否则中文注释会把脚本语法撑坏（也是实测踩到的）。
+（`Unexpected token`）。`gen_configs.py` 已强制无 BOM。
+（历史注记：已废弃的 `gen_configs.ps1` 也强制无 BOM；而 `*.ps1` 自身相反，
+Windows PowerShell 5.1 **必须**有 BOM 才按 UTF-8 解析，否则中文注释会把脚本语法撑坏——也是实测踩到的。）
 
 ---
 
@@ -91,7 +98,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\gen_configs.ps1 -TokenFile
 integrations/agent-onboarding/
 ├── README.md               ← 本文件：总表 + 陷阱 + 失败模式
 ├── VERIFY.md               ← 逐家手工验证步骤（含 curl 自测）
-├── gen_configs.ps1         ← Windows 生成器（需 PS 5.1+，无需 Go）
+├── gen_configs.py          ← ✨ **跨平台生成器（推荐）**：Windows/macOS/Linux/FreeBSD
+│                              产出 9 个配置片段 + MANIFEST.md + agent-prompt.md
+├── issue_token.py          ← ✨ **token 签发**（每 Agent 一份，防冒充）
+├── gen_configs.ps1         ← ⚠️ **已废弃 DEPRECATED**（仅 Windows + PS 5.1）
+│                              改用上面的 gen_configs.py
 ├── tokens.example.json     ← token 表样例（全是占位符）
 ├── .gitignore              ← 忽略 out/ 与本地真实 token 表
 └── configs/
@@ -122,36 +133,78 @@ integrations/agent-onboarding/
 
 ---
 
-## 4. 生成器 `gen_configs.ps1`
+## 4. 生成器
+
+### 4.1 `gen_configs.py` —— **推荐（跨平台）**
+
+```bash
+# 全量生成（token 由 issue_token.py 签发）
+python3 gen_configs.py --server http://192.168.0.88:18444 --tokens ./agent-tokens.json
+
+# 只生成两家
+python3 gen_configs.py --server http://10.0.0.9:18444 --tokens ./agent-tokens.json \
+  --agents dsh,workbuddy
+
+# stdio 类需要本机二进制路径（默认 /usr/local/lightmem/lightmem-mcp）
+python3 gen_configs.py --server ... --tokens ... --mcp-binary /path/to/lightmem-mcp
+```
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `--server` | 必填 | MCP 服务地址（自动补 `/mcp`） |
+| `--tokens` | 必填 | `agent-tokens.json`（`issue_token.py` 产出，键 = **token**） |
+| `--agents` | 全部 9 个 | 逗号分隔；`trae-workspace` 复用 `trae` 的 token |
+| `--mcp-binary` | `/usr/local/lightmem/lightmem-mcp` | stdio 模板用 |
+| `--rest-base` | `http://127.0.0.1:18443` | stdio 转发目标 |
+| `--out` | `out` | 输出目录（**不写任何 Agent 配置目录**） |
+
+**它做什么**：读 token → **先全量校验再落盘**（不会留残缺产物）→ 产出 9 个配置片段
++ `MANIFEST.md`（粘到哪/怎么粘/要不要重启）+ **`agent-prompt.md`（可直接粘给 AI 的自我安装指令）**。
+**它不做什么**：不写 Agent 配置目录、不启动服务、不联网、不碰 git。
+
+> 已实测（0.88 FreeBSD + 本机 Windows）：9 个片段全量生成；三大类型标记各自正确
+> （`streamableHttp` 驼峰 / `streamable_http` 下划线 / `remote`）；DSH 用连字符；
+> CodeArts `command` 为数组、Roo 为字符串+args。
+
+### 4.2 `gen_configs.ps1` —— ⚠️ **已废弃（DEPRECATED）**
+
+> **新用户请勿使用。** 仅保留给既有 Windows 用户的历史兼容，**不再更新**。
+
+废弃理由：
+
+| # | 问题 |
+|---|---|
+| 1 | 只能跑在 **Windows + PowerShell 5.1+**；macOS / Linux / FreeBSD 无法使用 |
+| 2 | token 表格式（`{agent: token}`）与**服务端实际格式**（`{token: {agent_id…}}`）**不一致**，需手工转换，易配错 |
+| 3 | 不产出 `agent-prompt.md`，无法让 AI 自行安装配置 |
+| 4 | 需要 `-ExecutionPolicy Bypass` 才能执行（本机执行策略为 `Restricted`） |
+
+**替代命令**（Windows 上一样能跑）：
 
 ```powershell
-# 列出可生成的 agent
-powershell -NoProfile -ExecutionPolicy Bypass -File .\gen_configs.ps1 -ListAgents
+python gen_configs.py --server http://192.168.0.88:18444 --tokens .\agent-tokens.json
+```
 
-# 全量生成（token 从文件读）
+<details>
+<summary>旧用法（仅供历史参考，不再维护）</summary>
+
+```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\gen_configs.ps1 -TokenFile .\tokens.example.json
-
-# 只生成两家，换主机与端口，强制覆盖
-powershell -NoProfile -ExecutionPolicy Bypass -File .\gen_configs.ps1 `
-  -Agents dsh,workbuddy -McpHost 10.0.0.9 -McpPort 18444 -DefaultToken 't-xxx' -Force
 ```
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `-OutDir` | `.\out` | 输出目录。**拒绝**落在任何 Agent 配置目录内 |
 | `-McpHost` / `-McpPort` / `-RestPort` | `192.168.0.88` / `18444` / `18443` | 端点替换 |
-| `-TokenFile` | — | token 表 JSON（`{agent: token}` 或 `{"tokens":{...}}`） |
+| `-TokenFile` | — | token 表 JSON（`{agent: token}`） |
 | `-DefaultToken` | — | TokenFile 未覆盖的 agent 用这个 |
-| `-Agents` | 全部 | `dsh,trae,trae-solo,trae-workspace,workbuddy,raccoon,opencode,codearts,codearts-bridge,roo-cline` |
-| `-McpBin` / `-ProfilePath` | 见上表 | stdio 原生模板用 |
-| `-PythonExe` / `-BridgePy` | 见上表 | stdio 桥模板用 |
-| `-TenantId` / `-UserId` | `dshteam` / `skywalk` | stdio 桥模板的身份回退 |
+| `-Agents` | 全部 | 逗号分隔 |
 | `-Force` | 关 | 覆盖 OutDir 里已存在的文件 |
 
-**它做什么**：读模板 → 替换占位符 → 校验 JSON 合法性 → 写 UTF-8 无 BOM → 生成 `MANIFEST.md`。
-**它不做什么**：不写任何 Agent 配置目录、不启动服务、不联网、不碰 git。
+> 历史实测：10 个模板全量生成通过，9 个 JSON `json.load` 校验通过。
+> 注意 `*.ps1` 在 Windows PowerShell 5.1 下**必须有 BOM** 才按 UTF-8 解析。
 
-> 已实测：10 个模板全量生成通过，9 个 JSON 逐个 `json.load` 校验通过，无一残留占位符（`<YOUR_TOKEN>` 未填时会显式标「未填」）。
+</details>
 
 ---
 
