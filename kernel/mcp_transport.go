@@ -191,6 +191,15 @@ func (s *HTTPServer) handleGet(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Mcp-Session-Id", sessionID)
 	w.WriteHeader(http.StatusOK)
+	// R21 T3（Trae 接入实测）：本端点是**长连接 SSE**，但 http.Server 的
+	// WriteTimeout（120s）会覆盖整个 handler 生命周期，到点即掐断 ——
+	// Trae 侧表现为 `streamable SSE stream disconnected: TypeError: terminated`，
+	// 且约每 2 分钟复现一次（与 WriteTimeout 精确吻合），随后反复重连。
+	// 处置：仅对 SSE 端点**清除写超时**（Go 1.20+ ResponseController），
+	// 保留全局 WriteTimeout 对普通 POST 请求的保护。
+	if rc := http.NewResponseController(w); rc != nil {
+		_ = rc.SetWriteDeadline(time.Time{})
+	}
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
