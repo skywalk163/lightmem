@@ -84,6 +84,20 @@ AGENT_ID = env("LIGHTMEM_AGENT_ID", DEFAULT_AGENT)
 TIMEOUT = float(env("LIGHTMEM_TIMEOUT", "15"))
 LOG_PATH = os.environ.get("LIGHTMEM_LOG", "").strip()
 
+# R21 T3（解 D-4）：agent token。18443 启用鉴权后，本桥若不带 Authorization 会
+# 全部 401。变量名刻意写 LIGHTMEM_AGENT_TOKEN 而非 *_API_KEY/*_SECRET：
+# DSH 的 stdio transport 会清洗名字匹配 KEY|PASSWORD|SECRET|TOKEN 的环境变量，
+# 但 `LIGHTMEM_AGENT_TOKEN` 含 TOKEN 字样 —— 故对 DSH 场景请改用文件传入
+# （LIGHTMEM_AGENT_TOKEN_FILE），或直接在 MCP 客户端的 headers 里配（推荐走原生 MCP）。
+AGENT_TOKEN = os.environ.get("LIGHTMEM_AGENT_TOKEN", "").strip()
+AGENT_TOKEN_FILE = os.environ.get("LIGHTMEM_AGENT_TOKEN_FILE", "").strip()
+if not AGENT_TOKEN and AGENT_TOKEN_FILE:
+    try:
+        with open(AGENT_TOKEN_FILE, encoding="utf-8") as _tf:
+            AGENT_TOKEN = _tf.read().strip()
+    except OSError as _exc:  # 读不到就当未配置（保持旧行为），但要在日志里说清
+        sys.stderr.write("[lightmem-bridge] 读取 LIGHTMEM_AGENT_TOKEN_FILE 失败：%r\n" % (_exc,))
+
 
 def log(message: str) -> None:
     """记录一行日志：到 stderr（DSH 会转发）与可选日志文件。"""
@@ -121,6 +135,10 @@ def http_json(method: str, path: str, payload=None, query=None):
 
     data = None
     headers = {"Accept": "application/json"}
+    # R21 T3（解 D-4）：带上 agent token。18443 启用鉴权后，不带此头会 401。
+    # 运维端点（/healthz）在服务端豁免鉴权，故 health 工具在无 token 时仍可用。
+    if AGENT_TOKEN:
+        headers["Authorization"] = "Bearer " + AGENT_TOKEN
     if payload is not None:
         # errors="replace" 是第二道防线：即使上游仍递来孤立代理项，
         # 也只降级为 "?"，绝不让一次工具调用因编码而整体失败。
@@ -182,7 +200,9 @@ def tool_save(args: dict) -> str:
         "permission": {"owner": (args.get("owner") or s["user_id"]).strip()},
         "permission_level": (args.get("permission_level") or "internal").strip(),
         "memory_kind": (args.get("memory_kind") or "fact").strip(),
-        "source": (args.get("source") or "deepseek-harness").strip(),
+        # R21 T3：source 默认取本进程的 AGENT_ID（原先硬编码 deepseek-harness，
+        # 导致 CodeArts/Roo 经桥写入的记忆被误标为 DSH 来源）。
+        "source": (args.get("source") or AGENT_ID).strip(),
         "confidence": float(args.get("confidence") or 0.0),
     }
     for key, target in (

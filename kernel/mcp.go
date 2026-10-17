@@ -105,6 +105,8 @@ type MCPServer struct {
 	tools     []mcpTool
 	serverVer string
 	http      *http.Client
+	// R21 T3：保留内部 REST 客户端引用，供 SetUpstreamCredentials 下发凭证/身份。
+	rest *mcpRESTClient
 
 	mu       sync.Mutex
 	sessions map[string]time.Time
@@ -118,6 +120,10 @@ type MCPServer struct {
 type mcpRESTClient struct {
 	baseURL string
 	client  *http.Client
+	// R21 T3（解 D-1）：stdio 模式无请求头，用启动配置的身份 + 凭证直连 REST。
+	// token / identity 为空时行为与 R20 逐位一致（零回归）。
+	token    string
+	identity *Identity
 }
 
 func newMCPRESTClient(baseURL string, timeout time.Duration) *mcpRESTClient {
@@ -128,6 +134,21 @@ func newMCPRESTClient(baseURL string, timeout time.Duration) *mcpRESTClient {
 		baseURL: strings.TrimRight(baseURL, "/"),
 		client:  &http.Client{Timeout: timeout},
 	}
+}
+
+// SetUpstreamCredentials 设置向 REST 上游调用时使用的凭证与（stdio 模式的）身份。
+//
+// R21 T3（解 D-1）：stdio 通道没有请求头，若 REST 不在回环上，服务端的
+// identityFromLoopbackHeaders 不会信任 X-Lightmem-*，导致全部 401。
+// 这里让部署层在**受信侧**配置凭证与身份：
+//
+//	token    —— 该 Agent 的 agent token（去 18443 鉴权用）
+//	identity —— 该 Agent 的身份（user/tenant/agent），随 REST 调用透传
+//
+// 二者为空时行为与 R20 逐位一致（零回归）。
+func (c *mcpRESTClient) SetUpstreamCredentials(token string, identity *Identity) {
+	c.token = strings.TrimSpace(token)
+	c.identity = identity
 }
 
 func (c *mcpRESTClient) do(ctx context.Context, method, path string, query url.Values, body any) (map[string]any, error) {
@@ -151,6 +172,13 @@ func (c *mcpRESTClient) do(ctx context.Context, method, path string, query url.V
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	}
+	// R21 T3（解 D-1）：向 REST 上游带**凭证**。
+	// stdio 模式下本进程在客户端机器上运行，REST 未必是回环（Windows→0.88 就不是），
+	// 因此 X-Lightmem-* 头不会被服务端信任（见 auth.go identityFromLoopbackHeaders）。
+	// 必须直接带 Authorization，才能让 18443 的鉴权通过。
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
 	// 身份透传：若 MCP 请求已鉴权，把 token 身份带给 REST 端（防 loopback 侧再解析）
 	if id, ok := IdentityFromContext(ctx); ok {
 		if id.UserID != "" {
@@ -161,6 +189,19 @@ func (c *mcpRESTClient) do(ctx context.Context, method, path string, query url.V
 		}
 		if id.AgentID != "" {
 			req.Header.Set("X-Lightmem-Agent", id.AgentID)
+		}
+	} else if c.identity != nil {
+		// R21 T3（解 D-1）：stdio 模式没有请求头 → 用启动时配置的身份。
+		// 这样 CodeArts/Roo（只能吃 stdio）也能以**自己的 agent 身份**写入，
+		// 而不是无身份/被拒。
+		if c.identity.UserID != "" {
+			req.Header.Set("X-Lightmem-User", c.identity.UserID)
+		}
+		if c.identity.TenantID != "" {
+			req.Header.Set("X-Lightmem-Tenant", c.identity.TenantID)
+		}
+		if c.identity.AgentID != "" {
+			req.Header.Set("X-Lightmem-Agent", c.identity.AgentID)
 		}
 	}
 	resp, err := c.client.Do(req)
@@ -223,8 +264,17 @@ func NewMCPServer(baseURL string) *MCPServer {
 		http:      &http.Client{Timeout: 15 * time.Second},
 		sessions:  map[string]time.Time{},
 	}
-	s.registerTools(newMCPRESTClient(baseURL, s.timeout))
+	rc := newMCPRESTClient(baseURL, s.timeout)
+	s.rest = rc
+	s.registerTools(rc)
 	return s
+}
+
+// SetUpstreamCredentials 把凭证与 stdio 身份转交给内部 REST 客户端（R21 T3，解 D-1）。
+func (s *MCPServer) SetUpstreamCredentials(token string, identity *Identity) {
+	if s != nil && s.rest != nil {
+		s.rest.SetUpstreamCredentials(token, identity)
+	}
 }
 
 // SetServerVersion 覆盖 serverInfo.version（测试用）。
@@ -377,7 +427,12 @@ func (s *MCPServer) handleToolsCall(ctx context.Context, req *mcpRequest) mcpRes
 		params.Arguments = map[string]any{}
 	}
 	// 注入身份默认值（B 线：token 身份优先，忽略 body 里的 user_id/tenant_id）
-	args := injectIdentityArgs(ctx, params.Arguments)
+	// R21 T3：stdio 无请求 context，回退到进程级单身份（s.rest.identity）。
+	var fb *Identity
+	if s.rest != nil {
+		fb = s.rest.identity
+	}
+	args := injectIdentityArgsWith(ctx, params.Arguments, fb)
 	text, err := handler(ctx, args)
 	if err != nil {
 		return mcpResponse{Result: toolResult(err.Error(), true)}
@@ -401,9 +456,26 @@ func (s *MCPServer) mustMarshal(v mcpResponse) []byte {
 	return b
 }
 
-// injectIdentityArgs 若已通过鉴权，用 token 身份覆盖 user_id/tenant_id/agent_id（防冒充）。
+// injectIdentityArgs 把「权威身份」注入工具入参，使各工具 handler 无需各自处理身份。
+// 已通过鉴权时用 token 身份覆盖 user_id/tenant_id/agent_id（防冒充）。
+//
+// 身份来源优先级：
+//  1. 请求 context 里的 Identity（HTTP transport 由 AuthMiddleware 注入）；
+//  2. R21 T3：若 context 无身份（stdio 通道没有请求），回退到配置在 REST 客户端上的
+//     **stdio 单身份**（由 main.go 用 SetUpstreamCredentials 装配）。
+//
+// 第二条是 stdio 能写库的关键：否则 handler 拿不到 tenant_id，会被 REST 端
+// 以 `tenant_id required` 拒（400）。
 func injectIdentityArgs(ctx context.Context, args map[string]any) map[string]any {
+	return injectIdentityArgsWith(ctx, args, nil)
+}
+
+// injectIdentityArgsWith 注入身份；fallback 为 stdio 场景的进程级单身份（可为 nil）。
+func injectIdentityArgsWith(ctx context.Context, args map[string]any, fallback *Identity) map[string]any {
 	id, ok := IdentityFromContext(ctx)
+	if !ok && fallback != nil {
+		id, ok = *fallback, true
+	}
 	if !ok {
 		return args
 	}
