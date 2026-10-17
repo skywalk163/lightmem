@@ -6,14 +6,21 @@
 // 红线遵守：
 //   - 凭据全部走环境变量（LIGHTMEM_PG_TEST_DSN 或 LIGHTMEM_PG_*），不硬编码；
 //   - 无 PG 环境时全部 t.Skip，不失败；
-//   - 确定性：固定 memory_id / tenant / user，不依赖 wall clock 断言；
+//   - 确定性：memory_id / tenant / user 由 uniqueTenant / uniqueID 生成（R18-A1 夹具隔离），
+//     不依赖 wall clock 断言值（ID 本身含 UnixNano 仅作前缀消歧，断言用变量而非字面量）；
 //   - 不调 LLM / 外部 embedder（hash embedder 占位）；
-//   - 测试数据用例间隔离（每个用例独立 tenant 前缀）。
+//   - 测试数据用例间隔离（每个用例独立 tenant + memory_id 前缀）。
+//
+// R18-A1 变更：改用 uniqueTenant / uniqueID 生成进程级唯一前缀，彻底隔离
+// lightmem_test 库的历史残留（version 4-8 曾导致 Version 断言失败），
+// 不再依赖 TRUNCATE，也不需修改任何迁移 SQL。
+// R18-A2 变更：confidence 断言改为 1e-6 容差（配合迁移 real→double precision 双保险）。
 package pg
 
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"sync"
 	"testing"
@@ -107,6 +114,19 @@ func newPgTestBackend(t *testing.T, cfg *pgTestConfig) kernel.StorageBackend {
 
 // ---- 测试数据构造助手 ----
 
+// uniqueTenant 生成进程级唯一 tenant 前缀（R18-A1 夹具隔离）。
+// 根因：lightmem_test 库存在历史残留（version 4-8），固定 tenant/memory_id 会被
+// ON CONFLICT 续增；每次用例用 os.Getpid()+UnixNano() 唯一前缀彻底隔离，
+// 使测试在 fresh 库与既有残留库上均可确定性 PASS。
+func uniqueTenant(tag string) string {
+	return fmt.Sprintf("r18a_%s_%d_%d", tag, os.Getpid(), time.Now().UnixNano())
+}
+
+// uniqueID 生成进程级唯一 memory_id 前缀，与唯一 tenant 配套，避免跨用例冲突。
+func uniqueID(tag, suffix string) string {
+	return fmt.Sprintf("%s_%d_%d_%s", tag, os.Getpid(), time.Now().UnixNano(), suffix)
+}
+
 // makeTestMemory 构造一条确定性的测试记忆。
 // tenant/user/id 由调用方传入，保证用例间隔离。
 func makeTestMemory(id, tenant, user, fact string) *kernel.Memory {
@@ -137,9 +157,10 @@ func TestPgUpsertGetRoundtrip(t *testing.T) {
 	be := newPgTestBackend(t, cfg)
 	ctx := context.Background()
 
-	tenant := "r10b_roundtrip"
+	tenant := uniqueTenant("roundtrip")
 	user := "u_roundtrip"
-	m := makeTestMemory("mem_roundtrip_001", tenant, user, "the sky is blue on a clear day")
+	memID := uniqueID("mem_roundtrip", "001")
+	m := makeTestMemory(memID, tenant, user, "the sky is blue on a clear day")
 
 	// 补充 JSONB 字段
 	m.ReferenceFrame = kernel.ReferenceFrame{
@@ -155,7 +176,7 @@ func TestPgUpsertGetRoundtrip(t *testing.T) {
 		t.Fatalf("Upsert: %v", err)
 	}
 
-	got, err := be.Get(ctx, "mem_roundtrip_001", user, tenant)
+	got, err := be.Get(ctx, memID, user, tenant)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -171,7 +192,6 @@ func TestPgUpsertGetRoundtrip(t *testing.T) {
 		{"UserID", got.UserID, m.UserID},
 		{"Fact", got.Fact, m.Fact},
 		{"MemoryKind", string(got.MemoryKind), string(m.MemoryKind)},
-		{"Confidence", got.Confidence, m.Confidence},
 		{"Source", got.Source, m.Source},
 		{"Version", got.Version, m.Version},
 		{"Visibility", string(got.Visibility), string(m.Visibility)},
@@ -195,6 +215,13 @@ func TestPgUpsertGetRoundtrip(t *testing.T) {
 			got.ReferenceFrame.Scene, m.ReferenceFrame.Scene)
 	}
 
+	// Confidence 容差断言（R18-A2-b）：SQL 中 confidence real(float4) 回读有精度损失，
+	// 即使迁移已对齐 double precision，仍保留 1e-6 容差兜底既有 float4 库回读。
+	if math.Abs(float64(got.Confidence)-float64(m.Confidence)) > 1e-6 {
+		t.Errorf("field Confidence: got %v, want %v (delta > 1e-6, float4 精度损失)",
+			got.Confidence, m.Confidence)
+	}
+
 	// GoalDetail JSONB 回读
 	if got.GoalDetail == nil {
 		t.Fatal("GoalDetail: expected non-nil after roundtrip")
@@ -213,16 +240,21 @@ func TestPgQueryVectorSearch(t *testing.T) {
 	be := newPgTestBackend(t, cfg)
 	ctx := context.Background()
 
-	tenant := "r10b_search"
+	tenant := uniqueTenant("search")
 	user := "u_search"
 
 	// 写入 20 条记忆，其中一条是"target"
+	targetID := ""
 	for i := 0; i < 20; i++ {
 		fact := fmt.Sprintf("routine fact number %d about generic topic", i)
 		if i == 7 {
 			fact = "the capital of france is paris and the eiffel tower is 324 meters tall"
 		}
-		m := makeTestMemory(fmt.Sprintf("mem_search_%03d", i), tenant, user, fact)
+		id := uniqueID("mem_search", fmt.Sprintf("%03d", i))
+		if i == 7 {
+			targetID = id
+		}
+		m := makeTestMemory(id, tenant, user, fact)
 		if err := be.Upsert(ctx, m); err != nil {
 			t.Fatalf("Upsert %d: %v", i, err)
 		}
@@ -268,16 +300,16 @@ func TestPgQueryVectorSearch(t *testing.T) {
 	}
 	found := false
 	for _, r := range results {
-		if r.MemoryID == "mem_search_007" {
+		if r.MemoryID == targetID {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("Query: expected mem_search_007 in results, got %+v", results)
+		t.Errorf("Query: expected %q (i=7) in results, got %+v", targetID, results)
 	}
 
-	// 2) VectorSearch：用 target 文本的 hash 向量搜，预期 top-1 是 mem_search_007
+	// 2) VectorSearch：用 target 文本的 hash 向量搜，预期 top-1 是 i=7 那条（targetID）
 	targetVec, _ := hashEmbed("the capital of france is paris and the eiffel tower is 324 meters tall")
 	vq := kernel.QueryParams{
 		TenantID: tenant,
@@ -292,9 +324,9 @@ func TestPgQueryVectorSearch(t *testing.T) {
 	if len(vresults) == 0 {
 		t.Fatal("VectorSearch: expected at least 1 result, got 0")
 	}
-	if vresults[0].MemoryID != "mem_search_007" {
+	if vresults[0].MemoryID != targetID {
 		t.Errorf("VectorSearch top-1: got %q, want %q (all: %+v)",
-			vresults[0].MemoryID, "mem_search_007", vresults)
+			vresults[0].MemoryID, targetID, vresults)
 	}
 }
 
@@ -304,9 +336,10 @@ func TestPgPersistenceAcrossRestart(t *testing.T) {
 	cfg := loadPgTestConfig(t)
 	ctx := context.Background()
 
-	tenant := "r10b_persist"
+	tenant := uniqueTenant("persist")
 	user := "u_persist"
-	m := makeTestMemory("mem_persist_001", tenant, user, "this fact must survive a backend restart")
+	memID := uniqueID("mem_persist", "001")
+	m := makeTestMemory(memID, tenant, user, "this fact must survive a backend restart")
 
 	// 第一阶段：写入并 Close
 	be1 := newPgTestBackend(t, cfg)
@@ -341,7 +374,7 @@ func TestPgPersistenceAcrossRestart(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = be2.Close() })
 
-	got, err := be2.Get(ctx, "mem_persist_001", user, tenant)
+	got, err := be2.Get(ctx, memID, user, tenant)
 	if err != nil {
 		t.Fatalf("Get after restart: %v", err)
 	}
@@ -360,13 +393,13 @@ func TestPgTenantIsolation(t *testing.T) {
 	ctx := context.Background()
 
 	// tenant A 的私有记忆
-	mA := makeTestMemory("mem_iso_a", "r10b_tenantA", "u_a", "tenant A secret fact")
+	mA := makeTestMemory(uniqueID("mem_iso", "a"), uniqueTenant("tenantA"), "u_a", "tenant A secret fact")
 	if err := be.Upsert(ctx, mA); err != nil {
 		t.Fatalf("Upsert tenantA: %v", err)
 	}
 
 	// tenant B 的用户去 Get tenant A 的记忆 → 应失败（不可见）
-	_, err := be.Get(ctx, "mem_iso_a", "u_b", "r10b_tenantB")
+	_, err := be.Get(ctx, mA.MemoryID, "u_b", uniqueTenant("tenantB"))
 	if err == nil {
 		t.Error("Get cross-tenant: expected error, got nil (memory leaked across tenants)")
 	}
@@ -378,18 +411,19 @@ func TestPgVisibility(t *testing.T) {
 	be := newPgTestBackend(t, cfg)
 	ctx := context.Background()
 
-	tenant := "r10b_vis"
+	tenant := uniqueTenant("vis")
 	owner := "u_owner"
 	other := "u_other"
 
-	m := makeTestMemory("mem_vis_001", tenant, owner, "owner-only private fact")
+	memID := uniqueID("mem_vis", "001")
+	m := makeTestMemory(memID, tenant, owner, "owner-only private fact")
 	m.Visibility = kernel.VisPrivate
 	if err := be.Upsert(ctx, m); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 
 	// owner 读 → 应成功
-	got, err := be.Get(ctx, "mem_vis_001", owner, tenant)
+	got, err := be.Get(ctx, memID, owner, tenant)
 	if err != nil {
 		t.Errorf("Get by owner: unexpected error %v", err)
 	}
@@ -398,7 +432,7 @@ func TestPgVisibility(t *testing.T) {
 	}
 
 	// 同租户非 owner 读 private → 应失败（private 只有 owner 可见）
-	_, err = be.Get(ctx, "mem_vis_001", other, tenant)
+	_, err = be.Get(ctx, memID, other, tenant)
 	if err == nil {
 		t.Error("Get private by non-owner: expected error, got nil (visibility leak)")
 	}
@@ -410,12 +444,15 @@ func TestPgGDPR(t *testing.T) {
 	be := newPgTestBackend(t, cfg)
 	ctx := context.Background()
 
-	tenant := "r10b_gdpr"
+	tenant := uniqueTenant("gdpr")
 	user := "u_gdpr"
 
 	// 写入 3 条
+	gdprIDs := make([]string, 3)
 	for i := 0; i < 3; i++ {
-		m := makeTestMemory(fmt.Sprintf("mem_gdpr_%03d", i), tenant, user, fmt.Sprintf("gdpr fact %d", i))
+		id := uniqueID("mem_gdpr", fmt.Sprintf("%03d", i))
+		gdprIDs[i] = id
+		m := makeTestMemory(id, tenant, user, fmt.Sprintf("gdpr fact %d", i))
 		if err := be.Upsert(ctx, m); err != nil {
 			t.Fatalf("Upsert %d: %v", i, err)
 		}
@@ -431,10 +468,10 @@ func TestPgGDPR(t *testing.T) {
 	}
 
 	// 2) DeleteByID 删一条
-	if err := be.(kernel.ComplianceBackend).DeleteByID(ctx, "mem_gdpr_001"); err != nil {
+	if err := be.(kernel.ComplianceBackend).DeleteByID(ctx, gdprIDs[1]); err != nil {
 		t.Fatalf("DeleteByID: %v", err)
 	}
-	_, err = be.Get(ctx, "mem_gdpr_001", user, tenant)
+	_, err = be.Get(ctx, gdprIDs[1], user, tenant)
 	if err == nil {
 		t.Error("Get after DeleteByID: expected error, got nil (not deleted)")
 	}
@@ -455,25 +492,26 @@ func TestPgIdempotencyKey(t *testing.T) {
 	be := newPgTestBackend(t, cfg)
 	ctx := context.Background()
 
-	tenant := "r10b_idem"
+	tenant := uniqueTenant("idem")
 	user := "u_idem"
 
 	// 第一次 Upsert
-	m1 := makeTestMemory("mem_idem_001", tenant, user, "first version of the fact")
+	memID := uniqueID("mem_idem", "001")
+	m1 := makeTestMemory(memID, tenant, user, "first version of the fact")
 	m1.Version = 1
 	if err := be.Upsert(ctx, m1); err != nil {
 		t.Fatalf("Upsert #1: %v", err)
 	}
 
 	// 第二次 Upsert 同 memory_id（fact 不同，验证 ON CONFLICT DO UPDATE 生效）
-	m2 := makeTestMemory("mem_idem_001", tenant, user, "updated version of the fact")
+	m2 := makeTestMemory(memID, tenant, user, "updated version of the fact")
 	m2.Version = 2
 	if err := be.Upsert(ctx, m2); err != nil {
 		t.Fatalf("Upsert #2: %v", err)
 	}
 
 	// 验证：Get 回读是更新后的内容，版本号自增
-	got, err := be.Get(ctx, "mem_idem_001", user, tenant)
+	got, err := be.Get(ctx, memID, user, tenant)
 	if err != nil {
 		t.Fatalf("Get after double upsert: %v", err)
 	}
@@ -500,11 +538,12 @@ func TestPgBackfillVectors(t *testing.T) {
 	be := newPgTestBackend(t, cfg)
 	ctx := context.Background()
 
-	tenant := "r10b_backfill"
+	tenant := uniqueTenant("backfill")
 	user := "u_backfill"
 
 	// 写入一条 pending 状态的记忆
-	m := makeTestMemory("mem_backfill_001", tenant, user, "backfill test fact about quantum computing")
+	memID := uniqueID("mem_backfill", "001")
+	m := makeTestMemory(memID, tenant, user, "backfill test fact about quantum computing")
 	if err := be.Upsert(ctx, m); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
@@ -543,13 +582,13 @@ func TestPgBackfillVectors(t *testing.T) {
 	}
 	found := false
 	for _, r := range vresults {
-		if r.MemoryID == "mem_backfill_001" {
+		if r.MemoryID == memID {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("VectorSearch after backfill: expected mem_backfill_001, got %+v", vresults)
+		t.Errorf("VectorSearch after backfill: expected %q, got %+v", memID, vresults)
 	}
 }
 
@@ -559,7 +598,7 @@ func TestPgConcurrent(t *testing.T) {
 	be := newPgTestBackend(t, cfg)
 	ctx := context.Background()
 
-	tenant := "r10b_conc"
+	tenant := uniqueTenant("conc")
 	user := "u_conc"
 
 	var wg sync.WaitGroup
@@ -570,7 +609,7 @@ func TestPgConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			m := makeTestMemory(fmt.Sprintf("mem_conc_%03d", i), tenant, user, fmt.Sprintf("concurrent fact %d", i))
+			m := makeTestMemory(uniqueID("mem_conc", fmt.Sprintf("%03d", i)), tenant, user, fmt.Sprintf("concurrent fact %d", i))
 			if err := be.Upsert(ctx, m); err != nil {
 				errCh <- fmt.Errorf("Upsert %d: %w", i, err)
 			}

@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS memories (
     superseded_by      text,
 
     -- 质量/来源
-    confidence         real NOT NULL DEFAULT 0,
+    confidence         double precision NOT NULL DEFAULT 0,
     source             text NOT NULL DEFAULT '',
     version            int  NOT NULL DEFAULT 1,
     importance         real NOT NULL DEFAULT 0,

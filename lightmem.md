@@ -1863,4 +1863,20 @@ R14 任务书 §九.3 写"holdout_v2 全 L1 且无 entity / recorded_at"，其�
 
 **连带影响：** R14 任务书 §九.3 中"无 recorded_at"的判断在所有下游引用处均应以"entity / task 缺失"替代。本更正不改变 R14 的任何代码结论，只修正书面描述。
 
+### D.8 缺陷账 L-216 关闭记录（R18 新增，如实登记）
+
+**缺陷编号**：L-216（R17 收口报告 §5.1 新登记）
+**状态**：✅ 已关闭（R18 A 线）
+
+| 字段 | 内容 |
+|---|---|
+| 现象 | `TestPgUpsertGetRoundtrip` 报 `field Confidence: got 0.8999999761581421, want 0.9`；float4 回读丢精度 |
+| 根因 | `kernel/migrations/001_pgvector.up.sql` 声明 `confidence real`（float4），而 `Memory.Confidence` 为 float64；float4 列回读必然丢精度。R10 期测试库为 `double precision`（float8）掩盖了该分歧 |
+| 裁定结论 | **方案 a（Schema 对齐）**：2026-10-16 业主裁定，允许触碰红线①③，改迁移为 `double precision` |
+| 实际处置 | ① `001_pgvector.up.sql` 第 44 行 `confidence real NOT NULL DEFAULT 0` → `confidence double precision NOT NULL DEFAULT 0`（fresh 库立即生效）；② `eval/e2e/pg/pg_e2e_test.go` 断言层同时加 1e-6 容差兜底既有 float4 库回读（方案 a + b 兼施）；③ 存量库（已按 `real` 创建 float4 列的库）**本轮不执行 ALTER**，需另行排维护窗口并按红线③再次裁定 |
+| 验收 | `go test -count=1 ./eval/e2e/pg/...` 在 fresh 库全 PASS；`git diff` 在 `eval/polaris/`、`kernel/rank_fusion.go`、`eval/run_kpi.go` 为空 |
+| 遗留 | 存量库 float4 列 ALTER 未做（登记为待维护窗口项）；R17 报告 §5.2 的"pg e2e 夹具隔离"与 §5.2 的 `r10_pg_setup.sh` `$$` 库名不一致项由 R18 A1（唯一 tenant/ID 前缀）与收口环节一并处置 |
+
+> 说明：本节同时覆盖 R17 §5.2 登记的「pg e2e 夹具隔离问题（R10-B P3 同款）」——已在 R18 A1 通过 `uniqueTenant` / `uniqueID`（`os.Getpid()` + `time.Now().UnixNano()`）前缀彻底隔离，fresh 库与历史残留库上均可确定性 PASS，无需 TRUNCATE 也无需改迁移 SQL。
+
 | 配套交付物（本文档之外） | `docs/光明记忆应用包生态与差异化定位_v1.0.md`（包生态设计 + 竞品对照 + M1–M10 口径） |

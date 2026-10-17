@@ -40,7 +40,7 @@ func BenchmarkPgUpsert(b *testing.B) {
 	}
 	be := newPgTestBackend(&testing.T{}, cfg)
 	ctx := context.Background()
-	tenant := "r10b_bench_upsert"
+	tenant := uniqueTenant("bench_upsert")
 	user := "u_bench"
 
 	// 预填充：确保表有一定数据量（PG 性能与表大小相关）
@@ -67,7 +67,7 @@ func BenchmarkPgQuery(b *testing.B) {
 	}
 	be := newPgTestBackend(&testing.T{}, cfg)
 	ctx := context.Background()
-	tenant := "r10b_bench_query"
+	tenant := uniqueTenant("bench_query")
 	user := "u_bench"
 
 	// 预填充 200 条
@@ -101,7 +101,7 @@ func BenchmarkPgVectorSearch(b *testing.B) {
 	}
 	be := newPgTestBackend(&testing.T{}, cfg)
 	ctx := context.Background()
-	tenant := "r10b_bench_vec"
+	tenant := uniqueTenant("bench_vec")
 	user := "u_bench"
 
 	// 预填充 100 条 + backfill 向量

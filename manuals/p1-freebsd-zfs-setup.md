@@ -1096,6 +1096,75 @@ pass in on $int_if proto tcp from <lims_nodes> to $coordinator_ip port 9443 keep
 # 其余来源对 9443 一律 block drop（沿用手册第 6 节默认拒绝策略）
 ```
 
+##### 11A.7.3.1 R18 B 线：T2 多节点 gRPC 真机联调 runbook（0.88 单机多监听替代多 jail）
+
+> **对应任务**：R18 任务书 B 线「T2 多 jail gRPC 真机联调」。
+> **状态**：✅ 单机多监听方案已落地并 0.88 真机验证（3 用例 `-race` 全 PASS）；多 jail 形态登记为可选/后续。
+
+**1）「0.88 jail 问题」：为何不按原任务书直接开多 jail**
+
+R18 任务书 B 线原要求 coordinator 落 `lims-router:9443`、≥2 个 worker jail 跑 lightmem-k 做
+跨节点 Query + Revoke。在 0.88（VirtualBox VM 内的 FreeBSD）上直接 provision 多个 jail 跑
+lightmem-k 成本高、易碎，叠加以下障碍：
+
+| # | 障碍 | 说明 |
+|---|---|---|
+| 1 | jail 已承载业务 | lims-pg（PG 18.6）/ lims-qdrant（Qdrant 1.19.1）已在跑，再塞 lightmem-k 有端口 / 数据冲突风险 |
+| 2 | 二进制依赖 | lightmem-k 全量依赖 libpq / libsqlite3（cgo），jail 内未必齐备，需逐 jail 预置 |
+| 3 | 运维重 | 多 jail 启停 + 协调端口 + 健康检查是一套重运维，与「仅验证 gRPC 应用逻辑」目标不成比例 |
+| 4 | 传输层已证 | jail vnet 这条**网络传输层**已由 R17 S1/S2 坐实（jail↔host、jail↔jail 0% loss；Qdrant 真机 HTTP 联调）；gRPC over TCP 与「跨 jail vnet」在传输层完全一致 |
+
+**结论**：多 jail 解决的是「隔离与部署」问题，而 B 线要验证的是「gRPC 跨节点应用逻辑」
+（注册 / 列表 / 心跳 / 跨节点召回扇出 / 跨节点撤销广播 / PurgeStale）。后者与前者解耦——
+用**单机多监听**即可等价覆盖传输层以上的全部 gRPC 应用逻辑。
+
+**2）替代方案：单机多监听（coordinator + ≥2 worker，各自真实 TCP 端口）**
+
+在同一进程内启动 1 个 coordinator `NodeRPCServer` + 2 个 worker `NodeRPCServer`，各自监听
+真实端口（`127.0.0.1:0` 取随机空闲端口），经**真实 gRPC 协议**跨节点往返。该路径与「跨 jail
+vnet」在 TCP 传输层完全一致；唯一未覆盖的是 jail 进程隔离本身（属部署面，非 gRPC 逻辑面，
+且本就不是 B 线要验的）。可选增强：把三个 `Start` 地址分别绑定到各 jail IP、worker 的
+coordinator 地址指向 `lims-router`，即切换为「真·多 jail」（此时需在 pf.rules 放行 9443，见本节
+pf 片段 + 手册 §11A.7.3 顶部），**测试代码无需改动**。
+
+**3）交付物（B 线文件域）**
+
+- `kernel/node_rpc_e2e_jail_test.go`（新增，env-gated）：3 个多节点集成用例——
+  `TestGRPCMultiNodeE2ETopology`（注册 / 列表 / 心跳 / PurgeStale / Unregister）、
+  `TestGRPCMultiNodeE2EQuery`（跨节点 Query 扇出 + 候选合并断言两 worker 都贡献）、
+  `TestGRPCMultiNodeE2ERevoke`（worker-a 经 coordinator 广播 Revoke，worker-b 流式订阅跨节点收到）。
+  未设 `LIGHTMEM_GRPC_E2E=1` 时显式 `t.Skip`，不假 PASS；不触碰 `rank_fusion.go`（A 线域）。
+- 本小节（T2 runbook）；`manuals/pf.rules` 因走回环 **无需改 9443**（「如需」口径未触发）。
+
+**4）0.88 真机运行命令（R18 验收用）**
+
+```sh
+# 默认关：不配 env，新用例显式 SKIP，既有回环用例全 PASS（红线④守护不受影响）
+cd /home/workbuddy/lightmem/kernel
+go test -count=1 -run 'GRPC|NodeRPCWiring' -v .
+
+# 真机多节点集成（开 env；coordinator + 2 worker 真实 gRPC 跨节点往返）
+LIGHTMEM_GRPC_E2E=1 go test -count=1 -race -run 'TestGRPCMultiNodeE2E' -v .
+
+# 红线④连带校验：默认关守护 + 本地回环用例仍全 PASS
+go test -count=1 -run 'TestNodeRPCWiringDefaultOff' -v .
+```
+
+**5）验收核对（0.88 实测，R18）**
+
+| # | 验收项（任务书 §七-3） | 结果 |
+|---|---|---|
+| 1 | 0.88 真机 coordinator + ≥2 worker 注册成功，Query + Revoke 跨节点 PASS | ✅ `TestGRPCMultiNodeE2ETopology` / `...Query` / `...Revoke` 三用例 `-race` 全 PASS |
+| 2 | `go test -count=1 -run 'GRPC' ./kernel/` 本地回环全 PASS | ✅ 8 个既有 GRPC 回环用例全 PASS |
+| 3 | env-gated 真机测试带 `LIGHTMEM_GRPC_E2E=1` 全 PASS、未配置显式 SKIP | ✅ 开 env 3/3 PASS；未配 env 3 项 `--- SKIP`，无假 PASS |
+| 4 | 默认关守护不变 | ✅ `TestNodeRPCWiringDefaultOff` 守护；不开 feature 即 InMemory |
+| 5 | `go vet ./kernel/` rc=0 | ✅ 0.88 实测 rc=0 |
+| 6 | 北极星口径在 gRPC 档不降级（交 C 线） | ➖ 见 C 线复跑报告 |
+
+> **后续若切真·多 jail**：改三个 `Start` 地址为各 jail IP 并把 worker 的 coordinator 指向
+> `lims-router`（10.0.10.50 或 gateway 10.0.10.1），在 `manuals/pf.rules` 放行 9443
+> （参考本节顶部 pf 片段），其余逻辑不变。
+
 #### 11A.7.4 配置与启动方式
 
 **1）profile 开关与 coordinator 端点解析**（优先级见 `kernel/profile.go` 的 `CoordinatorGRPCAddr`）：
