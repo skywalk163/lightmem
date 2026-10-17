@@ -8,6 +8,24 @@
 
 ---
 
+## ⭐ 新用户从这开始：5 分钟让所有 AI 共用一个大脑
+
+你的 DeepSeek Harness / Trae / CodeArts / WorkBuddy / 小浣熊……各自失忆。
+lightmem 让它们**连到同一个记忆服务**，一个 AI 沉淀的经验，另一个直接复用。
+
+```bash
+sh integrations/quickstart/install.sh      # 一条命令：起服务 + 签 token + 生成接入包
+```
+
+然后把生成的 `_lightmem_run/clients/agent-prompt.md` 粘给你的 AI，它会自己装好。
+
+- **人看**：[`GETTING_STARTED.md`](GETTING_STARTED.md)（5 分钟上手 + 宣传 + 排障）
+- **AI 看**：[`AGENTS.md`](AGENTS.md)（工具清单 + 接入事实 + 开发红线）
+
+> 个人档默认 **SQLite，零外部依赖**（不用装 PostgreSQL / Docker）。
+
+---
+
 ## 🚀 快速开始
 
 ### 环境要求
@@ -77,6 +95,11 @@ curl "http://localhost:8080/search?q=客户A偏好&tenant_id=t1&viewer=u1"
 
 | 文档 | 路径 | 说明 |
 |---|---|---|
+| **接入手册（新用户首选）** | `GETTING_STARTED.md` | 5 分钟上手：一键部署 → 接 AI → 使用与排障（含宣传） |
+| **AI Agent 入口** | `AGENTS.md` | 给 AI 看：13 个工具清单、各家配置事实、开发红线 |
+| **一键部署** | `integrations/quickstart/install.sh` | 起服务 + 签 token + 生成接入包（零外部依赖） |
+| **token 签发** | `integrations/agent-onboarding/issue_token.py` | 为每个 AI 签发独立 token（防冒充） |
+| **配置生成** | `integrations/agent-onboarding/gen_configs.py` | 生成 8 家可直接粘贴的 MCP 配置片段 |
 | 架构设计文档 | `lightmem.md` | 完整架构设计（v2.4.1，含 v2.4 Monty 建议与 v2.4.1 收口） |
 | 收口报告 | `.dumate/inbox/_R138_B线收口报告.md` | R138-B 任务交付报告 v5 |
 | 极简开发计划 | `.dumate/inbox/_R138_B线极简开发计划_4小时版.md` | 4 小时权重校准计划 |
