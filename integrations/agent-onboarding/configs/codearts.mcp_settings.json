@@ -1,17 +1,23 @@
 {
+  "_comment": "R21 T3：CodeArts 原生 stdio 配置。Windows 上请用交叉编译的 lightmem-mcp.exe（见报告 §3.1）。",
+  "_comment2": "关键：stdio 无请求头，必须用「单条」token 表 —— LIMS_AGENT_TOKENS 指向只含本 Agent 那一条的 JSON 文件。",
+  "_comment3": "带整表会被 SingleIdentity() 拒绝（多身份无法区分）→ 上游 REST 返回 401。",
+  "_comment4": "CodeArts 的 command 必须是「数组」（命令 + 参数合并）；写成分开的 command/args 会被忽略。",
   "mcp": {
     "lightmem": {
       "enabled": true,
       "timeout": 60000,
       "type": "local",
       "command": [
-        "<LIGHTMEM_MCP_BIN>",
+        "<LIGHTMEM_MCP_EXE>",
         "-transport",
         "stdio",
-        "-profile",
-        "<LIGHTMEM_PROFILE>"
+        "-rest-base",
+        "http://192.168.0.88:18443"
       ],
-      "environment": {}
+      "environment": {
+        "LIMS_AGENT_TOKENS": "<PATH_TO_SINGLE_TOKEN_JSON>"
+      }
     }
   }
 }

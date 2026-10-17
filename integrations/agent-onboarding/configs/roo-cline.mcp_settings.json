@@ -1,15 +1,21 @@
 {
+  "_comment": "R21 T3：Roo Code / Cline 系 stdio 配置。Windows 上用交叉编译的 lightmem-mcp.exe。",
+  "_comment2": "关键：stdio 无请求头，必须用「单条」token 表 —— env.LIMS_AGENT_TOKENS 指向只含本 Agent 那一条的 JSON 文件。",
+  "_comment3": "带整表会被 SingleIdentity() 拒绝（多身份无法区分）→ 上游 REST 返回 401。",
+  "_comment4": "Roo/Cline 用「字符串 command + args 数组」，与 CodeArts 的 command 数组写法不同，勿混。",
   "mcpServers": {
     "lightmem": {
       "type": "stdio",
-      "command": "<LIGHTMEM_MCP_BIN>",
+      "command": "<LIGHTMEM_MCP_EXE>",
       "args": [
         "-transport",
         "stdio",
-        "-profile",
-        "<LIGHTMEM_PROFILE>"
+        "-rest-base",
+        "http://192.168.0.88:18443"
       ],
-      "env": {},
+      "env": {
+        "LIMS_AGENT_TOKENS": "<PATH_TO_SINGLE_TOKEN_JSON>"
+      },
       "alwaysAllow": [],
       "disabled": false
     }
