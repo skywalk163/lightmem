@@ -1843,7 +1843,7 @@ M1=1.0000、M2=0.2498、压缩 35.33%、FP vetoed=0 **逐项一致**；`polaris_
 
 - **PG 18 迁入 `lims-pg` jail**：runbook 已就绪（`manuals/p1-freebsd-zfs-setup.md` §11A.4），需停 PG 维护窗口执行；迁移前先 `zfs snapshot zroot/lims/pg@pre-migration`。
 - **Qdrant 真机验收**：`backend_qdrant.go` 已骨架交付并过静态核查，但 0.88 尚未部署 Qdrant 实例做真实 HTTP 联调（未配置时明确 error，不静默降级）。
-- **R10-B 既有 e2e 套件**：`eval/e2e/pg/pg_e2e_test.go` 的 `TestPg*` 两处真实缺陷（`confidence` 精度、`$$` 库名不一致）仍未修，配置 PG 后 `[4]` 会 FAIL（属「配置后硬阻断」正常告警）。
+- **R10-B 既有 e2e 套件**（已全部闭环）：① `confidence` 精度已在 R18-A2 将 `001_pgvector.up.sql` 改 `double precision` 并对断言加 1e-6 容差兜底，fresh 库往返 PASS；② `r10_pg_setup.sh` 的 `$$` 库名不一致被 R18-A1 `uniqueTenant`/`uniqueID` 环境变量直连路径绕过（e2e 改读 `LIGHTMEM_PG_TEST_DB`，不再依赖脚本串库名）；③ [4] `relation "memories" does not exist` FAIL 真因 = `newPgBackend` 只建连接不建表，`eval/e2e/pg/pg_e2e_test.go` 新增 `TestMain` 引导 `001_pgvector.up.sql`（`e94f223`，R20）后，0.88 带 PG 真机 `TestPg*` 9 项全 PASS。
 
 ### D.7 更正记录（R15 新增，如实登记）
 
