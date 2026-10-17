@@ -69,6 +69,27 @@ sudo sh install_lims_mcp_rc_d.sh --src /path/to/lightmem --tokens-file /tmp/agen
   - MCP 进程经回环调用内核时，用 `X-Lightmem-{User,Tenant,Agent}` 头承载身份，
     **仅信任 `127.0.0.1`/`::1`**。
 - **权限**：token 表含凭据，务必保持 `0600`；**不要**提交进 git。
+- **`--tokens-file` 用独立副本**：不要把该参数指向 `$PREFIX/agent-tokens.json` 本身，
+  否则 `install` 会报 `are the same file`。用 `/tmp/tokens-src.json` 之类的副本作为源。
+
+### ⚠️ 两条部署纪律（T3 实测踩过）
+
+1. **任何要上机生效的部署脚本，必须先提交再上机。**
+   T3 曾出现：rc.d 的 token 注入改动**未提交**就上机，随后为刷新版本记录执行
+   `git checkout -f origin/main` → **工作树修改被丢弃** → 重装用了无注入的旧脚本 →
+   **18443 鉴权静默失效**（服务正常、健康检查通过、token 表在盘上，但不再被读取）。
+2. **部署后必须复验「鉴权矩阵」，不能只看健康检查与 `service status`。**
+   最低限度四项：
+
+   ```sh
+   curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18443/healthz    # 期望 200（豁免）
+   curl -s -o /dev/null -w '%{http_code}\n' \
+        'http://127.0.0.1:18443/search?q=x&tenant_id=t'                        # 期望 401
+   curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOK" \
+        'http://127.0.0.1:18443/search?q=x&tenant_id=dshteam'                  # 期望 200
+   curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:18444/mcp \
+        -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'  # 期望 401
+   ```
 
 ## 日常操作
 
