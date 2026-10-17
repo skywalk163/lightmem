@@ -189,16 +189,27 @@ func (s *APIServer) handleGoalCreate(w http.ResponseWriter, r *http.Request) {
 		vis = VisTenant
 	}
 	actor := req.UserID
+	// R21 收口 · 来源归属：已认证时把 agent_id 一并落库（原实现只用 actor 当 Source，
+	// 导致 goal/step/summary 无法区分是哪个 Agent 创建的）。未认证时保持原样。
+	agentID := ""
+	if id, ok := IdentityFromContext(r.Context()); ok {
+		agentID = id.AgentID
+	}
+	src := actor
+	if agentID != "" {
+		src = agentID
+	}
 	m := &Memory{
 		MemoryID:       newMemoryID(),
 		IdempotencyKey: req.IdempotencyKey,
 		TenantID:       req.TenantID,
 		UserID:         actor,
+		AgentID:        agentID,
 		ProjectID:      req.ProjectID,
 		Visibility:     vis,
 		MemoryKind:     KindGoal,
 		Fact:           req.Fact,
-		Source:         actor,
+		Source:         src,
 		RecordedAt:     time.Now().UTC(),
 		Confidence:     0.9,
 		Version:        1,
@@ -436,16 +447,26 @@ func (s *APIServer) handleStepAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor := req.UserID
+	// R21 收口 · 来源归属：已认证时落 agent_id 与 agent 作为 source（同 goal）。
+	agentID := ""
+	if id, ok := IdentityFromContext(r.Context()); ok {
+		agentID = id.AgentID
+	}
+	src := actor
+	if agentID != "" {
+		src = agentID
+	}
 	m := &Memory{
 		MemoryID:       newMemoryID(),
 		IdempotencyKey: newMemoryID(),
 		TenantID:       req.TenantID,
 		UserID:         actor,
+		AgentID:        agentID,
 		ProjectID:      req.ProjectID,
 		Visibility:     VisTenant,
 		MemoryKind:     KindProcedure,
 		Fact:           req.Fact,
-		Source:         actor,
+		Source:         src,
 		RecordedAt:     time.Now().UTC(),
 		Confidence:     0.85,
 		Version:        1,
@@ -501,16 +522,26 @@ func (s *APIServer) handleSummaryAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor := req.UserID
+	// R21 收口 · 来源归属：已认证时落 agent_id 与 agent 作为 source（同 goal）。
+	agentID := ""
+	if id, ok := IdentityFromContext(r.Context()); ok {
+		agentID = id.AgentID
+	}
+	src := actor
+	if agentID != "" {
+		src = agentID
+	}
 	m := &Memory{
 		MemoryID:       newMemoryID(),
 		IdempotencyKey: newMemoryID(),
 		TenantID:       req.TenantID,
 		UserID:         actor,
+		AgentID:        agentID,
 		ProjectID:      req.ProjectID,
 		Visibility:     VisTenant,
 		MemoryKind:     KindEvent,
 		Fact:           req.Fact,
-		Source:         actor,
+		Source:         src,
 		RecordedAt:     time.Now().UTC(),
 		Confidence:     0.9,
 		Version:        1,
