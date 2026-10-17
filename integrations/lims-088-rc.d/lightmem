@@ -1,0 +1,197 @@
+#!/bin/sh
+# lightmem -- 光明记忆（LIMS）内核服务
+#
+# PROVIDE: lightmem
+# REQUIRE: NETWORKING
+# KEYWORD: shutdown
+#
+# 在 /etc/rc.conf 中至少需要：
+#   lightmem_enable="YES"
+#   lightmem_chdir="/usr/local/lightmem"
+#   lightmem_user="workbuddy"
+#
+# 可选（默认值见下）：
+#   lightmem_profile="/usr/local/lightmem/profiles/lims-family.profile.yaml"
+#   lightmem_listen=":18443"
+#   lightmem_embedder="hash"
+#   lightmem_pg_host="10.0.10.10"    # lims-pg jail
+#   lightmem_pg_port="5432"
+#   lightmem_pg_user="postgres"
+#   lightmem_pg_db="lims_dsh"        # 专用库，勿用 lims（同机有其它测试）
+#   lightmem_log="/var/log/lightmem.log"
+#   lightmem_pidfile="/var/run/lightmem/lightmem.pid"
+#   lightmem_pg_wait="60"            # 启动前等待 PG 就绪的秒数
+#
+# 设计说明：
+#   1. 默认走 **pgvector 档**（持久化）。Solo/SQLite 档当前是内存骨架，
+#      进程重启即丢数据，不可用于真实记忆（详见 _R160 问题记录 I-15）。
+#   2. 端口 18443 刻意避开机器上既有的 :8443 旧实例，互不影响。
+#   3. 停止时按「本服务的二进制 + profile」精确匹配，绝不误杀 :8443 旧实例。
+#   4. 启动前等待 lims-pg jail 的 5432 就绪，避免开机竞态导致后端连接失败。
+
+. /etc/rc.subr
+
+name="lightmem"
+rcvar="lightmem_enable"
+desc="lightmem (光明记忆) memory kernel"
+
+load_rc_config $name
+
+: ${lightmem_enable:="NO"}
+: ${lightmem_chdir:="/usr/local/lightmem"}
+: ${lightmem_user:="workbuddy"}
+: ${lightmem_binary:="${lightmem_chdir}/lightmem-kernel"}
+: ${lightmem_profile:="${lightmem_chdir}/profiles/lims-family.profile.yaml"}
+: ${lightmem_listen:=":18443"}
+: ${lightmem_embedder:="hash"}
+: ${lightmem_pg_host:="10.0.10.10"}
+: ${lightmem_pg_port:="5432"}
+: ${lightmem_pg_user:="postgres"}
+: ${lightmem_pg_db:="lims_dsh"}
+: ${lightmem_log:="/var/log/lightmem.log"}
+: ${lightmem_pidfile:="/var/run/lightmem/lightmem.pid"}
+: ${lightmem_pg_wait:="60"}
+: ${lightmem_start_wait:="20"}
+
+# --- 用户与 HOME -----------------------------------------------------------
+# 不要给 daemon(8) 传 -u：当 ${name}_user 被设置时，rc.subr 自己已经通过
+#     limits -C <class> su -m ${user} -c 'sh -c "<command> <command_args>"'
+# 完成了降权。再让 daemon(8) 切一次用户会令 setusercontext(3) 失败
+# （此时已非 root，无法 initgroups/setgid），服务会静默起不来。
+# `su -m` 保留调用者环境，所以 HOME 必须显式钉住。
+: ${lightmem_home:=""}
+if [ -z "$lightmem_home" ] && [ -n "$lightmem_user" ]; then
+    lightmem_home=$(eval echo "~${lightmem_user}" 2>/dev/null)
+fi
+# LIMS_PG_* 由 kernel 的 resolveSecrets 读取，用于覆盖 profile 里的连接串。
+: ${lightmem_env:="HOME=${lightmem_home} LIMS_PG_HOST=${lightmem_pg_host} LIMS_PG_PORT=${lightmem_pg_port} LIMS_PG_USER=${lightmem_pg_user} LIMS_PG_DB=${lightmem_pg_db}"}
+
+pidfile="${lightmem_pidfile}"
+# 注意：**不能**把 /usr/sbin/daemon 当作 rc.subr 的 command。
+# 本版 FreeBSD 的 daemon(8) 是「前台监管」：它会一直等到子进程退出才返回
+# （实测 `daemon -P p -o log /bin/sleep 30` 会阻塞 30s）。rc.subr 对 command
+# 是前台等待，于是 `service lightmem start` 会永久挂住。
+# 正确做法：用自定义 start_cmd 显式后台化（见 lightmem_start）。
+# command 仅作为 rc.subr 的元信息与 required_files 校验用。
+command="${lightmem_binary}"
+procname="${lightmem_binary}"
+required_dirs="${lightmem_chdir}"
+required_files="${lightmem_binary} ${lightmem_profile}"
+
+# 仅匹配本服务的进程（含完整二进制路径与 profile），
+# 避免误杀同机上其它 lightmem 实例（例如 :8443 的旧实例）。
+lightmem_pkill_pattern="${lightmem_binary} -profile ${lightmem_profile}"
+
+lightmem_group() {
+    id -g "${lightmem_user}" 2>/dev/null || echo wheel
+}
+
+lightmem_precmd() {
+    # pidfile 由以 ${lightmem_user} 身份运行的 daemon(8) 写入，目录须可写。
+    lightmem_rundir=$(dirname "${pidfile}")
+    if [ ! -d "${lightmem_rundir}" ]; then
+        install -d -o "${lightmem_user}" -g "$(lightmem_group)" -m 755 "${lightmem_rundir}"
+    fi
+    # 日志同样以服务用户身份写入。
+    if [ ! -f "${lightmem_log}" ]; then
+        install -o "${lightmem_user}" -g "$(lightmem_group)" -m 644 /dev/null "${lightmem_log}"
+    fi
+    # 等待 lims-pg jail 的 PostgreSQL 就绪（开机竞态保护）。
+    _i=0
+    while [ "${_i}" -lt "${lightmem_pg_wait}" ]; do
+        if nc -z -w 2 "${lightmem_pg_host}" "${lightmem_pg_port}" 2>/dev/null; then
+            return 0
+        fi
+        _i=$((_i + 1))
+        sleep 1
+    done
+    echo "lightmem: PostgreSQL ${lightmem_pg_host}:${lightmem_pg_port} 在 ${lightmem_pg_wait}s 内不可达" >&2
+    return 1
+}
+
+# 停止 daemon 及其 lightmem-kernel 子进程。
+# daemon -P 只记录被监管的 pid；只 kill 它会把子进程留成孤儿并继续占用端口，
+# 导致下次 start 报 EADDRINUSE。
+lightmem_stop() {
+    # 1) 先结束被监管的子进程（精确匹配本服务的二进制 + profile）
+    pkill -f "${lightmem_pkill_pattern}" 2>/dev/null
+    # 2) 再结束 daemon(8) 监管进程本身
+    if [ -f "${pidfile}" ]; then
+        kill -TERM "$(cat "${pidfile}")" 2>/dev/null
+    fi
+    _i=0
+    while [ "${_i}" -lt 20 ]; do
+        if pgrep -f "${lightmem_pkill_pattern}" >/dev/null 2>&1; then
+            sleep 1
+        else
+            break
+        fi
+        _i=$((_i + 1))
+    done
+    if pgrep -f "${lightmem_pkill_pattern}" >/dev/null 2>&1; then
+        echo "lightmem: 优雅退出超时，强制结束" >&2
+        pkill -9 -f "${lightmem_pkill_pattern}" 2>/dev/null
+        sleep 1
+    fi
+    # 3) pidfile 必须清掉：否则 daemon -P 会认为「process already running」而拒绝启动。
+    rm -f "${pidfile}"
+    return 0
+}
+
+# 判定是否在跑。以 **pidfile + kill -0** 为准（daemon(8) 监管进程），
+# 命令行为辅。仅靠 pgrep -f 会漏判：daemon 监管进程的 cmdline 是
+#     daemon: /usr/local/lightmem/lightmem-kernel[12345] (daemon)
+# 不含 " -profile "，子进程 exec 完成前的短暂窗口也会漏判。
+lightmem_status() {
+    _sup=""
+    [ -f "${pidfile}" ] && _sup=$(cat "${pidfile}" 2>/dev/null)
+    _child=$(pgrep -f "${lightmem_pkill_pattern}" 2>/dev/null)
+
+    if [ -n "${_sup}" ] && kill -0 "${_sup}" 2>/dev/null; then
+        echo "lightmem is RUNNING on ${lightmem_listen} (supervisor pid ${_sup})"
+    elif [ -n "${_child}" ]; then
+        echo "lightmem is RUNNING on ${lightmem_listen} (pid ${_child})"
+    else
+        echo "lightmem is NOT running"
+        return 1
+    fi
+    [ -n "${_child}" ] && echo "  kernel pid: $(echo "${_child}" | tr '\n' ' ')"
+    # -T 5 必须有：fetch 默认没有超时，服务异常时会永久挂住 status。
+    _health=$(fetch -q -T 5 -o - "http://127.0.0.1${lightmem_listen}/healthz" 2>/dev/null)
+    [ -n "${_health}" ] && echo "  health: ${_health}"
+    return 0
+}
+
+# 启动：显式后台化 daemon(8)，再等健康检查通过才返回。
+# -f 让 daemon 先把 stdin/stdout/stderr 指向 /dev/null，再按 -o 写日志：
+# 这样它不会继承调用方的任何 fd（否则非交互 SSH 会因管道被持有而一直不返回）。
+lightmem_start() {
+    rm -f "${pidfile}"
+    # -u 必须显式给：自定义 start_cmd 走的是 rc.subr 的 *_cmd 分支，
+    # 不会套用 ${name}_user 的 su 包装，否则服务会以 root 身份运行。
+    /usr/sbin/daemon -f -u "${lightmem_user}" -P "${pidfile}" -o "${lightmem_log}" \
+        "${lightmem_binary}" \
+        -profile "${lightmem_profile}" \
+        -listen "${lightmem_listen}" \
+        -embedder "${lightmem_embedder}" &
+    _i=0
+    while [ "${_i}" -lt "${lightmem_start_wait}" ]; do
+        if fetch -q -T 2 -o - "http://127.0.0.1${lightmem_listen}/healthz" >/dev/null 2>&1; then
+            # daemon(8) 在降权前写 pidfile，故其属主是 root；放开读权限，
+            # 便于排查时非 root 也能读到。
+            [ -f "${pidfile}" ] && chmod 644 "${pidfile}" 2>/dev/null
+            return 0
+        fi
+        _i=$((_i + 1))
+        sleep 1
+    done
+    echo "lightmem: 启动后 ${lightmem_start_wait}s 内健康检查未通过" >&2
+    return 1
+}
+
+start_precmd="lightmem_precmd"
+start_cmd="lightmem_start"
+stop_cmd="lightmem_stop"
+status_cmd="lightmem_status"
+
+run_rc_command "$1"

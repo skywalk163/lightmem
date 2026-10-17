@@ -14,6 +14,12 @@
 *.yml   text eol=lf
 *.txt    text eol=lf
 *.golden text eol=lf
+*.py    text eol=lf
+*.js    text eol=lf
+
+# rc.d 服务脚本没有扩展名，必须显式钉 LF：
+# 它由 FreeBSD 的 `sh` 执行，CRLF 会直接报 `\r: not found`。
+integrations/lims-088-rc.d/lightmem text eol=lf
 
 # 二进制（勿做行尾/编码转换）
 *.docx  binary
