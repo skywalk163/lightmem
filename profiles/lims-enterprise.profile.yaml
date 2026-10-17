@@ -242,3 +242,14 @@ scaling:
   horizontal: true
   # 自动分区重平衡
   rebalance: true
+# ---------- Agent 鉴权（R21-B 新增） ----------
+# 每个 Agent 一份 token，服务端按 token 定身份，杜绝 body 冒充（G4 修法）。
+# 默认 agent_tokens 为空 → 透传（红线④，与 R20 逐位一致）；
+# env LIMS_AGENT_TOKENS 优先于本段；require_auth: true 或 env LIMS_REQUIRE_AUTH=1 强制 401。
+# ⚠️ token 是凭证：勿提交真实 token；示例一律注释。
+auth:
+  # require_auth: false
+  agent_tokens: {}
+  # agent_tokens:
+  #   "t-dsh-...":  {agent_id: deepseek-harness, user_id: dsh-agent, tenant_id: entteam}
+  #   "t-trae-...": {agent_id: trae,            user_id: skywalk,   tenant_id: entteam}
