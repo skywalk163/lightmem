@@ -19,12 +19,18 @@ package pg
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	_ "github.com/jackc/pgx/v5/stdlib" // 注册 "pgx" 驱动，供 TestMain 引导 schema
 
 	"github.com/lightmem/kernel"
 )
@@ -79,6 +85,71 @@ func loadPgTestConfig(t *testing.T) *pgTestConfig {
 		t.Skip("LIGHTMEM_PG_HOST / LIGHTMEM_PG_TEST_DB not set; skipping real PG e2e")
 	}
 	return cfg
+}
+
+// TestMain: 配置 PG 后引导 memories 表，修复 R10-B 既有 e2e 套件在 [4] 报
+// `relation "memories" does not exist` 的 FAIL（属「配置后硬阻断」告警，非本轮引入）。
+//
+// 做法：在测试库内应用 pgvector 迁移（单一真源 = kernel/migrations/001_pgvector.up.sql，
+// 全量 IF NOT EXISTS 幂等）。红线③只禁「改」迁移 SQL，读并在测试引导中执行不违规；
+// 不触碰任何 kernel 生产文件，不新增依赖（pgx 已是依赖）。
+// 无 PG 环境时跳过引导，各用例自行 t.Skip。
+func TestMain(m *testing.M) {
+	if cfg := loadPgTestConfigOrNil(); cfg != nil {
+		if err := ensurePgSchema(cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "pg e2e schema bootstrap failed: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	os.Exit(m.Run())
+}
+
+// ensurePgSchema 在测试库内应用 pgvector 迁移，保证 memories 表（含 vector 扩展/索引）存在。
+func ensurePgSchema(cfg *pgTestConfig) error {
+	dsn := fmt.Sprintf("host=%s port=%d user=%s dbname=%s sslmode=disable",
+		cfg.host, cfg.port, cfg.user, cfg.dbname)
+	if cfg.password != "" {
+		dsn += " password=" + cfg.password
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer db.Close()
+	if err := db.Ping(); err != nil {
+		return fmt.Errorf("ping %s/%s: %w", cfg.host, cfg.dbname, err)
+	}
+
+	ddl, err := os.ReadFile(findMigrationSQL())
+	if err != nil {
+		return fmt.Errorf("read migration sql: %w", err)
+	}
+	for _, stmt := range splitSQL(string(ddl)) {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("exec migration statement: %w", err)
+		}
+	}
+	return nil
+}
+
+// findMigrationSQL 定位 001_pgvector.up.sql（基于运行时源文件路径，避免依赖 cwd）。
+func findMigrationSQL() string {
+	_, thisFile, _, _ := runtime.Caller(0)
+	// eval/e2e/pg/pg_e2e_test.go → 上溯三级到仓库根 → kernel/migrations
+	return filepath.Join(filepath.Dir(thisFile), "..", "..", "..", "kernel", "migrations", "001_pgvector.up.sql")
+}
+
+// splitSQL 按 ';' 切分迁移脚本为独立语句（迁移内无字符串字面量分号，安全）。
+func splitSQL(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ";") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		out = append(out, part)
+	}
+	return out
 }
 
 // newPgTestBackend 装配一个真实 pgvector 后端。
