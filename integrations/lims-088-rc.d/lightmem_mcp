@@ -1,0 +1,193 @@
+#!/bin/sh
+# lightmem_mcp -- 光明记忆（LIMS）原生 MCP 服务（streamable-http）
+#
+# PROVIDE: lightmem_mcp
+# REQUIRE: NETWORKING lightmem
+# KEYWORD: shutdown
+#
+# 在 /etc/rc.conf 中至少需要：
+#   lightmem_mcp_enable="YES"
+#   lightmem_mcp_chdir="/usr/local/lightmem"
+#   lightmem_mcp_user="workbuddy"
+#
+# 可选（默认值见下）：
+#   lightmem_mcp_binary="${lightmem_mcp_chdir}/lightmem-mcp"
+#   lightmem_mcp_listen=":18444"          # MCP-over-HTTP 端口（业务 REST 仍在 18443）
+#   lightmem_mcp_rest_base="http://127.0.0.1:18443"
+#   lightmem_mcp_tokens_file="/usr/local/lightmem/agent-tokens.json"
+#   lightmem_mcp_require_auth="NO"        # YES → 未认证一律 401（除运维端点）
+#   lightmem_mcp_log="/var/log/lightmem-mcp.log"
+#   lightmem_mcp_pidfile="/var/run/lightmem/lightmem-mcp.pid"
+#
+# 设计说明（沿用 lightmem rc.d 的两条 FreeBSD 坑）：
+#   1. **不能**把 /usr/sbin/daemon 当作 rc.subr 的 command —— 本版 daemon(8) 是
+#      前台监管，会等到子进程退出才返回，`service start` 会永久挂住。
+#      故用自定义 start_cmd 显式后台化 + 等健康检查。
+#   2. 自定义 *_cmd 不套用 ${name}_user 的 su 包装 —— 必须给 daemon(8) 显式 -u 降权，
+#      否则服务以 root 运行。
+#
+# 端口分工：
+#   18443 = 业务 REST（lightmem 服务，本服务是它的**下游消费者**）
+#   18444 = MCP-over-HTTP（本服务，供各 Agent 客户端接入）
+#
+# 健康检查用 /healthz：该端点已列入鉴权豁免（kernel/auth.go isOperationalEndpoint），
+# 否则 supervisor 的 fetch 会 401，服务永远起不来（T3 实测）。
+
+. /etc/rc.subr
+
+name="lightmem_mcp"
+rcvar="lightmem_mcp_enable"
+desc="lightmem native MCP server (streamable-http)"
+
+load_rc_config $name
+
+: ${lightmem_mcp_enable:="NO"}
+: ${lightmem_mcp_chdir:="/usr/local/lightmem"}
+: ${lightmem_mcp_user:="workbuddy"}
+: ${lightmem_mcp_binary:="${lightmem_mcp_chdir}/lightmem-mcp"}
+: ${lightmem_mcp_listen:=":18444"}
+: ${lightmem_mcp_rest_base:="http://127.0.0.1:18443"}
+: ${lightmem_mcp_tokens_file:="${lightmem_mcp_chdir}/agent-tokens.json"}
+: ${lightmem_mcp_require_auth:="NO"}
+: ${lightmem_mcp_log:="/var/log/lightmem-mcp.log"}
+: ${lightmem_mcp_pidfile:="/var/run/lightmem/lightmem-mcp.pid"}
+: ${lightmem_mcp_upstream_wait:="30"}
+: ${lightmem_mcp_start_wait:="20"}
+
+# HOME 必须显式钉住：`su -m` 保留调用者环境，但服务用户的 HOME 不能被继承成 root 的。
+: ${lightmem_mcp_home:=""}
+if [ -z "$lightmem_mcp_home" ] && [ -n "$lightmem_mcp_user" ]; then
+    lightmem_mcp_home=$(eval echo "~${lightmem_mcp_user}" 2>/dev/null)
+fi
+
+pidfile="${lightmem_mcp_pidfile}"
+command="${lightmem_mcp_binary}"
+procname="${lightmem_mcp_binary}"
+required_dirs="${lightmem_mcp_chdir}"
+required_files="${lightmem_mcp_binary}"
+
+# 仅匹配本服务（二进制 + -transport http + -listen 端口），避免误杀同机其它实例。
+lightmem_mcp_pkill_pattern="${lightmem_mcp_binary} -transport http -listen ${lightmem_mcp_listen}"
+
+lightmem_mcp_group() {
+    id -g "${lightmem_mcp_user}" 2>/dev/null || echo wheel
+}
+
+lightmem_mcp_precmd() {
+    lightmem_mcp_rundir=$(dirname "${pidfile}")
+    if [ ! -d "${lightmem_mcp_rundir}" ]; then
+        install -d -o "${lightmem_mcp_user}" -g "$(lightmem_mcp_group)" -m 755 "${lightmem_mcp_rundir}"
+    fi
+    if [ ! -f "${lightmem_mcp_log}" ]; then
+        install -o "${lightmem_mcp_user}" -g "$(lightmem_mcp_group)" -m 644 /dev/null "${lightmem_mcp_log}"
+    fi
+    # 等上游 REST（18443）就绪，避免开机竞态。
+    _i=0
+    while [ "${_i}" -lt "${lightmem_mcp_upstream_wait}" ]; do
+        if fetch -q -T 2 -o - "${lightmem_mcp_rest_base}/healthz" >/dev/null 2>&1; then
+            return 0
+        fi
+        _i=$((_i + 1))
+        sleep 1
+    done
+    echo "lightmem_mcp: 上游 REST ${lightmem_mcp_rest_base} 在 ${lightmem_mcp_upstream_wait}s 内不可达" >&2
+    return 1
+}
+
+lightmem_mcp_start() {
+    rm -f "${pidfile}"
+    # token 表：由 install 脚本落到 ${lightmem_mcp_tokens_file}（0600）。
+    # 不存在则**不注入** LIMS_AGENT_TOKENS → 服务端进入透传态（开发阶段友好，但无鉴权）。
+    _tokens=""
+    if [ -r "${lightmem_mcp_tokens_file}" ]; then
+        _tokens=$(cat "${lightmem_mcp_tokens_file}")
+    fi
+    _reqauth=""
+    case "${lightmem_mcp_require_auth}" in
+        [Yy][Ee][Ss]|1|true) _reqauth=1 ;;
+    esac
+
+    # -f 先切断继承的 fd；-u 显式降权；-o 写日志。
+    if [ -n "${_tokens}" ]; then
+        /usr/sbin/daemon -f -u "${lightmem_mcp_user}" -P "${pidfile}" -o "${lightmem_mcp_log}" \
+            env "HOME=${lightmem_mcp_home}" \
+                "LIMS_AGENT_TOKENS=${_tokens}" \
+                ${_reqauth:+"LIMS_REQUIRE_AUTH=${_reqauth}"} \
+            "${lightmem_mcp_binary}" \
+            -transport http \
+            -listen "${lightmem_mcp_listen}" \
+            -rest-base "${lightmem_mcp_rest_base}" &
+    else
+        /usr/sbin/daemon -f -u "${lightmem_mcp_user}" -P "${pidfile}" -o "${lightmem_mcp_log}" \
+            env "HOME=${lightmem_mcp_home}" \
+            "${lightmem_mcp_binary}" \
+            -transport http \
+            -listen "${lightmem_mcp_listen}" \
+            -rest-base "${lightmem_mcp_rest_base}" &
+    fi
+
+    _i=0
+    while [ "${_i}" -lt "${lightmem_mcp_start_wait}" ]; do
+        if fetch -q -T 2 -o - "http://127.0.0.1${lightmem_mcp_listen}/healthz" >/dev/null 2>&1; then
+            [ -f "${pidfile}" ] && chmod 644 "${pidfile}" 2>/dev/null
+            return 0
+        fi
+        _i=$((_i + 1))
+        sleep 1
+    done
+    echo "lightmem_mcp: 启动后 ${lightmem_mcp_start_wait}s 内健康检查未通过" >&2
+    return 1
+}
+
+lightmem_mcp_stop() {
+    pkill -f "${lightmem_mcp_pkill_pattern}" 2>/dev/null
+    if [ -f "${pidfile}" ]; then
+        kill -TERM "$(cat "${pidfile}")" 2>/dev/null
+    fi
+    _i=0
+    while [ "${_i}" -lt 20 ]; do
+        if pgrep -f "${lightmem_mcp_pkill_pattern}" >/dev/null 2>&1; then
+            sleep 1
+        else
+            break
+        fi
+        _i=$((_i + 1))
+    done
+    if pgrep -f "${lightmem_mcp_pkill_pattern}" >/dev/null 2>&1; then
+        echo "lightmem_mcp: 优雅退出超时，强制结束" >&2
+        pkill -9 -f "${lightmem_mcp_pkill_pattern}" 2>/dev/null
+        sleep 1
+    fi
+    rm -f "${pidfile}"
+    return 0
+}
+
+lightmem_mcp_status() {
+    _sup=""
+    [ -f "${pidfile}" ] && _sup=$(cat "${pidfile}" 2>/dev/null)
+    _child=$(pgrep -f "${lightmem_mcp_pkill_pattern}" 2>/dev/null)
+
+    if [ -n "${_sup}" ] && kill -0 "${_sup}" 2>/dev/null; then
+        echo "lightmem_mcp is RUNNING on ${lightmem_mcp_listen} (supervisor pid ${_sup})"
+    elif [ -n "${_child}" ]; then
+        echo "lightmem_mcp is RUNNING on ${lightmem_mcp_listen} (pid ${_child})"
+    else
+        echo "lightmem_mcp is NOT running"
+        return 1
+    fi
+    [ -n "${_child}" ] && echo "  mcp pid: $(echo "${_child}" | tr '\n' ' ')"
+    _tok="no"
+    [ -r "${lightmem_mcp_tokens_file}" ] && _tok="yes"
+    echo "  tokens_file: ${lightmem_mcp_tokens_file} (present=${_tok})"
+    echo "  upstream REST: ${lightmem_mcp_rest_base}"
+    _health=$(fetch -q -T 5 -o - "http://127.0.0.1${lightmem_mcp_listen}/healthz" 2>/dev/null)
+    [ -n "${_health}" ] && echo "  health: ${_health}"
+    return 0
+}
+
+start_precmd="lightmem_mcp_precmd"
+start_cmd="lightmem_mcp_start"
+stop_cmd="lightmem_mcp_stop"
+status_cmd="lightmem_mcp_status"
+
+run_rc_command "$1"
