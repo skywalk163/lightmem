@@ -4,3 +4,15 @@
 # 临时文件与构建产物
 *.tmp
 *.tmp*
+
+# —— R21 接入套件：运行目录与凭据（**含明文 token，绝不入库**）——
+# install.sh 的默认运行目录：token 表、SQLite 数据、日志、客户端接入包
+_lightmem_run/
+# 令牌/凭据类文件（无论放在哪都忽略）
+agent-tokens.json
+tokens.csv
+clients/*-token.json
+*-token.txt
+.lightmem-secrets/
+# 交叉编译产物体积大
+.lightmem-bin/
