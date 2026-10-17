@@ -1896,3 +1896,72 @@ R14 任务书 §九.3 写"holdout_v2 全 L1 且无 entity / recorded_at"，其�
 | 遗留 | 方案 a 仅落地标量/JSON 持久化，**未接入 sqlite-vec 向量**（VectorSearch 仍降级为文本，调度层 fail-open）；profile 中 `vector_extension: sqlite-vec` 暂为占位、不构成能力承诺 |
 
 > 说明：R160 的 MCP 桥 `mcp__lightmem__lightmem_search` 文本过滤问题属 A 线（参数口径），与本 B 线（持久化）正交；B 线不解决检索语义。R19 A 线另走任务书 §三 收口。
+
+---
+
+### D.10 缺陷账 L-218~L-222 关闭记录（R21 新增，如实登记）
+
+> 来源：R21「原生 MCP 内核 + 多 Agent 记忆大脑接入」（`.dumate/inbox/_R21_并行任务书.md`）。
+> 验证环境：192.168.0.88（FreeBSD 15.1，go1.25.14，PG 18.6 + pgvector 0.8.2）。
+> 门禁：**PASS 14 / FAIL 0 / SKIP 0**（`[11]` PG 真机 13/13）。
+
+#### L-218 · G2 内核无原生 MCP 端点（**已关闭**）
+
+| 字段 | 内容 |
+|---|---|
+| 现象 | lightmem 只提供 REST，`GET /mcp`、`/sse` 均 404；DSH 唯一通道是 MCP，只能靠外部 Python 桥，且桥为纯 stdio，**一次只服务一个 Agent** |
+| 根因 | `kernel/router.go` 无任何 MCP 路由；协议鸿沟需转换层 |
+| 处置 | **A 线**新增内核原生 MCP：`kernel/mcp.go`（JSON-RPC 2.0 分发 + 13 工具 + loopback REST 客户端）、`kernel/mcp_transport.go`（**双传输** stdio + streamable-http，`/mcp` POST/GET/DELETE + SSE/JSON 协商 + `Mcp-Session-Id`）、`kernel/mcp_tools.go` / `mcp_tools_workflow.go`、`kernel/cmd/lightmem-mcp/main.go`（独立二进制，**端口 18444**，不抢业务 18443）；**纯 stdlib**，`go.mod`/`go.sum` 零变化（红线⑦） |
+| 验收 | 0.88 真机：`tools/list` = **13**；HTTP 无 token **401**、带 token 200；`initialize` 回显 `2025-11-25`；**stdio 模式握手与工具调用成功（不再需要 Python）**；中文 stdio 往返 DB `length(fact)=21` 逐字匹配 |
+| 遗留 | D-1：**stdio 通道身份传递未定义**（§3.1 只定义 HTTP 头）——多 Agent 共用一个 stdio 进程时无法区分彼此，建议下一轮支持 `-agent-token`/`LIMS_AGENT_TOKEN` |
+
+#### L-219 · G3 `goal` 经 MCP 写入必 422（**已关闭**）
+
+| 字段 | 内容 |
+|---|---|
+| 现象 | `lightmem_save(memory_kind="goal")` 返回 `422 writepolicy goal_constraints: goal memory requires goal_detail`，**工作计划（业主核心用例）根本存不进去** |
+| 根因 | `kernel/writepolicy.go:163-171` 强制要求 `goal_detail` 且 `constraints` 非空、`kpi.target>0`；而 MCP 桥 `TOOLS`（`lightmem_mcp_bridge.py:350-486`）**完全不暴露该字段** |
+| 处置 | A 线 `lightmem_save`/`goal_create` 的 `inputSchema` 显式含 `goal_detail` 并透传至 REST；C 线 `handleToolSave` 支持 `goal_detail` 透传、`handleGoalCreate` 提供完整建计划入口 |
+| 验收 | 带 `goal_detail` → 200/201；**缺 → 仍 422（策略保留，是正确行为）**；`TestMCPGoalDetailNoLonger422` / `TestMCPGoalDetailMissingStill422` 双测锁定 |
+
+#### L-220 · G4 无鉴权且可冒充任意 Agent 写入（**已关闭**）
+
+| 字段 | 内容 |
+|---|---|
+| 现象 | lightmem **无任何鉴权**；`handleToolSave` 直接用 body 里的 `user_id` 当 actor，**任何人可冒充任意 Agent 写入任意 tenant** |
+| 根因 | `kernel/server_middleware.go` 只有 Logging/Recover/TraceID，无认证；写路径信任 body 身份 |
+| 处置 | **B 线**新增 `kernel/auth.go`：`Identity`/`IdentityFromContext`/`AuthMiddleware`/`RequireIdentity`/`ResolveActor`/`EnforcePrivateOwner`；token 源 env `LIMS_AGENT_TOKENS`（JSON 串或文件路径）> profile `auth.agent_tokens`；`crypto/subtle` 常量时间比较；**默认透传**（未配置 token 时，保 R160 零回归，红线④），`LIMS_REQUIRE_AUTH=1` 强制 401。**C 线**四个写 handler 改由 `ResolveActor` 取身份（token 优先，忽略 body 的 `user_id`/`tenant_id`）+ `EnforcePrivateOwner` → 403 |
+| 验收 | 部署探针：无 token 401 / 错 token 401 / 正确 token 200 / 默认透传 200 / `REQUIRE_AUTH=1` 拒 401；**MCP 通道冒充测试**：token=`raccoon/skywalk`，body 谎称 `evil/eviltenant` → DB 落 `r21close/skywalk`（token 胜出）；`auth_test.go` 27 Test 含 `-race` 全 PASS |
+| 遗留 | D-1（stdio 身份，见 L-218）；D-3 token 表需扩到 8 家 |
+
+#### L-221 · G8 PG 后端 `private` 记忆越权泄露（**P0 安全，已关闭**）
+
+| 字段 | 内容 |
+|---|---|
+| 现象 | **PG 后端下，`visibility=private` 的记忆对同租户任何人可见——包括「不传 viewer」**。E 线在 0.88 隔离租户 `r21leak` 无歧义复现 |
+| 根因 | `kernel/backend_pg.go` 的可见性谓词 `(visibility = $1 OR … OR tenant_id = $3 OR …)` 中，`$1` 传的是 `q.Viewer`（用户名）却与 `visibility` **枚举**比较 → **该分支恒假**（owner 校验形同虚设）；且 `tenant_id = $3` **无差别放行 `private` 行**。`VectorSearch` 同一写法。**SQLite/Qdrant 走 `canView` 本就正确，仅 PG 分叉**，而 0.88 生产档正是 family+pgvector |
+| 漏网主因 | 既有 `TestSearchViewerPrivateIsolation`（`router_search_test.go:235`）**跑在 SQLite 上**，因此**永远测不到 PG 这条分叉**——绿灯是假象 |
+| 处置 | B 线新增 `pgVisibilityPredicate(viewerParam, tenantParam)`，**逐条对齐 `canView`**（含 `$viewer <> ''` / `$tenant <> ''` 空值守卫）；`Query` 与 `VectorSearch` 两处替换；新增 `eval/e2e/pg/pg_visibility_e2e_test.go`（**PG 真机，env-gated**） |
+| 验收 | 0.88 fresh 库 `lightmem_r21b`：**7 组查询矩阵全部对齐 canView**，含 ①`viewer=""` → **private 命中 0**（反漏网断言）②异用户 viewer → **private 命中 0**；VectorSearch 变体 + 跨租户定向共享 + shared_user 匿名隔离；既有 `TestPg*` 9 项零回归（13/13 PASS） |
+
+#### L-222 · G9 PG `ON CONFLICT` 只更新 7 列 → 更新类写入静默失效（**P0 功能，已关闭**）
+
+| 字段 | 内容 |
+|---|---|
+| 现象 | `UpdateGoalProgress` 返回 **`200 progress=0.5`**，但 `psql` 直查 `goal_detail->>'progress'` 为**空**。即**进度推进「写了等于没写」** |
+| 根因 | `kernel/backend_pg.go` 的 `ON CONFLICT (memory_id) DO UPDATE SET` **只更新 7 列**（`fact/confidence/version/superseded_by/valid_until/reference_frame/vector_status`），**`goal_detail`、`layer`、`provenance`、`feedback_records`、`version_history`、`importance` 等列不在其中**。后果波及：进度推进、状态迁移、**反馈回写（rejected 降权）**、层级晋升 —— 全部静默失效 |
+| 归因 | 属 **R20 基线既有缺陷**（已核对 `03e09c6:kernel/backend_pg.go` 同一子句，非 R21 引入）；**因 R21 工作流工具面首次暴露**，且直接击穿业主核心用例 |
+| 处置 | 收口者补全 `ON CONFLICT SET` 列表（共 16 列）。均为同一 `memory_id` **就地更新**，语义符合只增不改（§4.1），**不触碰红线①③**（未改 Schema 语义、未改迁移 SQL） |
+| 验收 | 0.88 真机隔离实例 + **DB 层直查**：`goal_detail->>'status'=active`、`goal_detail->>'progress'=0.5`、`version=4`；工作流全链（建计划→推进度→改状态→列计划）8 项全 PASS |
+| 教训 | **`ON CONFLICT DO UPDATE SET` 的列清单是静默失效高发点**；凡「更新既有记忆」的功能，**必须做 DB 层断言**，只看 API 200 会漏掉整类缺陷 |
+
+#### 附 · 同轮关闭的非编号缺陷
+
+| 编号 | 缺陷 | 处置 | 验收 |
+|---|---|---|---|
+| **B-§6.2** | PG `SharedWithTenants` 编解码**双向错位**：写侧把 JSON 数组串当 `text[]` 传（`malformed array literal`，22P02）→ 任何带该字段的记忆写不进去；读侧把 PG 数组字面量当 JSON 解 → 读回为空 | 写侧 `stringArrFromJSON` 输出 PG 数组字面量（含 `\`/`"` 转义）；新增 `pgArrayToJSON` 反向解析，三处读点改用 | 编译 + gate [11] PASS；PG 真机可见性测试的跨租户用例经此路径 |
+| **D-2** | `goal/state` 入参名不一致：任务书冻结 `status`，实现读 `state` → Agent 传 `status` **HTTP 200 但状态不变（静默失效）** | 两者兼容（`status` 优先、`state` 兜底），**双缺返回 400**（不再静默成功） | 真机：`status=paused` 生效、`state=active` 生效、双缺 400 |
+| **MCP→REST 身份接缝** | A 线以 `X-Lightmem-*` 头把身份带给 loopback REST，**REST 侧 `AuthMiddleware` 原先不读该头** → 身份第二跳丢失，G4 的 token 优先在 MCP 通道实际不生效 | `AuthMiddleware` 接受回环来源身份头，且**仅信任 `127.0.0.1`/`::1`**（非回环一律忽略，否则等于把 G4 换个门） | MCP 通道冒充测试通过（token 胜出，body 谎称被忽略） |
+| **L-A1** | `plan_list` 的 `progress`/`status` 为空 | 根因：`/tools/memory/plan` 返回 `[]QueryResult`（§4.4 检索字段，**不含 `goal_detail`**）。已在 plan 响应附带 `goal_detail`（A 线渲染逻辑无需改） | 真机：列计划 `gd.progress=0.5`、`gd.status=active` |
+
+> **推送状态**：R21 五个 commit（`c103584` / `57e6bd0` / `aab5b22` / `d6f1b37` / `4f8f2f8`）**均未 push**，等业主示意（红线⑧）。

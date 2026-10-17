@@ -28,6 +28,12 @@
 
 > ✅ **本轮已同步**：`README.md` 开发计划表已按上表真实状态更新（P4/P5/P6/P7/P9 由 🔜 更正，P1 移除未实现的 MemoryExtractor）。
 
+> ✅ **R21 新增（多 Agent 接入）**：内核**原生 MCP**（`kernel/mcp.go` + `mcp_transport.go` + `cmd/lightmem-mcp`，**双传输** streamable-http 主 / stdio 兜底，纯 stdlib），
+> 13 个 MCP 工具（7 既有 + 6 工作流：`goal_create`/`goal_progress`/`goal_state`/`plan_list`/`step_add`/`summary_add`）；
+> **agent token 鉴权 + 写方身份强制**（`kernel/auth.go`，默认透传零回归）；各 Agent 接入模板 8 家（`integrations/agent-onboarding/`）。
+> 同轮关闭 **G8（PG private 越权读，P0 安全）**、**G9（PG `ON CONFLICT` 丢字段致更新静默失效，P0 功能）**、B-§6.2、D-2、MCP→REST 身份接缝。
+> 详见 `.dumate/inbox/_R21_收口报告.md`；门禁 PASS 14 / FAIL 0 / SKIP 0。
+
 ### 〇.2 四泳道收口状态
 
 | 泳道 | roadmap v4 计划 | 真实收口 |
