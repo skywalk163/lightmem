@@ -147,7 +147,27 @@ func (b *pgBackend) Upsert(ctx context.Context, m *Memory) error {
 		superseded_by = EXCLUDED.superseded_by,
 		valid_until = EXCLUDED.valid_until,
 		reference_frame = EXCLUDED.reference_frame,
-		vector_status = EXCLUDED.vector_status`,
+		vector_status = EXCLUDED.vector_status,
+		-- R21 收口 · G9：补全更新列。此前 ON CONFLICT 只更新上述 7 列，
+		-- 导致 UpdateGoalProgress/SetGoalState/Upsert 既有记忆（如 feedback 回写）
+		-- 时 **goal_detail / layer / provenance 等列根本不落库**：
+		-- 0.88 实测 progress=0.5 返回 200 但 DB 里 goal_detail->>'progress' 为空。
+		-- 这些列语义均为「就地更新同一 memory_id」，不违反只增不改（§4.1）。
+		goal_detail = EXCLUDED.goal_detail,
+		layer = EXCLUDED.layer,
+		provenance = EXCLUDED.provenance,
+		is_historical = EXCLUDED.is_historical,
+		feedback_records = EXCLUDED.feedback_records,
+		version_history = EXCLUDED.version_history,
+		importance = EXCLUDED.importance,
+		recent_access_score = EXCLUDED.recent_access_score,
+		access_count = EXCLUDED.access_count,
+		expire_at = EXCLUDED.expire_at,
+		valid_from = EXCLUDED.valid_from,
+		permission_level = EXCLUDED.permission_level,
+		permission = EXCLUDED.permission,
+		visibility = EXCLUDED.visibility,
+		shared_with_tenants = EXCLUDED.shared_with_tenants`,
 		m.MemoryID, idem, m.TenantID, m.UserID, optStr(m.AgentID), optStr(m.ProjectID),
 		vis, stringArrFromJSON(sharedJSON), permJSON, optStr(m.PermissionLevel),
 		string(m.MemoryKind), m.Fact, refJSON,
@@ -212,7 +232,7 @@ func (b *pgBackend) Get(ctx context.Context, memoryID, viewer, tenant string) (*
 			m.GoalDetail = &gd
 		}
 	}
-	_ = json.Unmarshal(sharedJSON, &m.SharedWithTenants)
+	_ = json.Unmarshal(pgArrayToJSON(string(sharedJSON)), &m.SharedWithTenants)
 	_ = json.Unmarshal(permJSON, &m.Permission)
 	_ = json.Unmarshal(refJSON, &m.ReferenceFrame)
 	_ = json.Unmarshal(fbJSON, &m.FeedbackRecords)
@@ -504,7 +524,7 @@ func (b *pgBackend) ScanLayer(ctx context.Context, layer MemoryLayer, tenant str
 				m.GoalDetail = &gd
 			}
 		}
-		_ = json.Unmarshal(sharedJSON, &m.SharedWithTenants)
+		_ = json.Unmarshal(pgArrayToJSON(string(sharedJSON)), &m.SharedWithTenants)
 		_ = json.Unmarshal(permJSON, &m.Permission)
 		_ = json.Unmarshal(refJSON, &m.ReferenceFrame)
 		out = append(out, &m)
@@ -619,7 +639,7 @@ func (b *pgBackend) scanMemoryRows(rows *sql.Rows) ([]*Memory, error) {
 				m.GoalDetail = &gd
 			}
 		}
-		_ = json.Unmarshal(sharedJSON, &m.SharedWithTenants)
+		_ = json.Unmarshal(pgArrayToJSON(string(sharedJSON)), &m.SharedWithTenants)
 		_ = json.Unmarshal(permJSON, &m.Permission)
 		_ = json.Unmarshal(refJSON, &m.ReferenceFrame)
 		out = append(out, &m)
@@ -777,11 +797,80 @@ func optLayer(l MemoryLayer) any {
 	return string(l)
 }
 
+// stringArrFromJSON 把 JSON 数组（如 `["a","b"]`）转成 PG `text[]` 字面量（如 `{"a","b"}`）。
+//
+// R21 收口修 §6.2（B 线报告遗留，PG Upsert 编码缺陷）：
+// 旧实现直接把 JSON 串当 `text[]` 参数传（`return string(b)`），而 `shared_with_tenants`
+// 列类型是 `text[]`（见 migrations/001_pgvector.up.sql），PG 会报
+// `malformed array literal`（SQLSTATE 22P02）——**任何带 SharedWithTenants 的记忆
+// 在 PG 上写不进去**。此处改为输出 PG 数组字面量并对元素做转义。
 func stringArrFromJSON(b []byte) any {
 	if len(b) == 0 || string(b) == "null" {
 		return "{}"
 	}
-	return string(b)
+	var arr []string
+	if err := json.Unmarshal(b, &arr); err != nil || len(arr) == 0 {
+		return "{}"
+	}
+	var sb strings.Builder
+	sb.WriteByte('{')
+	for i, s := range arr {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteByte('"')
+		// PG 数组字面量内需转义 `\` 与 `"`
+		sb.WriteString(strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s))
+		sb.WriteByte('"')
+	}
+	sb.WriteByte('}')
+	return sb.String()
+}
+
+// pgArrayToJSON 把 PG `text[]` 字面量（如 `{"a","b"}`）还原成 JSON 数组（如 `["a","b"]`），
+// 供上层 `json.Unmarshal(&m.SharedWithTenants)` 使用。
+// 与 stringArrFromJSON 对称，修 §6.2 的读回路径。
+func pgArrayToJSON(literal string) []byte {
+	literal = strings.TrimSpace(literal)
+	if literal == "" || literal == "{}" || literal == "null" {
+		return []byte("[]")
+	}
+	// 去掉两端花括号
+	body := strings.TrimPrefix(literal, "{")
+	body = strings.TrimSuffix(body, "}")
+	if strings.TrimSpace(body) == "" {
+		return []byte("[]")
+	}
+	var out []string
+	var cur strings.Builder
+	inQuote := false
+	escaped := false
+	for _, r := range body {
+		switch {
+		case escaped:
+			cur.WriteRune(r)
+			escaped = false
+		case r == '\\' && inQuote:
+			escaped = true
+		case r == '"':
+			if inQuote {
+				out = append(out, cur.String())
+				cur.Reset()
+				inQuote = false
+			} else {
+				inQuote = true
+			}
+		case r == ',' && !inQuote:
+			// 分隔符，忽略
+		case inQuote:
+			cur.WriteRune(r)
+		}
+	}
+	j, err := json.Marshal(out)
+	if err != nil {
+		return []byte("[]")
+	}
+	return j
 }
 
 func vectorToString(v []float32) string {
