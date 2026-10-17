@@ -1,0 +1,7 @@
+# 生成器输出目录（gen_configs.ps1 的 -OutDir）
+out/
+_test_out/
+
+# 本地真实 token 表：绝不入库
+tokens.json
+tokens.local.json

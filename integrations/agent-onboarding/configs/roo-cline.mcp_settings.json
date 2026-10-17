@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "lightmem": {
+      "type": "stdio",
+      "command": "<LIGHTMEM_MCP_BIN>",
+      "args": [
+        "-transport",
+        "stdio",
+        "-profile",
+        "<LIGHTMEM_PROFILE>"
+      ],
+      "env": {},
+      "alwaysAllow": [],
+      "disabled": false
+    }
+  }
+}

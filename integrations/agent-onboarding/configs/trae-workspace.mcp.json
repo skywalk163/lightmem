@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "lightmem": {
+      "url": "http://192.168.0.88:18444/mcp",
+      "headers": {
+        "Authorization": "Bearer <YOUR_TOKEN>"
+      }
+    }
+  }
+}

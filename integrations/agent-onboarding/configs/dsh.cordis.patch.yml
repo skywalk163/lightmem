@@ -1,0 +1,48 @@
+# ============================================================================
+# lightmem 共享记忆大脑 —— DeepSeek Harness（DSH）接入片段
+# ----------------------------------------------------------------------------
+# 目标文件：%USERPROFILE%\.dsh\profiles\desktop\cordis.patch.yml
+# 粘贴方式：**追加到文件末尾**。该文件同时承载模型/UI 等用户配置，
+#           整文件覆盖会把这些配置一起冲掉。
+# 生效方式：保存即被 dsh-hmr 侦测并热重载，无需重启 Harness。
+# 工具命名：mcp__<serverName>__<tool> → mcp__lightmem__lightmem_recall
+#
+# 命名陷阱①：HTTP 传输标记是 `transport: streamable-http`
+#             （全小写 + 连字符）。写成 streamableHttp / streamable_http
+#             不会报错，只会静默不生效 —— 工具永远不会出现。
+# 命名陷阱②：顶层是 `- insert:` 补丁条目，不是 `mcpServers` / `mcp`。
+# 命名陷阱③：token 走 `headers`。DSH 的 stdio 通道会清洗名字匹配
+#             KEY|PASSWORD|SECRET|TOKEN 的环境变量，所以 token **不要**塞 env。
+# ============================================================================
+- insert:
+    - id: mcp-lightmem
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: lightmem
+        transport: streamable-http
+        url: http://192.168.0.88:18444/mcp
+        headers:
+          Authorization: 'Bearer <YOUR_TOKEN>'
+        toolCallTimeoutMs: 30000
+        failOnStartupError: false
+        reconnect:
+          enabled: true
+          initialDelayMs: 500
+          maxDelayMs: 30000
+          maxAttempts: 10
+
+# ----------------------------------------------------------------------------
+# 可选：不想把 token 明文写进 profile，可用 !!js 从宿主环境变量取
+# （注意：这里的 !!js 由 Harness 宿主求值，不受 stdio 子进程的环境清洗影响；
+#   环境变量名建议用 LIGHTMEM_MCP_AUTH 之类，避免 TOKEN 字样带来的混淆）
+#
+#         headers:
+#           Authorization: !!js '`Bearer ${process.env.LIGHTMEM_MCP_AUTH}`'
+#
+# 可选：端口未就绪时先保留旧 stdio 桥（红线⑩：切换前既有通道必须可用）。
+# 两条 insert 条目可以并存，但 serverName 必须不同，否则后插入的会覆盖前者：
+#   serverName: lightmem          → 原生 HTTP（18444）
+#   serverName: lightmem_legacy   → Python 桥 stdio（18443）
+# 并存期间工具会同时出现 mcp__lightmem__* 与 mcp__lightmem_legacy__*，
+# 确认原生通道可用后再删掉 legacy 条目。
+# ----------------------------------------------------------------------------

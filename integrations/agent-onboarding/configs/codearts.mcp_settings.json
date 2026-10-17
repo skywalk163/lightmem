@@ -1,0 +1,17 @@
+{
+  "mcp": {
+    "lightmem": {
+      "enabled": true,
+      "timeout": 60000,
+      "type": "local",
+      "command": [
+        "<LIGHTMEM_MCP_BIN>",
+        "-transport",
+        "stdio",
+        "-profile",
+        "<LIGHTMEM_PROFILE>"
+      ],
+      "environment": {}
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "lightmem": {
+      "type": "remote",
+      "url": "http://192.168.0.88:18444/mcp",
+      "enabled": true,
+      "headers": {
+        "Authorization": "Bearer <YOUR_TOKEN>"
+      }
+    }
+  }
+}
