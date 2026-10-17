@@ -195,14 +195,15 @@ class LightMemClient:
         """GET /search 文本检索。
 
         参数：
-            q: 查询文本。
-            tenant_id: 租户 ID。
+            q: 查询文本（权威参数；服务端同时接受历史别名 `text`，`q` 优先）。
+            tenant_id: 租户 ID（必填，缺失服务端返回 400）。
             viewer: 可见性过滤的 viewer（可选）。
             top_k: 返回条数，默认 10。
             kind: 记忆类型过滤（可选）。
 
         返回：
-            (status_code, response_body)
+            (status_code, response_body)；无命中为 `[]`（非 `null`），
+            空查询/缺 tenant_id 为 400。
         """
         params = "q=%s&tenant_id=%s&top_k=%d" % (
             urllib.parse.quote(q), urllib.parse.quote(tenant_id), top_k

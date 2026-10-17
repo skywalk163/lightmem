@@ -143,7 +143,7 @@ func TestMetricsMiddlewareAndHealthz(t *testing.T) {
 		t.Fatalf("healthz want 200, got %d: %s", w.Code, w.Body.String())
 	}
 	body := w.Body.String()
-	for _, want := range []string{`"status":"ok"`, `"backend":"sqlite-skeleton`, `"embedder":"hash"`, `"last_consolidate":""`} {
+	for _, want := range []string{`"status":"ok"`, `"backend":"sqlite`, `"embedder":"hash"`, `"last_consolidate":""`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("healthz missing %q in %s", want, body)
 		}

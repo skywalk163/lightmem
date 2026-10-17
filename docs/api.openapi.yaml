@@ -132,12 +132,26 @@ paths:
   /search:
     get:
       summary: 文本检索
-      description: 基于文本的记忆检索，支持可见性过滤和类型过滤。
+      description: |
+        基于文本的记忆检索，支持可见性过滤和类型过滤。
+
+        参数口径（R19-A 统一）：`q` 为权威参数，`text` 为历史别名；
+        两者同时出现时 `q` 优先，`q` 为空才回落到 `text`。
+        `q` 与 `text` 至少提供一个，二者均为空（含仅空白）→ 400。
+        空查询不返回「作用域全部」（后端对空文本不做过滤），导出请用
+        `POST /api/v1/gdpr/export`。无命中返回空数组 `[]`（不是 `null`）。
       parameters:
         - name: q
           in: query
-          required: true
-          description: 查询文本
+          required: false
+          description: 查询文本（权威参数；与 text 至少提供一个）
+          schema:
+            type: string
+            minLength: 1
+        - name: text
+          in: query
+          required: false
+          description: 查询文本的历史别名（仅当 q 为空时生效；兼容期保留）
           schema:
             type: string
             minLength: 1
@@ -171,7 +185,7 @@ paths:
             type: string
       responses:
         '200':
-          description: 检索成功
+          description: 检索成功（无命中返回空数组 []）
           content:
             application/json:
               schema:
@@ -179,7 +193,7 @@ paths:
                 items:
                   $ref: '#/components/schemas/Memory'
         '400':
-          description: 缺少 tenant_id 或 q
+          description: 缺少 tenant_id，或 q/text 均为空
           content:
             application/json:
               schema:

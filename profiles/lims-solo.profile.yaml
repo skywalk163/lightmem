@@ -11,13 +11,16 @@ profile: solo
 
 # ---------- 存储后端 ----------
 # 可选：sqlite | pgvector | qdrant | pgvector+shard
+# Solo 档自 R19-B 起为【真·持久化 SQLite】（纯 Go 驱动 modernc.org/sqlite，无 cgo），
+# 写入落盘于 path，进程重启后仍可召回；此前为内存骨架（I-15 / L-217 已关闭，见 lightmem.md §D.9）。
 storage_backend: sqlite
 
 storage:
   sqlite:
-    # 数据库文件路径
+    # 数据库文件路径（真实持久化；WAL 模式保证崩溃恢复）
     path: ./data/lims.sqlite
-    # SQLite 向量扩展（需安装 sqlite-vec 或 faiss 后端）
+    # 向量扩展占位：方案 a 仅落地标量/JSON 持久化，sqlite-vec 尚未接入，
+    # VectorSearch 仍降级为文本检索（调度层 fail-open），此字段不构成能力承诺。
     vector_extension: sqlite-vec
     # WAL 模式：单用户低并发建议开启，崩溃恢复更稳
     wal_mode: true

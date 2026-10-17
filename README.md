@@ -49,9 +49,27 @@ curl -X POST http://localhost:8080/memories \
   -H "Content-Type: application/json" \
   -d '{"memory_id": "m001", "fact": "客户A偏好周一开会", "tenant_id": "t1", "user_id": "u1"}'
 
-# 检索记忆
-curl "http://localhost:8080/search?text=客户A偏好"
+# 检索记忆（文本参数用 q；text 为历史别名，q 优先）
+curl "http://localhost:8080/search?q=客户A偏好&tenant_id=t1&viewer=u1"
 ```
+
+#### `/search` 参数口径（R19-A 统一）
+
+| 参数 | 必填 | 说明 |
+|---|---|---|
+| `q` | ✅ | 查询文本（**权威参数**，四个消费者统一用它） |
+| `text` | ❌ | `q` 的历史别名；仅当 `q` 为空时生效，保留以兼容旧调用方 |
+| `tenant_id` | ✅ | 租户 ID；缺失返回 `400` |
+| `viewer` | ❌ | 可见性过滤的观察者 ID |
+| `top_k` | ❌ | 返回条数，默认 10 |
+| `kind` | ❌ | 记忆类型过滤（逗号分隔，如 `fact,preference`） |
+
+- `q` 与 `text` 同时出现时 **`q` 优先**，两个参数名都不得移除。
+- **空查询返回 `400 {"error":"q or text required"}`**：后端对空文本不做过滤（等于列举作用域全部），
+  故不提供「空查询 = 全量列表」的隐式行为；要导出请走 `POST /api/v1/gdpr/export`。
+- 无命中返回空数组 `[]`（不是 `null`）。
+- 消费者一致性：`sdk/python/lightmem_sdk.py`、`sdk/js/lightmem-sdk.js`、
+  `integrations/dsh-mcp-bridge/lightmem_mcp_bridge.py` 均发送 `q`（桥同时附带 `text`）。
 
 ---
 

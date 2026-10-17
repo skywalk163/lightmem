@@ -256,11 +256,13 @@ def format_recall(result: dict, query: str) -> str:
 
 def tool_search(args: dict) -> str:
     s = scope(args, require_text=True)
-    # 参数名坑（R160 I-12）：lightmem 的 handleSearch 只读 `q`：
-    #     kernel/router.go:154   Text: q.Get("q")
-    # README 却写 `/search?text=`，照抄 README 会让 Text 为空 →
-    # 后端跳过文本过滤 → 返回作用域内**全部**（分数恒定），看起来像"过滤失效"。
-    # 因此这里同时发 q 与 text：q 保证当前服务端真正过滤，text 兼容未来若加别名。
+    # 参数名坑（R160 I-12 → R19-A 已修）：
+    #   历史：kernel/router.go 的 handleSearch 只读 `q`，而 README 写 `/search?text=`，
+    #   照抄 README 会让 Text 为空 → 后端跳过文本过滤 → 返回作用域内**全部**
+    #   （分数恒定），看起来像"过滤失效"。
+    #   现状（R19-A）：服务端 `q` 优先、`text` 兜底（q 为空才回落），
+    #   空查询改为 400 `{"error":"q or text required"}`，无命中返回 `[]`。
+    # 因此这里同时发 q 与 text：q 是权威参数，text 作为别名兼容期冗余发送。
     query = {
         "q": s["text"],
         "text": s["text"],
@@ -271,7 +273,7 @@ def tool_search(args: dict) -> str:
     if args.get("kind"):
         query["kind"] = args["kind"]
     result = http_json("GET", "/search", query=query)
-    # 注意：lightmem 的 /search 在无命中时返回 JSON null。
+    # 无命中：R19-A 起返回 `[]`（旧版为 JSON null，两者都按空集处理）。
     if not result:
         return "查询 %r 没有命中。" % s["text"]
     if isinstance(result, dict) and result.get("error"):
