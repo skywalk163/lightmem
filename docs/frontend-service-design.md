@@ -377,6 +377,12 @@ func (c *backendClient) issueSession(ctx, userID, tenant, roles string) (token s
 走完「登录页入口 → 发起（state/nonce/PKCE）→ **IdP 登录页表单**（含错误密码用例）→
 前台换令牌验签 → 建会话 → 工作台 + API 调用」共 **22 项检查，22/22 PASS**。
 
+**`kernel/cmd/oidc-stub/idp_stub_test.go`**（12 项，全 PASS）：httptest 起 IdP 直连 `/auth` `/token`，
+覆盖发现/JWKS、登录页渲染、错误密码/未知用户拒绝、登录成功发码 302、参数缺失 400、
+`-auto-authorize` 直通、换码并 **RS256 验签**、PKCE verifier 错、授权码一次性、过期拒绝、非法 grant_type。
+**该单测曾抓到真实 bug**：POST 表单把参数放 body，而 handler 原只读 URL query，导致表单提交被误判
+「缺 redirect_uri/nonce/code_challenge」→ 已修为合并 `r.Form`（query + body）。
+
 **对接真实 IdP 只需换启动参数**（无需改代码）：
 `-oidc-issuer <真实issuer> -oidc-client-id <你的client_id> -oidc-client-secret <secret>
 -oidc-redirect-uri http://<你的前台>/login/sso/callback`（本地同源可留空按监听地址推断）。

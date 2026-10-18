@@ -156,7 +156,9 @@ func (s *idp) handleJWKS(w http.ResponseWriter, _ *http.Request) {
 //   - auto-authorize=true 时直接发码 302 回回调（CI/无头场景）；
 //   - 默认走 IdP 登录页：GET 渲染表单，POST 校验账号密码后发码 302 回回调。
 func (s *idp) handleAuthorize(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
+	// r.Form 合并 URL query 与表单 body（POST 登录页提交时参数在 body）。
+	_ = r.ParseForm()
+	q := r.Form
 	client, redirectURI, responseType := q.Get("client_id"), q.Get("redirect_uri"), q.Get("response_type")
 	state, nonce, challenge := q.Get("state"), q.Get("nonce"), q.Get("code_challenge")
 	bad := func(msg string) {
@@ -182,7 +184,7 @@ func (s *idp) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		s.authorizeLogin(w, r, client, redirectURI, state, nonce, challenge)
 		return
 	}
-	s.renderLoginPage(w, "", client, redirectURI, state, nonce, challenge, q.Get("scope"))
+	s.renderLoginPage(w, "", client, redirectURI, state, nonce, challenge, r.Form.Get("scope"))
 }
 
 // redirectWithCode 生成一次性授权码并 302 回回调。
