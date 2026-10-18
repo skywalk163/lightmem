@@ -5,6 +5,7 @@ package kernel
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -21,6 +22,8 @@ type APIServer struct {
 	layerPol *LayerPolicy                    // 生命周期策略（§3.10）；nil 时用 DefaultLayerPolicy()
 	fusion   *RankFusion                     // 多信号 rank 融合引擎（§3.4）；nil 时用 DefaultRankFusion()
 	policy   *WritePolicyRegistry            // 写策略注册表（§3.15）；nil 时用内置默认策略
+	// R22.2：管理 API 存储。nil 时 /admin 路由不注册（接线默认关，零回归）。
+	admin *AdminStore
 	// FeedbackLoop：rejected_ids 记录用户拒绝的记忆，后续检索时过滤。
 	// R10-A：原为裸 []string（router_tools.go append / router_mem.go、router.go 遍历读），
 	// 生产并发 feedback + recall 下构成数据竞争。现加 sync.RWMutex 保护，读写均受同一把锁。
@@ -53,6 +56,16 @@ func (s *APIServer) SetRankFusion(rf *RankFusion) {
 // SetWritePolicyRegistry 注入写策略注册表（§3.15）。
 func (s *APIServer) SetWritePolicyRegistry(r *WritePolicyRegistry) {
 	s.policy = r
+}
+
+// SetAuthDB 注入管理 API 的 DB 连接（R22.2）。调用后 Handler() 才注册 /admin 路由。
+// 缺省不注入 = /admin 不暴露（红线④ 接线默认关）。
+func (s *APIServer) SetAuthDB(db *sql.DB) {
+	if db == nil {
+		s.admin = nil
+		return
+	}
+	s.admin = NewAdminStore(db)
 }
 
 // addRejectedID 记录一条被拒绝的记忆 id（R10-A：加锁写，替代裸 append）。
@@ -112,6 +125,10 @@ func (s *APIServer) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/gdpr/cascade-delete", s.handleGDPRCascadeDelete)
 	mux.HandleFunc("POST /api/v1/gdpr/export", s.handleGDPRExport)
 	mux.HandleFunc("POST /api/v1/gdpr/forget", s.handleGDPRForget)
+	// R22.2 管理 API：仅注入了 auth DB 时注册（缺省不注册 = 零回归）。
+	if s.admin != nil {
+		RegisterAdminRoutes(mux, s.admin)
+	}
 	return mux
 }
 
