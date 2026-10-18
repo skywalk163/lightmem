@@ -524,6 +524,9 @@ func (m *Memory) canView(viewer, tenant string) bool {
 		return tenant != "" && m.TenantID == tenant
 	case VisCrossTenant:
 		return tenant != "" && contains(m.SharedWithTenants, tenant)
+	case VisPublic:
+		// R23.2：公开记忆跨租户可读（任何带身份的 viewer）；写/改/删仍走 owner 校验。
+		return viewer != ""
 	}
 	return false
 }
