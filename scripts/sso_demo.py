@@ -51,6 +51,17 @@ class Browser:
         except urllib.error.HTTPError as e:
             loc = e.headers.get("Location", "") if e.headers else ""
             return e.code, loc, e.read().decode(errors="replace")
+    def post_form(self, url, form):
+        # 提交表单（支持绝对 URL），返回 (status, Location, body)。
+        data = urllib.parse.urlencode(form).encode()
+        req = urllib.request.Request(url, data=data, headers={"User-Agent": "sso-demo",
+            "Content-Type": "application/x-www-form-urlencoded"})
+        try:
+            r = self.op.open(req, timeout=8)
+            return r.status, r.headers.get("Location", ""), r.read().decode(errors="replace")
+        except urllib.error.HTTPError as e:
+            loc = e.headers.get("Location", "") if e.headers else ""
+            return e.code, loc, e.read().decode(errors="replace")
     def cookies(self, name):
         return [c.value for c in self.jar if c.name == name]
 
@@ -71,7 +82,8 @@ def main():
     try:
         log("启动测试 OIDC IdP (oidc-stub)…")
         start(IDP, ["-listen", "127.0.0.1:18091", "-issuer", IDP_URL, "-client-id", CID, "-client-secret", CSEC,
-                    "-user-name", "Test User", "-user-email", "test@example.com", "-user-sub", "user-test-001"], "idp")
+                    "-user-name", "Test User", "-user-email", "test@example.com", "-user-sub", "user-test-001",
+                    "-user-login", "test-user", "-user-password", "testpass"], "idp")
         log("启动 kernel（业务+admin）…")
         start(KERNEL, ["-profile", "profiles/lims-solo.profile.yaml", "-listen", "127.0.0.1:18556", "-admin-listen", "127.0.0.1:18092"], "k")
         log("启动 frontend（带 SSO 配置）…")
@@ -101,9 +113,23 @@ def main():
             check(f"授权请求带 {k}", bool(q.get(k, [""])[0]), f"{q.get(k)}")
         check("code_challenge_method=S256", q.get("code_challenge_method", [""])[0] == "S256", f"{q.get('code_challenge_method')}")
 
-        # 3) IdP 直接授权：302 回前台回调，带 code + state
-        st, loc, _ = b.get(loc)  # loc 已是 IdP 的完整授权 URL
-        check("IdP 授权 → 302 回回调", st in (302, 303) and loc.startswith(CB + "?"), f"got {st} {loc[:80]}")
+        # 3) IdP 授权端点 → 登录页表单（模拟生产 IdP：GET 渲染、POST 校验账号密码）
+        auth_full = loc  # IdP 完整授权 URL
+        st, _, body = b.get(auth_full)
+        check("IdP 返回登录页表单", st == 200 and 'name="password"' in body, f"got {st}")
+        check("登录页带隐藏授权参数", all('name="%s"' % k in body for k in ("state", "nonce", "code_challenge", "client_id", "redirect_uri")), "")
+
+        # 3b) 错误密码：登录页 200 + 错误提示，不发授权码
+        bad_form = {k: v[0] for k, v in q.items()}
+        bad_form.update({"username": "test-user", "password": "wrongpass"})
+        st, _, body = b.post_form(auth_full, bad_form)
+        check("错误密码 → 登录页 200 + 错误提示", st == 200 and "用户名或密码错误" in body, f"got {st}")
+
+        # 3c) 正确账号密码：302 回前台回调，带 code + state
+        form = {k: v[0] for k, v in q.items()}
+        form.update({"username": "test-user", "password": "testpass"})
+        st, loc, _ = b.post_form(auth_full, form)
+        check("登录成功 → 302 回回调", st in (302, 303) and loc.startswith(CB + "?"), f"got {st} {loc[:80]}")
         cbq = urllib.parse.parse_qs(urllib.parse.urlparse(loc).query)
         check("回调带 code", bool(cbq.get("code", [""])[0]))
         check("回调带原 state", bool(cbq.get("state", [""])[0]) and cbq["state"][0] == q["state"][0])
