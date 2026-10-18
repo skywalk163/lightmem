@@ -75,6 +75,10 @@ type AgentIdentity struct {
 type AuthConfig struct {
 	RequireAuth bool                     `yaml:"require_auth"`
 	AgentTokens map[string]AgentIdentity `yaml:"agent_tokens"`
+	// R22.4 外部认证器接线：默认空 = 走内部实现（零回归，红线④）。
+	Authenticator string           `yaml:"authenticator"` // "" | "ory_kratos" | "sso"
+	OryKratos     *OryKratosConfig `yaml:"ory_kratos,omitempty"`
+	SSO           *SSOConfig       `yaml:"sso,omitempty"`
 }
 
 // ------------------------------------------------------------------
@@ -491,6 +495,11 @@ func ConfigureAuth(opts AuthOptions) error {
 	if auth != nil && auth.RequireAuth {
 		profileRequireAuth.Store(true)
 		log.Printf("[auth] profile auth.require_auth=true → RequireIdentity 强制已认证")
+	}
+	// R22.4 外部认证器接线：默认关（红线④）。仅 profile auth.authenticator 显式指定时注入；
+	// 未指定 = 保持内部实现，行为逐位不变。配置损坏（如 ory_kratos 缺 base_url）启动即炸。
+	if err := setupExternalAuthenticator(auth); err != nil {
+		return err
 	}
 	// env 严格校验：配置损坏必须在启动时炸，而不是运行时静默降级为透传。
 	if raw := strings.TrimSpace(os.Getenv(EnvAgentTokens)); raw != "" {
