@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -27,6 +28,12 @@ func main() {
 		roles      = flag.String("roles", "user", "注册用户默认角色")
 		timeout    = flag.Duration("backend-timeout", 10*time.Second, "调后台单次请求超时")
 		sessionTTL = flag.Duration("session-ttl", 7*24*time.Hour, "会话有效期")
+		// R23.3 SSO/OIDC（接线默认关：issuer 为空则登录页不显示 SSO 入口）
+		oidcIssuer   = flag.String("oidc-issuer", "", "OIDC IdP issuer（空=关闭 SSO）；或 LIMS_FRONTEND_OIDC_ISSUER")
+		oidcClientID = flag.String("oidc-client-id", "", "OIDC 客户端 ID；或 LIMS_FRONTEND_OIDC_CLIENT_ID")
+		oidcSecret   = flag.String("oidc-client-secret", "", "OIDC 客户端密钥；或 LIMS_FRONTEND_OIDC_CLIENT_SECRET")
+		oidcRedirect = flag.String("oidc-redirect-uri", "", "OIDC 回调地址；空则按监听地址推断；或 LIMS_FRONTEND_OIDC_REDIRECT_URI")
+		oidcScopes   = flag.String("oidc-scopes", "openid profile email", "OIDC 请求 scope（空格分隔）")
 	)
 	flag.Parse()
 
@@ -38,6 +45,24 @@ func main() {
 	}
 	if *backend == "" || *admin == "" {
 		log.Fatalf("[boot] -backend 与 -admin 必填：前台必须知道后台业务端点与管理 API 地址")
+	}
+
+	// OIDC 配置：flag 优先，env 回退。
+	envMap := map[*string]string{
+		oidcIssuer: "LIMS_FRONTEND_OIDC_ISSUER", oidcClientID: "LIMS_FRONTEND_OIDC_CLIENT_ID",
+		oidcSecret: "LIMS_FRONTEND_OIDC_CLIENT_SECRET", oidcRedirect: "LIMS_FRONTEND_OIDC_REDIRECT_URI",
+	}
+	for p, env := range envMap {
+		if *p == "" {
+			*p = os.Getenv(env)
+		}
+	}
+	if *oidcRedirect == "" && *oidcIssuer != "" {
+		// 推断回调地址：本服务监听地址 + 回调路径（适用于同源部署/本地验证）。
+		*oidcRedirect = "http://" + *listen + "/login/sso/callback"
+	}
+	if *oidcIssuer != "" && (*oidcClientID == "" || *oidcRedirect == "") {
+		log.Fatalf("[boot] SSO 已配置但缺 client_id 或 redirect_uri：oidc-issuer=%q", *oidcIssuer)
 	}
 
 	store, err := frontend.OpenStore(*storePath)
@@ -57,9 +82,19 @@ func main() {
 	srv, err := frontend.NewServer(frontend.Config{
 		StorePath: *storePath, Listen: *listen,
 		DefaultTenant: *tenant, DefaultRoles: *roles, SessionName: "lightmem_session", SessionTTL: *sessionTTL,
+		OIDC: frontend.OIDCConfig{
+			Issuer: *oidcIssuer, ClientID: *oidcClientID, ClientSecret: *oidcSecret,
+			RedirectURI: *oidcRedirect, Scopes: strings.Fields(*oidcScopes),
+		},
 	}, store, bc, tpl)
 	if err != nil {
 		log.Fatalf("[boot] new server: %v", err)
+	}
+
+	if *oidcIssuer != "" {
+		log.Printf("[boot] SSO/OIDC enabled: issuer=%s client_id=%s redirect=%s", *oidcIssuer, *oidcClientID, *oidcRedirect)
+	} else {
+		log.Printf("[boot] SSO/OIDC disabled（接线默认关）")
 	}
 
 	httpServer := &http.Server{

@@ -16,15 +16,16 @@ type viewUser struct {
 
 // pageData 是页面模板的通用数据。
 type pageData struct {
-	User  *viewUser
-	CSRF  string
-	Flash string
-	Error string
-	Query string
+	User       *viewUser
+	CSRF       string
+	Flash      string
+	Error      string
+	Query      string
+	SSOEnabled bool // R23.3：登录页是否显示 SSO 入口
 }
 
 func (s *Server) newPageData(w http.ResponseWriter, r *http.Request) pageData {
-	return pageData{User: s.viewUser(r), CSRF: s.ensureCSRF(w, r)}
+	return pageData{User: s.viewUser(r), CSRF: s.ensureCSRF(w, r), SSOEnabled: s.oidc != nil}
 }
 
 // viewUser 从非敏感 cookie 还原当前用户（仅用于导航显示；真实鉴权靠后台 token）。

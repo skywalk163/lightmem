@@ -14,6 +14,9 @@
     </label>
     <button type="submit" class="primary">登录</button>
   </form>
+  {{if .SSOEnabled}}
+  <p class="alt">或 <a href="/login/sso">用 SSO 账号登录</a></p>
+  {{end}}
   <p class="alt">还没有账号？<a href="/register">注册</a></p>
 </div>
 {{end}}
