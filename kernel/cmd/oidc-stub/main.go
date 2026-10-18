@@ -4,9 +4,10 @@
 // （发现 → 授权 → 换码 → ID Token 验签 → 建会话），无需真实 IdP 与公网。
 //
 // ⚠️ 仅限测试/演示，严禁用于生产：
-//   - 内置固定测试账号，授权端点直接放行（不校验用户密码）；
+//   - 内置固定测试账号，登录页表单校验明文密码（仅测试）；
 //   - RSA 密钥默认启动时临时生成（不落盘），-key 指定则从 PEM 加载以便重启复用；
-//   - 不支持真实用户注册/登录/撤销令牌等能力。
+//   - 不支持真实用户注册/登录/撤销令牌等能力；
+//   - 授权端点默认走登录页；CI/无头场景可用 -auto-authorize 直接放行。
 //
 // 零第三方依赖（红线⑤），仅 stdlib。
 package main
@@ -16,11 +17,13 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"flag"
+	"html"
 	"log"
 	"math/big"
 	"net/http"
@@ -31,16 +34,19 @@ import (
 )
 
 var (
-	listen       = flag.String("listen", "127.0.0.1:18091", "IdP 监听地址")
-	issuer       = flag.String("issuer", "", "issuer；空则按监听地址推断")
-	keyPath      = flag.String("key", "", "RSA 私钥 PEM 路径；空则启动时临时生成（不落盘）")
-	clientID     = flag.String("client-id", "demo-client", "允许的客户端 ID")
-	clientSecret = flag.String("client-secret", "demo-secret", "允许的客户端密钥（confidential client）")
-	kid          = flag.String("kid", "idp-stub-1", "JWKS key id")
-	userName     = flag.String("user-name", "Test User", "测试账号显示名")
-	userEmail    = flag.String("user-email", "test@example.com", "测试账号邮箱")
-	userSub      = flag.String("user-sub", "user-test-001", "测试账号 sub（稳定唯一）")
-	ttl          = flag.Duration("token-ttl", 10*time.Minute, "授权码/令牌有效期")
+	listen        = flag.String("listen", "127.0.0.1:18091", "IdP 监听地址")
+	issuer        = flag.String("issuer", "", "issuer；空则按监听地址推断")
+	keyPath       = flag.String("key", "", "RSA 私钥 PEM 路径；空则启动时临时生成（不落盘）")
+	clientID      = flag.String("client-id", "demo-client", "允许的客户端 ID")
+	clientSecret  = flag.String("client-secret", "demo-secret", "允许的客户端密钥（confidential client）")
+	kid           = flag.String("kid", "idp-stub-1", "JWKS key id")
+	userName      = flag.String("user-name", "Test User", "测试账号显示名")
+	userEmail     = flag.String("user-email", "test@example.com", "测试账号邮箱")
+	userSub       = flag.String("user-sub", "user-test-001", "测试账号 sub（稳定唯一）")
+	userLogin     = flag.String("user-login", "test-user", "测试账号登录名（登录页输入）")
+	userPassword  = flag.String("user-password", "testpass", "测试账号密码（登录页输入，明文，仅测试）")
+	autoAuthorize = flag.Bool("auto-authorize", false, "授权端点直接放行（不显示登录页）；默认 false=走登录页")
+	ttl           = flag.Duration("token-ttl", 10*time.Minute, "授权码/令牌有效期")
 )
 
 // authCode 是授权码对应的服务端状态（一次性、短 TTL）。
@@ -59,7 +65,8 @@ type idp struct {
 	issuer   string
 	clientID string
 	secret   string
-	user     struct{ Sub, Name, Email string }
+	auto     bool
+	user     struct{ Sub, Name, Email, Login, Password string }
 	ttl      time.Duration
 
 	mu    sync.Mutex
@@ -78,10 +85,11 @@ func main() {
 	}
 	s := &idp{
 		key: key, kid: *kid, issuer: iss,
-		clientID: *clientID, secret: *clientSecret, ttl: *ttl,
+		clientID: *clientID, secret: *clientSecret, ttl: *ttl, auto: *autoAuthorize,
 		codes: map[string]authCode{},
 	}
 	s.user.Sub, s.user.Name, s.user.Email = *userSub, *userName, *userEmail
+	s.user.Login, s.user.Password = *userLogin, *userPassword
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleHome)
@@ -95,7 +103,7 @@ func main() {
 	log.Printf("[boot] lightmem-oidc-stub (TEST ONLY) on %s", iss)
 	log.Printf("[boot] discovery=%s/.well-known/openid-configuration auth=%s/auth token=%s/token jwks=%s/jwks",
 		iss, iss, iss, iss)
-	log.Printf("[boot] test account sub=%s name=%q email=%q", s.user.Sub, s.user.Name, s.user.Email)
+	log.Printf("[boot] test account sub=%s name=%q email=%q login=%q", s.user.Sub, s.user.Name, s.user.Email, s.user.Login)
 	log.Fatalf("serve: %v", srv.ListenAndServe())
 }
 
@@ -103,7 +111,8 @@ func (s *idp) handleHome(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write([]byte(`<!doctype html><meta charset="utf-8"><title>lightmem OIDC stub (TEST ONLY)</title>
 <h1>lightmem OIDC Provider Stub</h1>
-<p class="warn"><b>测试/演示专用，严禁用于生产。</b>授权端点直接放行，密钥默认临时生成。</p>
+<p class="warn"><b>测试/演示专用，严禁用于生产。</b>默认走登录页表单（固定测试账号），
+授权端点直接放行需显式 <code>-auto-authorize</code>；密钥默认临时生成。</p>
 <ul>
 <li>Issuer: ` + s.issuer + `</li>
 <li>Discovery: ` + s.issuer + `/.well-known/openid-configuration</li>
@@ -111,6 +120,7 @@ func (s *idp) handleHome(w http.ResponseWriter, _ *http.Request) {
 <li>Token: ` + s.issuer + `/token</li>
 <li>JWKS: ` + s.issuer + `/jwks</li>
 <li>Client: <code>` + s.clientID + `</code></li>
+<li>Login: <code>` + s.user.Login + `</code> / <code>` + s.user.Password + `</code></li>
 <li>Test account sub=<code>` + s.user.Sub + `</code> name=<code>` + s.user.Name + `</code></li>
 </ul>
 <p>前端启动示例：<code>-oidc-issuer ` + s.issuer + ` -oidc-client-id ` + s.clientID +
@@ -142,7 +152,9 @@ func (s *idp) handleJWKS(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-// handleAuthorize 是授权端点：直接放行（测试 IdP），发一次性授权码并 302 回回调。
+// handleAuthorize 是授权端点：
+//   - auto-authorize=true 时直接发码 302 回回调（CI/无头场景）；
+//   - 默认走 IdP 登录页：GET 渲染表单，POST 校验账号密码后发码 302 回回调。
 func (s *idp) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	client, redirectURI, responseType := q.Get("client_id"), q.Get("redirect_uri"), q.Get("response_type")
@@ -162,9 +174,22 @@ func (s *idp) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		bad("missing redirect_uri/nonce/code_challenge")
 		return
 	}
+	if s.auto {
+		s.redirectWithCode(w, r, client, redirectURI, state, nonce, challenge)
+		return
+	}
+	if r.Method == http.MethodPost {
+		s.authorizeLogin(w, r, client, redirectURI, state, nonce, challenge)
+		return
+	}
+	s.renderLoginPage(w, "", client, redirectURI, state, nonce, challenge, q.Get("scope"))
+}
+
+// redirectWithCode 生成一次性授权码并 302 回回调。
+func (s *idp) redirectWithCode(w http.ResponseWriter, r *http.Request, client, redirectURI, state, nonce, challenge string) {
 	code, err := randomToken(24)
 	if err != nil {
-		bad("rng failure")
+		http.Error(w, "rng failure", http.StatusInternalServerError)
 		return
 	}
 	s.mu.Lock()
@@ -173,12 +198,54 @@ func (s *idp) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		RedirectURI: redirectURI, Sub: s.user.Sub, ExpiresAt: time.Now().Add(s.ttl),
 	}
 	s.mu.Unlock()
-
 	sep := "?"
 	if strings.Contains(redirectURI, "?") {
 		sep = "&"
 	}
 	http.Redirect(w, r, redirectURI+sep+"code="+code+"&state="+state, http.StatusFound)
+}
+
+// authorizeLogin 处理登录表单提交：常数时间比较校验账号密码，通过后发码。
+func (s *idp) authorizeLogin(w http.ResponseWriter, r *http.Request, client, redirectURI, state, nonce, challenge string) {
+	_ = r.ParseForm()
+	login, password := r.FormValue("username"), r.FormValue("password")
+	if subtle.ConstantTimeCompare([]byte(login), []byte(s.user.Login)) != 1 ||
+		subtle.ConstantTimeCompare([]byte(password), []byte(s.user.Password)) != 1 {
+		s.renderLoginPage(w, "用户名或密码错误", client, redirectURI, state, nonce, challenge, r.FormValue("scope"))
+		return
+	}
+	s.redirectWithCode(w, r, client, redirectURI, state, nonce, challenge)
+}
+
+// renderLoginPage 渲染 IdP 登录页，隐藏字段带回原授权参数。
+func (s *idp) renderLoginPage(w http.ResponseWriter, errMsg, client, redirectURI, state, nonce, challenge, scope string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	hidden := ""
+	for k, v := range map[string]string{
+		"client_id": client, "redirect_uri": redirectURI, "state": state,
+		"nonce": nonce, "code_challenge": challenge, "scope": scope, "response_type": "code",
+	} {
+		hidden += `<input type="hidden" name="` + k + `" value="` + html.EscapeString(v) + `">`
+	}
+	errBlock := ""
+	if errMsg != "" {
+		errBlock = `<p class="err">` + html.EscapeString(errMsg) + `</p>`
+	}
+	w.Write([]byte(`<!doctype html><meta charset="utf-8"><title>登录 · lightmem OIDC stub (TEST ONLY)</title>
+<style>body{font-family:system-ui,sans-serif;max-width:400px;margin:3rem auto;padding:0 1rem}
+label{display:block;margin:.5rem 0 .2rem;font-size:.9rem}input[type=text],input[type=password]{width:100%;box-sizing:border-box;padding:.45rem;border:1px solid #ccc;border-radius:4px}
+button{margin-top:1rem;padding:.5rem 1.2rem;border:0;border-radius:4px;background:#2563eb;color:#fff;cursor:pointer}
+.err{color:#b91c1c}.warn{color:#92400e;font-size:.85rem;border:1px solid #fcd34d;padding:.5rem;border-radius:4px}</style>
+<h2>登录 lightmem</h2>
+<p class="warn">测试/演示专用 IdP（` + html.EscapeString(s.issuer) + `）</p>
+` + errBlock + `
+<form method="post" action="` + html.EscapeString(s.issuer) + `/auth">
+` + hidden + `
+<label for="u">用户名</label><input id="u" name="username" autocomplete="username" value="` + html.EscapeString(s.user.Login) + `">
+<label for="p">密码</label><input id="p" name="password" type="password" autocomplete="current-password">
+<button type="submit">登录并授权</button>
+</form>
+<p class="warn">测试账号：<code>` + html.EscapeString(s.user.Login) + `</code> / <code>` + html.EscapeString(s.user.Password) + `</code></p>`))
 }
 
 // handleToken 是令牌端点：校验授权码 + PKCE verifier，签发 ID Token（RS256）。

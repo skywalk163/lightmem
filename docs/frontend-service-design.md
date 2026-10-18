@@ -363,17 +363,19 @@ func (c *backendClient) issueSession(ctx, userID, tenant, roles string) (token s
 |---|---|
 | `/.well-known/openid-configuration` | 发现文档（RS256、authorization_code、openid/profile/email） |
 | `/jwks` | RSA JWKS |
-| `/auth` | 授权端点：校验 `response_type=code` + client_id + nonce + code_challenge，**直接放行**并 302 回回调，带一次性授权码 |
+| `/auth` | 授权端点：校验 `response_type=code` + client_id + nonce + code_challenge；**默认走登录页表单**（GET 渲染、POST 用常数时间比较校验测试账号密码，错误则 200 回登录页提示），通过后 302 回回调带一次性授权码。CI/无头可用 `-auto-authorize` 直接放行 |
 | `/token` | 换码：校验 code + PKCE verifier（S256）+ client_id，签发 RS256 ID Token（含 sub/nonce/name/email） |
 
 **启动参数**：`-listen` / `-issuer`（空按监听地址推断）/ `-key`（RSA PEM，空则内存临时生成）/
-`-client-id` / `-client-secret` / `-user-name` / `-user-email` / `-user-sub` / `-token-ttl`。
+`-client-id` / `-client-secret` / `-user-name` / `-user-email` / `-user-sub` /
+`-user-login` / `-user-password` / `-auto-authorize` / `-token-ttl`。
 
-> ⚠️ **仅限测试/演示，严禁用于生产**：内置固定账号、授权端点直接放行、密钥默认临时生成。
+> ⚠️ **仅限测试/演示，严禁用于生产**：内置固定账号（明文密码比对）、密钥默认临时生成；
+> 默认走登录页表单，授权端点直接放行需显式 `-auto-authorize`。
 
 **`scripts/sso_demo.py`**：一键起 `oidc-stub` + `kernel` + `frontend`（带 SSO 配置），模拟浏览器
-走完「登录页入口 → 发起（state/nonce/PKCE）→ IdP 授权回调 → 前台换令牌验签 → 建会话 →
-工作台 + API 调用」共 **19 项检查，19/19 PASS**。
+走完「登录页入口 → 发起（state/nonce/PKCE）→ **IdP 登录页表单**（含错误密码用例）→
+前台换令牌验签 → 建会话 → 工作台 + API 调用」共 **22 项检查，22/22 PASS**。
 
 **对接真实 IdP 只需换启动参数**（无需改代码）：
 `-oidc-issuer <真实issuer> -oidc-client-id <你的client_id> -oidc-client-secret <secret>
