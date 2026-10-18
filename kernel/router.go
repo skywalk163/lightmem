@@ -132,6 +132,17 @@ func (s *APIServer) Handler() http.Handler {
 	return mux
 }
 
+// AdminHandler 返回仅含 /admin 路由的 handler（R22.3）。
+// 供 main.go 起独立管理端口（建议仅绑定回环）时挂载；未注入 auth DB 时返回 nil。
+func (s *APIServer) AdminHandler() http.Handler {
+	if s.admin == nil {
+		return nil
+	}
+	mux := http.NewServeMux()
+	RegisterAdminRoutes(mux, s.admin)
+	return mux
+}
+
 func (s *APIServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()

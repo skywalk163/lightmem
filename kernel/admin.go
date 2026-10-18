@@ -23,6 +23,12 @@ import (
 	"time"
 )
 
+// DBProvider 是能暴露底层 *sql.DB 的后端（当前 sqliteBackend 实现，见 backend_sqlite.go）。
+// main.go 从 StorageBackend 做类型断言拿到 auth DB，注入管理 API（R22.3）。
+type DBProvider interface {
+	DB() *sql.DB
+}
+
 // AdminStore 封装 token / 用户管理。持有 DB 连接；nil 时管理 API 不注册。
 type AdminStore struct {
 	db       *sql.DB
@@ -399,7 +405,26 @@ func (a *AdminStore) handleAgentTokenRevoke(w http.ResponseWriter, r *http.Reque
 		adminError(w, http.StatusNotFound, "token not found or already revoked")
 		return
 	}
+	// R22.3：主动失效缓存，保证吊销即时生效（不被 60s TTL 缓存延迟）
+	a.evictTokenHash(id)
 	writeJSON(w, http.StatusOK, map[string]string{"id": id, "revoked_at": now})
+}
+
+// evictTokenHash 读取某 token 记录的 token_hash 并主动失效缓存。
+// 吊销/轮换后调用：清掉该 token 在 authCache 里的条目，让下一次校验打 DB。
+func (a *AdminStore) evictTokenHash(tokenID string) {
+	if tokenID == "" {
+		return
+	}
+	var h string
+	if err := a.db.QueryRow(`SELECT token_hash FROM agent_tokens WHERE id=?`, tokenID).Scan(&h); err != nil || h == "" {
+		if err := a.db.QueryRow(`SELECT token_hash FROM auth_tokens WHERE id=?`, tokenID).Scan(&h); err != nil {
+			return
+		}
+	}
+	if h != "" {
+		InvalidateTokenHash(h)
+	}
 }
 
 // rotateResult 是轮换的结果：旧 token 被吊销，新 token 返回一次。
@@ -435,6 +460,8 @@ func (a *AdminStore) handleAgentTokenRotate(w http.ResponseWriter, r *http.Reque
 		adminError(w, http.StatusInternalServerError, "revoke old: "+err.Error())
 		return
 	}
+	// R22.3：主动失效旧 token 缓存，保证轮换后旧 token 立即失效
+	a.evictTokenHash(oldID)
 	// 签发新（继承旧属性）
 	raw, err := newRandomToken("t-agent")
 	if err != nil {
@@ -532,6 +559,8 @@ func (a *AdminStore) handleSessionTokenRevoke(w http.ResponseWriter, r *http.Req
 		adminError(w, http.StatusNotFound, "token not found or already revoked")
 		return
 	}
+	// R22.3：主动失效缓存，保证吊销即时生效
+	a.evictTokenHash(id)
 	writeJSON(w, http.StatusOK, map[string]string{"id": id, "revoked_at": now})
 }
 

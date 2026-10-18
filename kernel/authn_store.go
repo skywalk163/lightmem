@@ -117,14 +117,22 @@ type AuthDBConfig struct {
 
 // dbAuthenticator 内部认证器的 DB 路径实现。
 // 校验流：token → SHA-256 → 查 agent_tokens / auth_tokens → 检查 revoked_at / expires_at
-// → 组 Identity。每次查库（配 60s 缓存即"吊销不重启生效"，见设计文档 §6）。
+// → 组 Identity。配 60s TTL 缓存（R22.3）：高频 token 命中缓存零 DB 查询；
+// 吊销/轮换时 AdminStore 主动 Invalidate → 仍"吊销即时生效"（见 docs §6、authn_cache.go）。
 type dbAuthenticator struct {
 	db     *sql.DB
 	driver string
+	cache  *authCache // 非 nil 时启用缓存；nil = 每次查库（测试隔离/严格模式）
 }
 
-// NewDBAuthenticator 构造内部 DB 认证器。
+// NewDBAuthenticator 构造内部 DB 认证器（带共享 60s 缓存）。
 func NewDBAuthenticator(db *sql.DB, driver string) Authenticator {
+	return &dbAuthenticator{db: db, driver: driver, cache: defaultAuthCache}
+}
+
+// NewDBAuthenticatorNoCache 构造无缓存的 DB 认证器（每次查库）。
+// 测试隔离或需要严格"吊销零延迟"场景使用。
+func NewDBAuthenticatorNoCache(db *sql.DB, driver string) Authenticator {
 	return &dbAuthenticator{db: db, driver: driver}
 }
 
@@ -165,6 +173,10 @@ func (a *dbAuthenticator) AuthenticateRequest(ctx context.Context, r *http.Reque
 }
 
 func (a *dbAuthenticator) lookupAgent(ctx context.Context, hash string) (Identity, bool, error) {
+	// 缓存命中（且未过期）→ 零 DB 查询
+	if id, ok := a.cache.Get(hash); ok {
+		return id, true, nil
+	}
 	var (
 		id, hint, agentID, userID, tenantID, scope, exp, rev, created string
 	)
@@ -181,17 +193,17 @@ func (a *dbAuthenticator) lookupAgent(ctx context.Context, hash string) (Identit
 		return Identity{}, false, fmt.Errorf("lookup agent token: %w", err)
 	}
 	if rev != "" {
-		return Identity{}, false, nil // 已吊销
+		return Identity{}, false, nil // 已吊销（不缓存，即时生效）
 	}
 	if exp != "" && expired(exp) {
-		return Identity{}, false, nil // 已过期
+		return Identity{}, false, nil // 已过期（不缓存，即时生效）
 	}
 	_ = hint
 	_ = created
 	// touch last_used_at（尽力而为，不因失败阻断鉴权）
 	_, _ = a.db.ExecContext(ctx, `UPDATE agent_tokens SET last_used_at = ? WHERE id = ?`,
 		formatTime(timeNow()), id)
-	return Identity{
+	out := Identity{
 		Kind:      IdentityKindAgent,
 		AgentID:   agentID,
 		UserID:    userID,
@@ -201,10 +213,17 @@ func (a *dbAuthenticator) lookupAgent(ctx context.Context, hash string) (Identit
 		Issuer:    "internal",
 		Scope:     normalizeScope(scope),
 		ExpiresAt: parseTime(exp),
-	}, true, nil
+	}
+	// 仅缓存校验成功的结果；吊销/过期从不缓存
+	a.cache.Put(hash, out)
+	return out, true, nil
 }
 
 func (a *dbAuthenticator) lookupUser(ctx context.Context, hash string) (Identity, bool, error) {
+	// 缓存命中（且未过期）→ 零 DB 查询
+	if id, ok := a.cache.Get(hash); ok {
+		return id, true, nil
+	}
 	var (
 		id, hint, userID, tenantID, roles, scope, exp, rev string
 	)
@@ -220,13 +239,13 @@ func (a *dbAuthenticator) lookupUser(ctx context.Context, hash string) (Identity
 		return Identity{}, false, fmt.Errorf("lookup user token: %w", err)
 	}
 	if rev != "" {
-		return Identity{}, false, nil
+		return Identity{}, false, nil // 已吊销（不缓存，即时生效）
 	}
 	if exp != "" && expired(exp) {
-		return Identity{}, false, nil
+		return Identity{}, false, nil // 已过期（不缓存，即时生效）
 	}
 	_ = hint
-	return Identity{
+	out := Identity{
 		Kind:      IdentityKindUser,
 		UserID:    userID,
 		TenantID:  tenantID,
@@ -236,7 +255,9 @@ func (a *dbAuthenticator) lookupUser(ctx context.Context, hash string) (Identity
 		Issuer:    "internal",
 		Scope:     normalizeScope(scope),
 		ExpiresAt: parseTime(exp),
-	}, true, nil
+	}
+	a.cache.Put(hash, out)
+	return out, true, nil
 }
 
 // expired 判断 RFC3339 时间串是否已过期。
