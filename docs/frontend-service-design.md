@@ -351,3 +351,30 @@ func (c *backendClient) issueSession(ctx, userID, tenant, roles string) (token s
 
 > 安全说明：ID Token 验签强制 RS256 + 校验 iss/aud/exp/nonce；state 一次性 + 短 TTL 防 CSRF/重放；
 > PKCE S256 防授权码拦截；`ssoUserID` 加 issuer 哈希防跨 IdP sub 撞号。
+
+### 13.5 本地测试 OIDC IdP（`oidc-stub`）与一键试跑
+
+**背景**：真实 IdP（如 Ory Kratos）是自托管部署，接入/运维成本高，不适合快速验证。
+为此提供**测试专用** OIDC Provider，让 SSO 全链路能在本地/CI 真机跑通。
+
+**`kernel/cmd/oidc-stub/`**（零第三方依赖，stdlib）：
+
+| 端点 | 行为 |
+|---|---|
+| `/.well-known/openid-configuration` | 发现文档（RS256、authorization_code、openid/profile/email） |
+| `/jwks` | RSA JWKS |
+| `/auth` | 授权端点：校验 `response_type=code` + client_id + nonce + code_challenge，**直接放行**并 302 回回调，带一次性授权码 |
+| `/token` | 换码：校验 code + PKCE verifier（S256）+ client_id，签发 RS256 ID Token（含 sub/nonce/name/email） |
+
+**启动参数**：`-listen` / `-issuer`（空按监听地址推断）/ `-key`（RSA PEM，空则内存临时生成）/
+`-client-id` / `-client-secret` / `-user-name` / `-user-email` / `-user-sub` / `-token-ttl`。
+
+> ⚠️ **仅限测试/演示，严禁用于生产**：内置固定账号、授权端点直接放行、密钥默认临时生成。
+
+**`scripts/sso_demo.py`**：一键起 `oidc-stub` + `kernel` + `frontend`（带 SSO 配置），模拟浏览器
+走完「登录页入口 → 发起（state/nonce/PKCE）→ IdP 授权回调 → 前台换令牌验签 → 建会话 →
+工作台 + API 调用」共 **19 项检查，19/19 PASS**。
+
+**对接真实 IdP 只需换启动参数**（无需改代码）：
+`-oidc-issuer <真实issuer> -oidc-client-id <你的client_id> -oidc-client-secret <secret>
+-oidc-redirect-uri http://<你的前台>/login/sso/callback`（本地同源可留空按监听地址推断）。
