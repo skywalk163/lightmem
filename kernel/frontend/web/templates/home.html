@@ -1,0 +1,20 @@
+{{define "title"}}Lightmem · AI 记忆大脑{{end}}
+{{define "content"}}
+<section class="hero">
+  <h1>🧠 让 AI 记住一切</h1>
+  <p class="lead">Lightmem 是你的 AI 记忆大脑 —— 记下工作计划、工作步骤、工作总结，随时多信号召回。</p>
+  <div class="row">
+    {{if .User}}
+    <a class="btn primary" href="/workspace">进入工作台</a>
+    {{else}}
+    <a class="btn primary" href="/register">免费注册</a>
+    <a class="btn" href="/login">登录</a>
+    {{end}}
+  </div>
+</section>
+<section class="grid">
+  <div class="card"><h2>多信号召回</h2><p>跨层融合语义、关键词、实体信号，一句话找回多年前的结论。</p></div>
+  <div class="card"><h2>工作计划</h2><p>建计划、推进度、记步骤、写总结，长期任务不迷路。</p></div>
+  <div class="card"><h2>社区公开</h2><p>把值得分享的记忆设为公开，别人能浏览、能借鉴。</p></div>
+</section>
+{{end}}

@@ -1,0 +1,19 @@
+{{define "title"}}登录 · Lightmem{{end}}
+{{define "content"}}
+<div class="auth">
+  <h1>登录 Lightmem</h1>
+  {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
+  {{template "flash" .}}
+  <form method="post" action="/login" autocomplete="on">
+    <input type="hidden" name="_csrf" value="{{.CSRF}}">
+    <label>用户名
+      <input name="username" required autofocus placeholder="你的账号">
+    </label>
+    <label>密码
+      <input name="password" type="password" required placeholder="••••••••">
+    </label>
+    <button type="submit" class="primary">登录</button>
+  </form>
+  <p class="alt">还没有账号？<a href="/register">注册</a></p>
+</div>
+{{end}}

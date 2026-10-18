@@ -1,0 +1,61 @@
+{{define "title"}}计划 · Lightmem{{end}}
+{{define "content"}}
+<h1>工作计划</h1>
+<p class="lead">把长期目标拆成计划，逐步推进度、记步骤、写总结。</p>
+
+<section class="card">
+  <h2>新建计划</h2>
+  <form id="goal-form" class="stack">
+    <input name="fact" placeholder="目标描述（一句话）" required>
+    <input name="kpi" placeholder="KPI，如 召回准确率/0.9/每周">
+    <input name="deadline" type="date" placeholder="截止日">
+    <button type="submit" class="primary">创建</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>进行中</h2>
+  <div id="plan-out"><p class="muted">加载中…</p></div>
+</section>
+{{end}}
+{{define "scripts"}}
+<script>
+async function get(path){const r=await fetch(path,{headers:{Accept:"application/json"}});return {status:r.status,data:await r.json().catch(()=>({}))};}
+async function post(path,body){const r=await fetch(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});return {status:r.status,data:await r.json().catch(()=>({}))};}
+function esc(s){const d=document.createElement("div");d.textContent=s==null?"":String(s);return d.innerHTML;}
+async function loadPlan(){
+  const {status,data}=await get("/api/goals");
+  const out=document.getElementById("plan-out");
+  const items=data.items||data.results||[];
+  if(!items.length){out.innerHTML="<p class='muted'>还没有计划。</p>";return;}
+  out.innerHTML="<ul class='list'>"+items.map(g=>
+    "<li><strong>"+esc(g.fact||g.objective||"")+"</strong> <span class='badge'>"+esc(g.state||g.status||"")+"</span>"+
+    "<div class='bar'><i style='width:"+Math.round((g.progress||0)*100)+"%'></i></div>"+
+    "<div class='row'>"+
+      "<button data-id='"+esc(g.memory_id||"")+"' data-d='0.1'>+10%</button>"+
+      "<button data-id='"+esc(g.memory_id||"")+"' data-d='0.25'>+25%</button>"+
+      "<button data-done='"+esc(g.memory_id||"")+"'>完成</button>"+
+    "</div></li>"
+  ).join("")+"</ul>";
+  out.querySelectorAll("button[data-d]").forEach(b=>b.onclick=async()=>{
+    const {status,data:r}=await post("/api/goals/"+b.dataset.id+"/progress",{progress:Math.min(1,(parseFloat(b.dataset.d)||0))});
+    if(status>=200&&status<300){b.parentElement.innerHTML="<span class='ok'>✓ 已推进</span>";loadPlan();}
+    else out.insertAdjacentHTML("beforeend","<p class='err'>失败："+esc(r.error||status)+"</p>");
+  });
+  out.querySelectorAll("button[data-done]").forEach(b=>b.onclick=async()=>{
+    const {status,data:r}=await post("/api/goals/"+b.dataset.done+"/state",{state:"completed"});
+    if(status>=200&&status<300){loadPlan();} else out.insertAdjacentHTML("beforeend","<p class='err'>失败："+esc(r.error||status)+"</p>");
+  });
+}
+document.getElementById("goal-form").addEventListener("submit",async(e)=>{
+  e.preventDefault();const f=e.target;
+  const detail={};
+  const kpi=f.kpi.value?f.kpi.value.split("/"):[];
+  if(kpi.length>=2)detail.kpi={metric:kpi[0],target:Number(kpi[1])||0,cadence:kpi[2]||"weekly"};
+  detail.constraints=[f.fact.value.slice(0,40)];detail.progress=0;
+  const {status,data}=await post("/api/goals/create",{fact:f.fact.value,goal_detail:detail});
+  if(status===200||status===201){f.reset();loadPlan();}else alert("创建失败："+(data.error||status));
+});
+loadPlan();
+</script>
+{{end}}
