@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -16,6 +17,7 @@ type Config struct {
 	DefaultRoles  string // 注册用户默认角色（如 "user"）
 	SessionName   string // session cookie 名
 	SessionTTL    time.Duration
+	OIDC          OIDCConfig // R23.3 可插拔 SSO；Issuer 为空 = 关闭
 }
 
 // Server 是前台服务：人登录 UI + 工作台 + 社区浏览，独立部署。
@@ -25,6 +27,9 @@ type Server struct {
 	tpl     *templates
 	cfg     Config
 	now     func() time.Time
+	// R23.3 SSO/OIDC：oidc 为 nil 表示未配置（接线默认关）。
+	oidc *oidcClient
+	sso  *ssoStateStore
 }
 
 // NewServer 构造前台服务。
@@ -44,7 +49,17 @@ func NewServer(cfg Config, store *Store, backend *backendClient, tpl *templates)
 	if store == nil {
 		return nil, errors.New("frontend: store required")
 	}
-	return &Server{store: store, backend: backend, tpl: tpl, cfg: cfg, now: time.Now}, nil
+	srv := &Server{store: store, backend: backend, tpl: tpl, cfg: cfg, now: time.Now, sso: newSSOStateStore(10 * time.Minute)}
+	// R23.3 SSO/OIDC：配置了 issuer 才装配客户端；失败仅告警并禁用 SSO（接线默认关）。
+	if strings.TrimSpace(cfg.OIDC.Issuer) != "" {
+		oc, err := newOIDCClient(cfg.OIDC, nil)
+		if err != nil {
+			log.Printf("[frontend] oidc init %q: %v (SSO disabled)", cfg.OIDC.Issuer, err)
+		} else {
+			srv.oidc = oc
+		}
+	}
+	return srv, nil
 }
 
 // Handler 返回前台完整 HTTP handler（含 /api 代理与 /static 静态资源）。
@@ -53,6 +68,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /{$}", s.handleHome)
 	mux.HandleFunc("GET /login", s.handleLoginForm)
 	mux.HandleFunc("POST /login", s.csrf(s.handleLoginSubmit))
+	// R23.3 SSO：GET 发起授权跳转 / 处理 IdP 回调（未配置时各自返回 503）。
+	mux.HandleFunc("GET /login/sso", s.handleSSOStart)
+	mux.HandleFunc("GET /login/sso/callback", s.handleSSOCallback)
 	mux.HandleFunc("GET /register", s.handleRegisterForm)
 	mux.HandleFunc("POST /register", s.csrf(s.handleRegisterSubmit))
 	mux.HandleFunc("POST /logout", s.csrf(s.requireLogin(s.handleLogout)))

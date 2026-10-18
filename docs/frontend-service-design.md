@@ -313,3 +313,41 @@ func (c *backendClient) issueSession(ctx, userID, tenant, roles string) (token s
 **验收**：`scripts/accept_r23.py` **20/20 PASS**，新增 4 项 —— 保存 public 记忆 201、另一用户 discover 读到 public（items=1）、private 不泄露到社区、bob 注册。`gate.sh` PASS 13 / FAIL 0 / SKIP 1。
 
 > 红线复核：`go.mod` 零变化；既有 SQL 不动；`canView`/`EnforcePrivateOwner` 仅**追加** public 分支，不改既有 4 值行为。
+
+### 13.4 R23.3 SSO/OIDC 登录落地（2026-10-18）
+
+**定位**：给前台补上「人也能用企业身份登录」。与 R22.4 `ssoAuthenticator` 对齐
+（后台不验签、只认结果），但本阶段**对接路径①** —— 前台自己完成 OIDC 授权码流与
+**RS256 验签**，验签通过后用已有 `IssueSession` 让后台签 `auth_tokens`，之后业务请求
+与用户名密码登录**完全同路**。后续如需路径②，仅需把 `RawIDToken` 透传给后台 SSO
+适配器，后台代码零改动。
+
+**新增文件（全部 stdlib，零第三方依赖）**：
+
+| 文件 | 内容 |
+|---|---|
+| `frontend/oidc.go` | OIDC 客户端：发现文档、授权 URL（state/nonce/PKCE S256）、换码、ID Token RS256 验签（JWKS 缓存）、iss/aud/exp/nbf/nonce 校验 |
+| `frontend/handlers_sso.go` | `ssoStateStore`（内存一次性 state）+ `handleSSOStart` / `handleSSOCallback` + `ssoUserID` |
+| `frontend/oidc_test.go` | httptest 本地 IdP stub（自签 RSA/JWKS），全流程 + 各类验签失败路径 |
+| `frontend/sso_handler_test.go` | 端到端 handler 测试：起完整前台 + mock 后台 + IdP stub，走 `/login/sso` → 回调 → 建会话 → 进工作台 |
+
+**密码学**：`crypto/rsa`（PKCS#1 v1.5 验签）+ `crypto/sha256` + `crypto/rand` +
+`encoding/base64.RawURLEncoding`，无任何外部依赖。
+
+**身份映射**：`ssoUserID(issuer, sub) = "sso-" + hex(sha256(issuer + "|" + sub))[:20]` ——
+不同 IdP 的同名 sub 不撞号，且稳定可重复登录。
+
+**接线默认关**：`-oidc-issuer`（或 `LIMS_FRONTEND_OIDC_ISSUER`）为空时，`Server.oidc == nil`，
+`/login/sso` 与回调都返回 **503**，登录页**不渲染** SSO 入口。装配失败仅告警并禁用，不阻断启动。
+
+**启动参数**：`-oidc-issuer` / `-oidc-client-id` / `-oidc-client-secret` /
+`-oidc-redirect-uri`（空则按监听地址推断）/ `-oidc-scopes`（默认 `openid profile email`）。
+
+**验收**：
+- `go test ./frontend/` 全绿，含 OIDC 单测 9 项 + SSO handler 端到端 4 项
+  （成功登录、默认关 503、伪造 state 拒绝、state 重用拒绝）。
+- `scripts/accept_r23.py`：**23/23 PASS**（新增 3 项 SSO 默认关验证）。
+- `gate.sh`：PASS 13 / FAIL 0 / SKIP 1；`go.mod` **零变化**（红线⑤）。
+
+> 安全说明：ID Token 验签强制 RS256 + 校验 iss/aud/exp/nonce；state 一次性 + 短 TTL 防 CSRF/重放；
+> PKCE S256 防授权码拦截；`ssoUserID` 加 issuer 哈希防跨 IdP sub 撞号。

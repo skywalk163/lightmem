@@ -178,6 +178,12 @@ def main():
         leak = any(priv_fact[:18] in (m.get("fact") or m.get("content") or "") for m in items)
         check("R23.2 private 不泄露到社区", st == 200 and not leak, f"got {st} leak={leak}")
 
+        # ===== R23.3 SSO/OIDC：默认关（接线默认关），发起与回调均 503 =====
+        st, body = b.get("/login/sso")
+        check("R23.3 未配置 SSO：/login/sso → 503", st == 503, f"got {st}")
+        st, body = b.get("/login/sso/callback?state=x&code=y")
+        check("R23.3 未配置 SSO：回调 → 503", st == 503, f"got {st}")
+
         # 登出
         b.refresh_csrf("/workspace")
         st, url, _ = b.post_form("/logout", {"_csrf": b.csrf})
@@ -189,6 +195,11 @@ def main():
         b3 = Browser(FE); b3.refresh_csrf("/login")
         st, _, body = b3.post_form("/login", {"_csrf": b3.csrf, "username": "alice", "password": "wrong"})
         check("错密码登录 → 200 + 错误提示", st == 200 and "用户名或密码错误" in body, f"got {st}")
+
+        # R23.3 未配置 SSO：未登录会话下登录页不显示 SSO 入口。
+        b4 = Browser(FE); b4.refresh_csrf("/login")
+        st, body = b4.get("/login")
+        check("R23.3 未配置 SSO：登录页无 SSO 入口", st == 200 and "SSO" not in body, f"got {st}")
 
         print("\n===== 验收汇总 =====", flush=True)
         passed = sum(1 for x in results if x)
