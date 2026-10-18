@@ -120,8 +120,23 @@ func main() {
 			_ = backend.Close()
 			log.Fatalf("[boot] -admin-listen requires a backend exposing DB(); got %T (sqlite supported)", backend)
 		}
+		// 确保 auth 表存在（R22 验收暴露：SetAuthDB 只挂 AdminStore，不建表）。
+		// 不建表会让管理 API 首次调用报 "no such table"，此处显式幂等建表。
+		actx, acancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := kernel.EnsureAuthTables(actx, dp.DB()); err != nil {
+			acancel()
+			_ = backend.Close()
+			log.Fatalf("[boot] ensure auth tables: %v", err)
+		}
+		acancel()
 		srv.SetAuthDB(dp.DB())
-		log.Printf("[boot] admin API enabled (auth DB injected) — listen on %s", *adminListen)
+		// R22 验收暴露的接线缺口：DB token 表（agent_tokens/auth_tokens）此前只对
+		// admin API 生效，业务端点（/mcp、REST）从未走它。此处注入 dbAuthenticator，
+		// 使签发的 token 能真正鉴权业务请求。
+		// 注：若 profile 显式配置了外部认证器（ory_kratos/sso），后执行的 ConfigureAuth
+		// 会覆盖它（外部 IdP 优先）；未配置则 DB token 认证生效，覆盖 legacy 静态表路径。
+		kernel.SetAuthenticator(kernel.NewDBAuthenticator(dp.DB(), "sqlite"))
+		log.Printf("[boot] admin API enabled + DB token auth wired — listen on %s", *adminListen)
 	}
 
 	// 4) 后台整合 worker（启动前挂 R9-A consolidate 时间戳回调）
