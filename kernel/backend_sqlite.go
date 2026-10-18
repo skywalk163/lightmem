@@ -96,6 +96,11 @@ func newSQLiteBackend(_ context.Context, cfg *StorageConfig) (StorageBackend, er
 
 func (b *sqliteBackend) Name() string { return b.name }
 
+// DB 暴露底层 *sql.DB，供 R22.3 管理 API 复用同一连接（auth 表与记忆表同库）。
+// 注：sqliteBackend 内部用 mu 串行化写；调用方（AdminStore）只做 auth 表的
+// 点查与写入，与后端写在同一 SQLite 连接上会由 database/sql 天然串行化。
+func (b *sqliteBackend) DB() *sql.DB { return b.db }
+
 func (b *sqliteBackend) Ping(ctx context.Context) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()

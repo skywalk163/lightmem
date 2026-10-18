@@ -54,6 +54,8 @@ func main() {
 	pprofOn := flag.Bool("pprof", false, "enable /debug/pprof endpoints (default false)")
 	metricsOn := flag.Bool("metrics", true, "expose /metrics endpoint (default true)")
 	shutdownTimeout := flag.Duration("shutdown-timeout", 10*time.Second, "graceful shutdown timeout")
+	// R22.2/R22.3：管理 API 独立端口。空 = 不启用（零回归，缺省行为不变）。
+	adminListen := flag.String("admin-listen", "", "enable admin API (R22.2) on this address, e.g. 127.0.0.1:8090 (recommended loopback only); empty = disabled")
 	flag.Parse()
 
 	// 1) 装配 profile
@@ -109,6 +111,18 @@ func main() {
 
 	srv.SetLayerPolicy(kernel.DefaultLayerPolicy())
 	srv.SetRankFusion(kernel.DefaultRankFusion())
+
+	// R22.2/R22.3：启用管理 API 时，把后端 DB 注入 APIServer（/admin 路由据此注册）。
+	// 缺省 -admin-listen 为空 = 不注入 = /admin 不暴露（接线默认关，零回归）。
+	if *adminListen != "" {
+		dp, ok := backend.(kernel.DBProvider)
+		if !ok {
+			_ = backend.Close()
+			log.Fatalf("[boot] -admin-listen requires a backend exposing DB(); got %T (sqlite supported)", backend)
+		}
+		srv.SetAuthDB(dp.DB())
+		log.Printf("[boot] admin API enabled (auth DB injected) — listen on %s", *adminListen)
+	}
 
 	// 4) 后台整合 worker（启动前挂 R9-A consolidate 时间戳回调）
 	cons := kernel.NewConsolidator(backend)
@@ -173,6 +187,22 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	// R22.3：管理 API 独立端口。建议仅绑定回环；adminGuard 默认已拒绝非回环来源。
+	var adminServer *http.Server
+	if ah := srv.AdminHandler(); ah != nil {
+		adminServer = &http.Server{
+			Addr:              *adminListen,
+			Handler:           ah,
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+		go func() {
+			log.Printf("[boot] admin api listening on %s", *adminListen)
+			if err := adminServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Printf("[admin] %v", err)
+			}
+		}()
+	}
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 
@@ -200,6 +230,9 @@ func main() {
 	shCtx, shCancel := context.WithTimeout(context.Background(), *shutdownTimeout)
 	defer shCancel()
 	_ = server.Shutdown(shCtx)
+	if adminServer != nil {
+		_ = adminServer.Shutdown(shCtx)
+	}
 
 	// 10) drain 后台 consolidate
 	log.Printf("[shutdown] cancel consolidate worker")
