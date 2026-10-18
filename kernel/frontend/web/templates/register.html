@@ -1,0 +1,25 @@
+{{define "title"}}注册 · Lightmem{{end}}
+{{define "content"}}
+<div class="auth">
+  <h1>创建账号</h1>
+  {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
+  {{template "flash" .}}
+  <form method="post" action="/register" autocomplete="on">
+    <input type="hidden" name="_csrf" value="{{.CSRF}}">
+    <label>用户名
+      <input name="username" required minlength="3" placeholder="3 位以上">
+    </label>
+    <label>显示名
+      <input name="display_name" placeholder="昵称（可选）">
+    </label>
+    <label>密码
+      <input name="password" type="password" required minlength="8" placeholder="至少 8 位">
+    </label>
+    <label>确认密码
+      <input name="password2" type="password" required minlength="8">
+    </label>
+    <button type="submit" class="primary">注册并登录</button>
+  </form>
+  <p class="alt">已有账号？<a href="/login">登录</a></p>
+</div>
+{{end}}

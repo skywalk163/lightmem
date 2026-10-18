@@ -1,0 +1,80 @@
+{{define "title"}}工作台 · Lightmem{{end}}
+{{define "content"}}
+<h1>记忆工作台</h1>
+<p class="lead">这里是你的 AI 记忆大脑 —— 记下重要的事，随时多信号召回。</p>
+
+<section class="card">
+  <h2>召回</h2>
+  <form id="recall-form" class="stack">
+    <input type="search" name="q" placeholder="想找什么？例如「上次部署卡在哪」" required>
+    <div class="row">
+      <select name="kind">
+        <option value="">全部类型</option>
+        <option value="fact">事实</option>
+        <option value="goal">计划</option>
+        <option value="event">总结</option>
+        <option value="procedure">步骤</option>
+        <option value="preference">偏好</option>
+      </select>
+      <button type="submit" class="primary">召回</button>
+    </div>
+  </form>
+  <div id="recall-out" class="out"></div>
+</section>
+
+<section class="card">
+  <h2>录入</h2>
+  <form id="save-form" class="stack">
+    <textarea name="fact" rows="3" placeholder="这条记忆是什么？" required></textarea>
+    <div class="row">
+      <select name="kind">
+        <option value="fact">事实</option>
+        <option value="preference">偏好</option>
+        <option value="event">总结</option>
+      </select>
+      <input name="visibility" value="private" hidden>
+      <button type="submit" class="primary">保存</button>
+    </div>
+  </form>
+  <div id="save-out" class="out"></div>
+</section>
+{{end}}
+{{define "scripts"}}
+<script>
+async function post(path, body) {
+  const r = await fetch(path, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
+  const data = await r.json().catch(()=> ({}));
+  return {status: r.status, data};
+}
+function esc(s) {
+  const d = document.createElement("div"); d.textContent = s == null ? "" : String(s); return d.innerHTML;
+}
+document.getElementById("recall-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const out = document.getElementById("recall-out");
+  out.innerHTML = "<p class='muted'>召回中…</p>";
+  const body = {};
+  if (f.q.value) body.text = f.q.value;
+  if (f.kind.value) body.memory_kinds = [f.kind.value];
+  const {status, data} = await post("/api/memory/recall", body);
+  if (status !== 200) { out.innerHTML = "<p class='err'>召回失败："+esc(data.error||status)+"</p>"; return; }
+  const items = data.results || data.items || [];
+  if (!items.length) { out.innerHTML = "<p class='muted'>没有匹配的记忆。</p>"; return; }
+  out.innerHTML = "<ul class='list'>" + items.map(m =>
+    "<li><strong>["+esc(m.kind||"fact")+"]</strong> "+esc(m.fact||m.content||"")+
+    (m.score!=null?" <span class='badge'>"+Number(m.score).toFixed(2)+"</span>":"")+"</li>"
+  ).join("") + "</ul>";
+});
+document.getElementById("save-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const out = document.getElementById("save-out");
+  const {status, data} = await post("/api/memory/save", {
+    fact: f.fact.value, kind: f.kind.value, visibility: f.visibility.value
+  });
+  if (status === 200 || status === 201) { out.innerHTML = "<p class='ok'>已保存："+esc(data.memory_id||"id")+"</p>"; f.reset(); }
+  else out.innerHTML = "<p class='err'>保存失败："+esc(data.error||status)+"</p>";
+});
+</script>
+{{end}}

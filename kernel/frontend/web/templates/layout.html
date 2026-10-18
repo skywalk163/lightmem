@@ -1,0 +1,33 @@
+{{define "layout"}}<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{block "title" .}}Lightmem{{end}}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <nav class="nav">
+    <a class="brand" href="/">🧠 Lightmem</a>
+    {{if .User}}
+    <div class="nav-links">
+      <a href="/workspace">工作台</a>
+      <a href="/goals">计划</a>
+      <a href="/discover">社区</a>
+    </div>
+    <div class="nav-user">
+      <span>{{.User.Username}}</span>
+      <form method="post" action="/logout" class="inline">
+        <input type="hidden" name="_csrf" value="{{.CSRF}}">
+        <button class="link">退出</button>
+      </form>
+    </div>
+    {{else}}
+    <div class="nav-user"><a href="/login">登录</a></div>
+    {{end}}
+  </nav>
+  <main class="main">{{template "content" .}}</main>
+  <footer class="foot">lightmem · AI 记忆大脑</footer>
+  {{block "scripts" .}}{{end}}
+</body>
+</html>{{end}}

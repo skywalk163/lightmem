@@ -1,0 +1,33 @@
+{{define "title"}}社区 · Lightmem{{end}}
+{{define "content"}}
+<h1>社区公开记忆</h1>
+<p class="lead">浏览大家公开的记忆 —— 经验、总结、偏好，知乎/豆瓣式。</p>
+
+<section class="card">
+  <form id="disc-form" class="stack">
+    <input type="search" name="q" placeholder="搜公开记忆…">
+    <button type="submit" class="primary">搜索</button>
+  </form>
+  <div id="disc-out" class="out"><p class="muted">输入关键词，浏览公开记忆。</p></div>
+</section>
+{{end}}
+{{define "scripts"}}
+<script>
+function esc(s){const d=document.createElement("div");d.textContent=s==null?"":String(s);return d.innerHTML;}
+document.getElementById("disc-form").addEventListener("submit",async(e)=>{
+  e.preventDefault();
+  const q=e.target.q.value.trim();
+  const out=document.getElementById("disc-out");
+  out.innerHTML="<p class='muted'>搜索中…</p>";
+  const r=await fetch("/api/discover?q="+encodeURIComponent(q),{headers:{Accept:"application/json"}});
+  const data=await r.json().catch(()=>({}));
+  if(r.status!==200){out.innerHTML="<p class='err'>搜索失败："+esc(data.error||r.status)+"</p>";return;}
+  const items=data.items||data.results||[];
+  if(!items.length){out.innerHTML="<p class='muted'>暂无公开记忆。</p>";return;}
+  out.innerHTML="<ul class='list'>"+items.map(m=>
+    "<li><span class='badge'>"+esc(m.kind||"fact")+"</span> "+esc(m.fact||m.content||"")+
+    "<div class='meta'>by "+esc(m.owner||"—")+" · "+esc(m.visibility||"public")+"</div></li>"
+  ).join("")+"</ul>";
+});
+</script>
+{{end}}

@@ -16,3 +16,15 @@ clients/*-token.json
 .lightmem-secrets/
 # 交叉编译产物体积大
 .lightmem-bin/
+
+# —— R23 前台服务 ——
+# 运行时 SQLite 数据（凭据 + 会话日志）不入库
+data/
+# 本地编译产物（0.88 上 go build 输出，跨平台不入库）
+kernel/lightmem-kernel
+kernel/lightmem-mcp
+kernel/lightmem-frontend
+# gate.sh 每次运行产生的门禁报告
+eval/reports/
+# 会话临时 scratch
+.tmp/
