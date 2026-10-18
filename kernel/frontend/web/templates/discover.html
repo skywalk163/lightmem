@@ -22,7 +22,7 @@ document.getElementById("disc-form").addEventListener("submit",async(e)=>{
   const r=await fetch("/api/discover?q="+encodeURIComponent(q),{headers:{Accept:"application/json"}});
   const data=await r.json().catch(()=>({}));
   if(r.status!==200){out.innerHTML="<p class='err'>搜索失败："+esc(data.error||r.status)+"</p>";return;}
-  const items=data.items||data.results||[];
+  const items=Array.isArray(data)?data:(data.items||data.results||[]);
   if(!items.length){out.innerHTML="<p class='muted'>暂无公开记忆。</p>";return;}
   out.innerHTML="<ul class='list'>"+items.map(m=>
     "<li><span class='badge'>"+esc(m.kind||"fact")+"</span> "+esc(m.fact||m.content||"")+

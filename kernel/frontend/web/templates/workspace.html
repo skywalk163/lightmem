@@ -32,7 +32,11 @@
         <option value="preference">偏好</option>
         <option value="event">总结</option>
       </select>
-      <input name="visibility" value="private" hidden>
+      <select name="visibility">
+        <option value="private">仅自己可见</option>
+        <option value="tenant">本租户共享</option>
+        <option value="public">公开到社区（任何人可读）</option>
+      </select>
       <button type="submit" class="primary">保存</button>
     </div>
   </form>

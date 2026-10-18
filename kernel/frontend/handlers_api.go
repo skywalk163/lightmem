@@ -146,11 +146,16 @@ func (s *Server) handleAPIGoalState(w http.ResponseWriter, r *http.Request) {
 	s.proxyBackend(w, r, http.MethodPost, "/tools/memory/goal/state", body)
 }
 
-// handleAPIDiscover 社区公开浏览：调后台 GET /search 限定 visibility=public。
-// R23.2 会接后台 public 放行；此处先透传 search，让前端可先用。
+// handleAPIDiscover 社区公开浏览：调后台 GET /search，以当前用户为 viewer。
+// R23.2 后台 canView 已放行 public（跨租户读），viewer 非空是读 public 的前提。
 func (s *Server) handleAPIDiscover(w http.ResponseWriter, r *http.Request) {
+	viewer := ""
+	if u := s.viewUser(r); u != nil {
+		viewer = u.Username
+	}
 	path := withQuery("/search", url.Values{
-		"q": {r.URL.Query().Get("q")}, "visibility": {"public"},
+		"q":      {r.URL.Query().Get("q")},
+		"viewer": {viewer},
 	})
 	s.proxyBackend(w, r, http.MethodGet, path, nil)
 }

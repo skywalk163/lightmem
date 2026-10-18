@@ -291,3 +291,25 @@ func (c *backendClient) issueSession(ctx, userID, tenant, roles string) (token s
 - `gate.sh`：PASS 13 / FAIL 0 / SKIP 1（PG 真机，环境未配）。
 - `go vet` / `gofmt` / `-race` 全绿。
 - 前台 `go test ./frontend/...` 全绿（PBKDF2 向量 + 凭据库 + 服务集成测试）。
+
+### 13.3 R23.2 社区公开落地（D5 定稿，2026-10-18）
+
+**后台唯一增量（只增不改，3 处）**：
+
+| 位置 | 改动 | 性质 |
+|---|---|---|
+| `model.go` | 新增 `VisPublic Visibility = "public"` 枚举值 | 只增 |
+| `backend_sqlite.go` `canView` | 新增 `case VisPublic: return viewer != ""`（跨租户读） | 只增分支 |
+| `auth.go` `EnforcePrivateOwner` | visibility 为 public 时同样校验 owner == token 身份 | 只增分支（防借 public 越权改删） |
+
+**语义**：public = 任何带身份的 viewer 可读（跨租户，不看 tenant）；**只有 owner 可写/改/删**。
+既有 private / shared_user / tenant / cross_tenant 四值语义**零回归**（`visibility_public_test.go` 断言）。
+
+**前台配合**：
+- `handleAPIDiscover` 传 `viewer`=当前用户（后台 `/search` 不识别 `visibility` 参数，靠 `canView` 放行 public，viewer 非空是读 public 的前提）。
+- 工作台「录入」新增可见范围选择：`private` / `tenant` / `public`。
+- 社区页 `discover.html` 兼容 `/search` 返回的**顶层 JSON 数组**（非 `{items:[...]}`）。
+
+**验收**：`scripts/accept_r23.py` **20/20 PASS**，新增 4 项 —— 保存 public 记忆 201、另一用户 discover 读到 public（items=1）、private 不泄露到社区、bob 注册。`gate.sh` PASS 13 / FAIL 0 / SKIP 1。
+
+> 红线复核：`go.mod` 零变化；既有 SQL 不动；`canView`/`EnforcePrivateOwner` 仅**追加** public 分支，不改既有 4 值行为。

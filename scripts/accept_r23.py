@@ -150,6 +150,34 @@ def main():
         st, r = b.get("/api/discover?q=test")
         check("GET /api/discover → 200", st == 200, f"got {st}")
 
+        # ===== R23.2 社区公开：public 跨用户可读、private 不泄露 =====
+        pub_fact = "R23 公开记忆·共享大脑试点-" + str(int(time.time()))
+        st, r = b.post_json("/api/memory/save", {"fact": pub_fact, "kind": "fact", "visibility": "public"})
+        pmid = _mid(r)
+        check("R23.2 保存 public 记忆 → 2xx + memory_id", st in (200, 201) and bool(pmid), f"got {st} mid={pmid} err={r.get('error','')}")
+
+        bb = Browser(FE); bb.refresh_csrf("/register")
+        st, url, _ = bb.post_form("/register", {"_csrf": bb.csrf, "username": "bob-r23", "password": "s3cret-pass", "password2": "s3cret-pass", "display_name": "Bob"})
+        check("R23.2 bob 注册 → /workspace", st in (302, 303) and url.endswith("/workspace"), f"got {st}->{url}")
+
+        st, body = bb.get("/api/discover?q=" + urllib.parse.quote("共享大脑"))
+        try:
+            _d = json.loads(body)
+            items = _d if isinstance(_d, list) else (_d.get("items") or _d.get("results") or [])
+        except Exception: items = []
+        hit = any(pub_fact[:24] in (m.get("fact") or m.get("content") or "") for m in items)
+        check("R23.2 他人 discover 读到 public", st == 200 and hit, f"got {st} items={len(items)}")
+
+        priv_fact = "bob私密笔记-" + str(int(time.time()))
+        st, r = bb.post_json("/api/memory/save", {"fact": priv_fact, "kind": "fact", "visibility": "private"})
+        st, body = b.get("/api/discover?q=" + urllib.parse.quote("私密笔记"))
+        try:
+            _d = json.loads(body)
+            items = _d if isinstance(_d, list) else (_d.get("items") or _d.get("results") or [])
+        except Exception: items = []
+        leak = any(priv_fact[:18] in (m.get("fact") or m.get("content") or "") for m in items)
+        check("R23.2 private 不泄露到社区", st == 200 and not leak, f"got {st} leak={leak}")
+
         # 登出
         b.refresh_csrf("/workspace")
         st, url, _ = b.post_form("/logout", {"_csrf": b.csrf})

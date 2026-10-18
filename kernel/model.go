@@ -23,6 +23,8 @@ const (
 	VisSharedUser  Visibility = "shared_user"
 	VisTenant      Visibility = "tenant"
 	VisCrossTenant Visibility = "cross_tenant"
+	// VisPublic 社区公开（R23.2 只增）：任何人可读（跨租户），仅 owner 可写/改/删。
+	VisPublic Visibility = "public"
 )
 
 // Provenance 来源标记（§7.5）

@@ -47,7 +47,7 @@ var profileRequireAuth atomic.Bool
 // R22 扩展（docs/token-management-design.md §4）：
 //   - Kind：Agent（AI）还是 User（人）——为未来"人也可用"的论坛属性预留；
 //   - ID / Roles / Scope / Issuer / ExpiresAt：细粒度授权与审计。
-//   以下 R22 字段全部"只增不改"：既有 4 个字段语义不变，既有调用零改动。
+//     以下 R22 字段全部"只增不改"：既有 4 个字段语义不变，既有调用零改动。
 type Identity struct {
 	// 既有字段（R21，语义冻结）
 	AgentID  string // 哪个 Agent 在操作
@@ -424,10 +424,11 @@ func ResolveActor(ctx context.Context, bodyUser, bodyTenant string) (Identity, b
 	return Identity{UserID: bodyUser, TenantID: bodyTenant}, true
 }
 
-// EnforcePrivateOwner 校验 private 可见性的 owner 是否为 token 身份。
+// EnforcePrivateOwner 校验 private / public 可见性的 owner 是否为 token 身份。
 // 返回 nil 表示放行；否则返回可写进 403 的 error。
+// R23.2：public 虽可被任意人读，但只有 owner 可写/改/删（防止借 public 越权改删）。
 func EnforcePrivateOwner(ctx context.Context, owner, visibility string) error {
-	if !strings.EqualFold(visibility, string(VisPrivate)) {
+	if !strings.EqualFold(visibility, string(VisPrivate)) && !strings.EqualFold(visibility, string(VisPublic)) {
 		return nil
 	}
 	id, ok := IdentityFromContext(ctx)
@@ -436,7 +437,7 @@ func EnforcePrivateOwner(ctx context.Context, owner, visibility string) error {
 		return nil
 	}
 	if owner != "" && owner != id.UserID {
-		return fmt.Errorf("private memory owner %q must match token identity %q", owner, id.UserID)
+		return fmt.Errorf("%s memory owner %q must match token identity %q", visibility, owner, id.UserID)
 	}
 	return nil
 }
