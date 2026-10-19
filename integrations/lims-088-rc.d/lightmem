@@ -16,8 +16,12 @@
 #   lightmem_embedder="hash"
 #   lightmem_pg_host="10.0.10.10"    # lims-pg jail
 #   lightmem_pg_port="5432"
-#   lightmem_pg_user="postgres"
+#   lightmem_pg_user="lightmem_app"  # R28：非 superuser 运行角色（禁再用 postgres）
 #   lightmem_pg_db="lims_dsh"        # 专用库，勿用 lims（同机有其它测试）
+#   lightmem_pg_secrets="/var/db/lightmem/pg_app.env"
+#                                   # R28：PG 口令从该文件注入（chmod 600）。
+#                                   # rc.conf 里**不写明文口令**；kernel 的
+#                                   # resolveSecrets 读 LIMS_PG_PASSWORD 覆盖 profile。
 #   lightmem_log="/var/log/lightmem.log"
 #   lightmem_pidfile="/var/run/lightmem/lightmem.pid"
 #   lightmem_pg_wait="60"            # 启动前等待 PG 就绪的秒数
@@ -48,6 +52,8 @@ load_rc_config $name
 : ${lightmem_pg_port:="5432"}
 : ${lightmem_pg_user:="postgres"}
 : ${lightmem_pg_db:="lims_dsh"}
+# R28（认证收紧）：PG 口令只从 secrets 文件读，rc.conf 保持无明文。
+: ${lightmem_pg_secrets:="/var/db/lightmem/pg_app.env"}
 : ${lightmem_log:="/var/log/lightmem.log"}
 : ${lightmem_pidfile:="/var/run/lightmem/lightmem.pid"}
 : ${lightmem_pg_wait:="60"}
@@ -66,7 +72,15 @@ if [ -z "$lightmem_home" ] && [ -n "$lightmem_user" ]; then
     lightmem_home=$(eval echo "~${lightmem_user}" 2>/dev/null)
 fi
 # LIMS_PG_* 由 kernel 的 resolveSecrets 读取，用于覆盖 profile 里的连接串。
-: ${lightmem_env:="HOME=${lightmem_home} LIMS_PG_HOST=${lightmem_pg_host} LIMS_PG_PORT=${lightmem_pg_port} LIMS_PG_USER=${lightmem_pg_user} LIMS_PG_DB=${lightmem_pg_db}"}
+# R28：口令取自 secrets 文件（见 lightmem_pg_secrets），文件缺失则以空口令启动
+# ——在 pg_hba 已收紧为 scram-sha-256 的前提下，空口令会连接失败并显式报错，
+#   绝不静默退回免密（trust 已从 host 规则中移除）。
+lightmem_pg_password=""
+if [ -f "$lightmem_pg_secrets" ]; then
+    . "$lightmem_pg_secrets"
+    lightmem_pg_password="${LIMS_PG_PASSWORD:-}"
+fi
+: ${lightmem_env:="HOME=${lightmem_home} LIMS_PG_HOST=${lightmem_pg_host} LIMS_PG_PORT=${lightmem_pg_port} LIMS_PG_USER=${lightmem_pg_user} LIMS_PG_DB=${lightmem_pg_db} LIMS_PG_PASSWORD=${lightmem_pg_password}"}
 
 pidfile="${lightmem_pidfile}"
 # 注意：**不能**把 /usr/sbin/daemon 当作 rc.subr 的 command。

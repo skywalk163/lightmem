@@ -72,6 +72,56 @@ cd kernel && go test -run 'EdgePersistPg' -count=1 -v .
 若切换后出现授权不全或其它失败，**直接改回原配置**即可，代码无需改动；
 不要用 `LIMS_PG_SUPERUSER_CHECK=warn` 掩盖问题后宣布完成。
 
+---
+
+## 认证收紧（trust → scram-sha-256，R28 追加）
+
+**为什么**：`pg_hba.conf` 原为 `host all all 10.0.10.0/24 trust` —— 网段内任何人都可**免密冒充任意角色**
+（包括 superuser），多租户隔离形同虚设。
+
+### 改法（0.88 上 PG 数据目录 `/var/db/pgdata`）
+
+```sh
+# 1) 先给可登录角色设强口令（口令以 SCRAM-SHA-256 存储）
+APP_PW=$(openssl rand -hex 24); SUPER_PW=$(openssl rand -hex 24)
+psql -h "$PGHOST" -U postgres -c "ALTER ROLE lightmem_app PASSWORD '$APP_PW'"
+psql -h "$PGHOST" -U postgres -c "ALTER ROLE postgres   PASSWORD '$SUPER_PW'"
+
+# 2) 口令落盘（chmod 600，绝不进 git / rc.conf）
+printf 'LIMS_PG_PASSWORD=%s\n' "$APP_PW"   > /var/db/lightmem/pg_app.env
+printf 'PGPASSWORD=%s\n'        "$SUPER_PW" > /var/db/lightmem/pg_super.env
+chmod 600 /var/db/lightmem/pg_app.env /var/db/lightmem/pg_super.env
+
+# 3) 备份 + 收紧 host 规则（local 保留，见下）
+sudo -n cp /var/db/pgdata/pg_hba.conf /var/db/pgdata/pg_hba.conf.bak.r28
+sudo -n sed -i '' -E 's/^(host[[:space:]]+.*)[[:space:]]+trust$/\1 scram-sha-256/' \
+     /var/db/pgdata/pg_hba.conf
+
+# 4) 生效（SQL 重载，无需知道 service 名）
+psql -h "$PGHOST" -U postgres -c 'SELECT pg_reload_conf()'
+```
+
+> ⚠️ 收紧后**所有** psql / 应用连接都必须带口令。排障用 `psql -w`（`-w` = 不提示密码、直接失败），
+> 否则非 tty 环境会因等待输入而挂住。
+
+### `local` 为什么保留 trust
+
+该通道要求**先登录主机**（unix socket），风险等级与网络可达的 TCP 完全不同；
+改成 `peer` 会要求 OS 用户名与 PG 角色同名（workbuddy ≠ postgres）→ **锁死所有本地管理入口**。
+故保留 local trust、把网络侧彻底收紧。若要连 local 一并收紧，需先建同名 OS 用户，属下一步选项。
+
+### 口令注入路径（代码零改动）
+
+kernel 的 `resolveSecrets`（`kernel/profile.go:358`）已支持 `LIMS_PG_PASSWORD`：
+
+| 消费方 | 注入方式 |
+|---|---|
+| 服务 | `integrations/lims-088-rc.d/lightmem` 的 `lightmem_pg_secrets`（默认 `/var/db/lightmem/pg_app.env`）→ `LIMS_PG_PASSWORD` |
+| 门禁 / CI | `/var/db/lightmem/gate.env` 追加 `export LIGHTMEM_PG_PASSWORD=...` |
+| 人工运维 | `/var/db/lightmem/pg_super.env` |
+
+secrets 文件缺失 → 空口令 → scram 下**连接失败并显式报错**，绝不静默退回免密。
+
 ### 过渡开关（仅临时使用）
 
 `LIMS_PG_SUPERUSER_CHECK`：
