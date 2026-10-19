@@ -199,13 +199,13 @@ func (a *AdminStore) handleUserList(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 	type u struct {
-		ID         string `json:"id"`
-		Username   string `json:"username"`
-		Email      string `json:"email"`
-		TenantID   string `json:"tenant_id"`
-		Role       string `json:"role"`
-		Disabled   bool   `json:"disabled"`
-		CreatedAt  string `json:"created_at"`
+		ID        string `json:"id"`
+		Username  string `json:"username"`
+		Email     string `json:"email"`
+		TenantID  string `json:"tenant_id"`
+		Role      string `json:"role"`
+		Disabled  bool   `json:"disabled"`
+		CreatedAt string `json:"created_at"`
 	}
 	out := []u{}
 	for rows.Next() {
@@ -222,9 +222,9 @@ func (a *AdminStore) handleUserList(w http.ResponseWriter, r *http.Request) {
 }
 
 type userPatchReq struct {
-	Role       *string `json:"role"`
-	Disabled   *bool   `json:"disabled"`
-	Email      *string `json:"email"`
+	Role     *string `json:"role"`
+	Disabled *bool   `json:"disabled"`
+	Email    *string `json:"email"`
 }
 
 func (a *AdminStore) handleUserPatch(w http.ResponseWriter, r *http.Request) {
