@@ -2390,6 +2390,6 @@ R14 任务书 §九.3 写"holdout_v2 全 L1 且无 entity / recorded_at"，其�
 | 3 | 裁定三：事务注入重构（每测试事务 + 回滚） | 技术债，下一轮 |
 | 4 | 已知缺口（按裁定原话登记）：「测试间无事务隔离，依赖命名空间隔离」——并发度提升后需重新评估 | 下一轮 |
 | 5 | `/search` P95 44.97ms（环境漂移；关掉本轮优化仍 48.92ms → 与 R28 无关），逼近红线 50.12ms | 下一轮复测 |
-| 6 | ~~PG trust 免密~~ → **已收紧**（业主指令）：host 规则全量 `trust` → `scram-sha-256`；两角色设强口令；口令经 `LIMS_PG_PASSWORD` 注入（kernel `resolveSecrets` 已支持，代码零改动）；服务 `/healthz` ok、门禁仍 15/0/0。**残余**：`local`（unix socket）保持 trust（需先登录主机），是否一并收紧待定 |
+| 6 | ~~PG trust 免密~~ → **已全部收紧**（业主指令）：host 规则 `scram-sha-256`、`local` 规则 `peer`，**trust 清零**（PG 在 jail 内，socket 不可从宿主访问，local 实际无人使用）；两角色设强口令；口令经 `LIMS_PG_PASSWORD` 注入（代码零改动）；服务 `/healthz` ok、门禁仍 15/0/0。**残余未知**：jail 内部无法 ssh 进入，若 jail 内有 socket 免密依赖会受影响（风险极低，回退见报告 §4.5.3） |
 | 7 | R28 改动**未 push**（已本地 commit，红线⑧） | 业主示意后推三远端 |
 | 8 | `.env` 的 `GITCODE_TOKEN` 仍 401 | 业主更新 token |
