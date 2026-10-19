@@ -1809,6 +1809,20 @@ R24 收口态实测（`eval/reports/r24_final_holdout_20261018-235618.json`，83
 `M1=1.0000 / hits=800 / hit@1=1.0000 / M2=0.2498 / control=43126 / data=129537 / 压缩 35.33% / vetoed=0`
 ——**七个数字与 R15 收口值逐位相同**，证明 R24 四条线没有改变北极星判定的任何一条输出。
 
+**北极星换代（R25 起，`_R25_并行任务书.md` §8.1）**：M1 七数在 R13/R14/R15/R24 连续四轮逐位相同
+（800/800、hit@1=1.0000），**已无上升空间，不能再当验收门槛** → 主判据改为
+**M2 控制面占比 ≤ 0.2498**（不许升，有下降空间更好）；辅助判据 = ①检索延迟 P95（新增只读 bench
+`eval/scripts/bench_p95.py`，基线 `eval/reports/r25_p95_baseline.md`）②数据面压缩 ≥35.33%
+③FP vetoed=0 ④M1/hit@1 保持 1.0000（不许降，但非门槛）。红线⑥不变：`eval/polaris/*.go` 判分逻辑零改动，只换统计口径。
+
+**R25 收口实测**（`eval/reports/r25_final_holdout_20261019-032803.json`，832191 B，
+md5 `e98c7839dd0060ad7d83d7d131b272f9`，与 R24 报告同字节数）：
+`M1=1.0000（800/800）/ hit@1=1.0000 / M2=0.2498（control=43126, data=129537）/ 压缩 35.33% / vetoed=0`
+——五数与 R24/R15 逐位相同，证明 R25 五线（含 solo 档向量检索落地）没有改变北极星判定的任何一条输出；
+**M2 主判据 0.2498 ≤ 0.2498 达标（持平）**。延迟 P95 基线（R25-E 首建，此前无基线）：
+`GET /search` **P95=45.56ms**（n=300 全 200，800 条语料，solo/SQLite 独立临时库，hash embedder），
+为 §9 红线 200ms 的 23%；`POST /search/vector` P95=17.91ms（285×200 + 15×503 降级，见 D.12 附·观察 2）。
+
 ### D.4 一个口径误判的更正（如实登记：本附录初版写错，已更正）
 
 本附录初版把 R14 的 M2 记为 **0.1772**，并归因为"评测向量集快照变更（`eval/vectors/` 4595 条）"。
@@ -2089,3 +2103,73 @@ R14 任务书 §九.3 写"holdout_v2 全 L1 且无 entity / recorded_at"，其�
 
 
 > **推送状态**：已于 2026-10-19 推送。commit `7cb0f83`（34 files，+7235/−38）；origin/gitea 与 gitcode 的 main 均为 `7cb0f83`（`git ls-remote` 复核一致）；github 因历史为「内容等价但 SHA 不同」的重放版，采用**非破坏性 cherry-pick** 同步，其 main 为 `f5e172b`（tree `ba38966...` 与 `7cb0f83` 的 tree 逐字节相同，已核对）。
+
+### D.12 缺陷账 L-229~L-233 关闭记录（R25 新增，如实登记）
+
+> 来源：R25「收尾债清零 + solo 档向量补全 + 北极星换代」（`_R25_并行任务书.md`）。
+> 验证环境：192.168.0.88（FreeBSD 15.1，go1.25.14）。
+> 门禁：**PASS 13 / FAIL 0 / SKIP 1**（R15 门禁矩阵有记录以来首次 FAIL=0；`[1b]` 全仓 gofmt 硬门禁 PASS；
+> SKIP 仅 `[11]` PG env 未配，非失败）。相对 T0 实测提交态基线 `11 / 2 / 1`：**新增 FAIL = 0，存量 FAIL 清零**。
+> 北极星换代后五数：M1=1.0000 / hit@1=1.0000 / **M2=0.2498（主判据，≤0.2498 达标）** / 压缩 35.33% / vetoed=0；
+> P95 基线 `/search`=45.56ms（首建）。详见 §D.3.1。
+> ⚠️ **R25 全部改动未 commit / 未 push**（红线⑧，等业主示意）。
+
+#### L-229 · `gofmt -l kernel/` 历史债 11(+1) 文件（**已关闭**，A 线）
+
+| 字段 | 内容 |
+|---|---|
+| 现象 | `gofmt -l kernel/` 11 个文件未格式化（全是 struct tag 列宽对齐，零语义风险），`[1b]` 硬门禁恒 FAIL → R24 验收清单第 7 项永不达标。**勘误 E1**：提交态 `6cd26e0` 实测是 **12** 个——多 `router_seam_dump_test.go`（R24 的提交态缺陷：远端 gofmt -w 后未 get 回本地就提交；主 agent 已修，commit `09db054`，仅 3 行注释列宽） |
+| 处置 | A 线 `gofmt -w` 12 个文件（`admin.go`/`authn_ory.go`/`frontend/*` 9 个 + `router_seam_dump_test.go`）；`git diff` **+30/−30 完全对称**，逐行确认纯列宽重排，零逻辑改动 |
+| 验收 | `gofmt -l kernel/` 为空；`[1]`/`[1b]` 双转 PASS；门禁 **PASS 13 / FAIL 0 / SKIP 1**；全量测试连跑两次 rc=0（4 包 ok）、`-race` 27.2s 无竞态；`go.mod`/`go.sum` 零变化 |
+| 遗留 | 无 |
+
+#### L-230 · 快车道命中未喂 `FastHits`，`deterministic` 分类生产不可达（**已关闭**，C 线）
+
+| 字段 | 内容 |
+|---|---|
+| 现象 | `router_mem.go:236` 快车道命中调 `NoteRecall`（与 384 行慢车道同方法），调用方无法区分快/慢车道 → 线上 `FastHits` 恒 0，`ClassifyAccessMode` 的 deterministic 分支在生产永不可达（R24-C 的 `AccessTracker.MarkFast` 已实现且单测验证过，缺的只是接线） |
+| 处置 | C 线**只改 236 行一处**：`if at, ok := s.access.(*AccessTracker); ok { at.MarkFast(...) } else { s.NoteRecall(...) }`（access 非 tracker 时回退原语义）；384 行慢车道保持不动；未借机改 `router_mem.go` 其它逻辑 |
+| 验收 | `TestAccessMarkFastWiredOnFastPath`（快车道 1 次 → FastHits=1）；`TestAccessDeterministicReachableOnFastPath`（4 快 + 1 慢 → ModeOf=deterministic 且 SlowHits=1）；**PG 真机闭环**（独立库 `lightmem_r25_t0`）：`Flush` 后直查 PG `access_count=5`、`recent_access_score=10.0` 逐位；`-race` 20.6s 绿；默认关（未注入 tracker）走 else→no-op，逐位零回归 |
+| 遗留 | 无（三个运维开关语义已交 D 线落文档） |
+
+#### L-231 · 安装脚本 kill 后 `sleep 1` 即启动 → 升级双停（**已关闭**，T0 线）
+
+| 字段 | 内容 |
+|---|---|
+| 现象 | `install_lims_rc_d.sh:187` kill 旧实例后固定 `sleep 1` 就启动 → R24 实测撞 `bind: address already in use`，18443/18444 双停（只能手工 `service start` 恢复）。**勘误 E3**：`install_lims_mcp_rc_d.sh:154` 是同一缺陷的 18444 侧副本，只修主脚本判据 3 无法确定性通过 |
+| 处置 | T0 **两处同改**（各 +13/−1）：`sleep 1` 换成轮询 `sockstat` 等端口真正释放（30s 超时告警后仍尝试启动，不阻塞升级）；kill 匹配式、`DO_START` 语义、其它步骤零改动；两文件 `sh -n` 通过，本地/远端 md5 一致 |
+| 验收 | 连续两轮 install（main+mcp）每轮后 18443/18444 均 200；两轮日志 delta 内 `address already in use` 计数=0（历史唯一一条定位到 R24 事故现场 line 1035，不在本轮 delta）；机制有效性单独验证（探测循环真实等待 + 超时告警分支可触发 + 不影响在跑服务） |
+| 遗留 | 无 |
+
+#### L-232 · solo 档 `/search/vector` 恒降级为文本（**已关闭**，B 线）
+
+| 字段 | 内容 |
+|---|---|
+| 现象 | `backend_sqlite.go:280` VectorSearch 恒返回降级错误，`/search/vector` 在个人档不可用。§0.4 证伪：`modernc.org/sqlite` 是纯 Go 翻译版，与 sqlite-vec C 扩展**不能共存于同一进程**；换 `mattn/go-sqlite3`（cgo）会破坏 solo 零依赖承诺且踩红线⑦ |
+| 处置 | B 线纯 Go 方案：新增 `kernel/sqlite_vector.go`——`SQLiteVectorStore`（向量以 BLOB float32 little-endian 存 SQLite，检索时 Go 侧暴力余弦，复用 `embedder_vector.go` 的 `CosineSimilarity`）；新表 `memory_vectors(memory_id PK, embedding BLOB, dim)`（`ensureSchema` 幂等，**只写在新文件**，不碰 `migrations/*.sql`）；`VectorSearch` 改为「有向量则检索 + `lookupMemory` 可见性过滤」；`sqliteBackend` 实现 `VectorBackfiller.BackfillVectors`；`router.go` 仅改降级文案（区分「solo 无向量数据」与「后端不支持」，前者附 `suggestion`）。共享 `*sql.DB` 与同一把锁，`-race` 绿 |
+| 验收 | §5.2 八判据全过：①往返一致（N=120 含中文，top-10 与参考余弦排序逐位相同，BLOB 编解码逐位保真）②HTTP 集成 `POST /search/vector` 200 非空、Source 标 sqlite、top1 命中查询事实 ③降级路径在（空表/不可见均降级，不泄露不返回垃圾）④默认关零回归（空表文案与 `6cd26e0` 逐位一致）⑤`go.mod`/`go.sum` 零变化 ⑥Backfill Count==10 且幂等 ⑦北极星五数不降（见 D.3.1）⑧11 个 Test ≥10。偏移登记：`reindex_test.go` 的 `TestRebuildIndexUnsupportedBackend` 因前提失效（sqlite 现已实现 VectorBackfiller）必要改写，零逻辑改动 |
+| 遗留 | ① sqlite-vec 路线仍为「备选，需业主拍板」；② 多租户语料下全局 top-k 可能被多数派租户挤占（见附·观察 2），solo 单租户设计下不影响生产 |
+
+#### L-233 · README/文档未如实标注 solo 档能力边界（**已关闭**，D 线）
+
+| 字段 | 内容 |
+|---|---|
+| 现象 | README 与主文档未如实标注 solo 档「无向量检索」等能力边界，「文档声称」与「实测能力」有落差 |
+| 处置 | D 线新建 `docs/档位能力矩阵.md`（四档 Solo/Family/SMB/Enterprise，逐格附 `file:line` 或实测命令，无「据说」）；README 文档表加矩阵指针 + 「零外部依赖」承诺下方**追加**边界说明（不删原承诺，只补边界）；C 线交来的三个运维开关（`LIMS_ACCESS_TRACK`/`LIMS_ADMIN_REINDEX`/`LIMS_ADMIN_LIFECYCLE`）语义与默认值一并落表 |
+| 验收 | §7.2 四判据全过：矩阵覆盖 `profiles/*.yaml` 全部 4 档；每格有代码位置/命令支撑；README 只增不删；B 线交付后「solo 向量检索」格已回填为「B 线前降级为文本；B 线后纯 Go 余弦（BLOB）可用」，与 B 线结论交叉一致 |
+| 遗留 | 无 |
+
+#### 附 · R25 由实测抓出的勘误与观察（如实登记）
+
+1. **基线三次变化（任务书勘误 E1/E2/E3）**：任务书初版的 gofmt 清单/基线三数/缺陷副本数均与提交态实测不符——清单 11→12（`router_seam_dump_test.go`，R24 提交态缺陷）、基线 `12/1/1` 在 `6cd26e0` 不成立（实测 `11/2/1`，修复后 `12/1/1`）、L-231 有两个脚本副本。**通用教训（跨轮 durable）：基线必须在提交态（clean tree）上量；「数字相同」≠「依据相同」。**
+2. **多租户语料下 solo 向量路径的降级观察（R25-E bench 实测）**：`holdout_v2.jsonl` 为双租户（t-beam=600 / t-lc-v2=200），`POST /search/vector` 300 次中 15 次（5%）返回 503 `no visible results; downgrade to text`——根因是 `SQLiteVectorStore.Search` 全局 top-k 排序后才做可见性过滤，少数派租户查询的前 5 名可能全被多数派租户挤占。solo 档按设计**单租户/单用户**（档位能力矩阵已如实标注），生产不受影响；且该降级正是 L-232 判据③要求的「不返回垃圾结果」路径在真实语料上的表现。**登记候选（本轮不做）**：若未来 solo 支持多租户，余弦前应按租户预筛候选集。
+3. **北极星换代执行记录**：主判据 M1 → M2 的换代已按 §8.1 落地（口径见 D.3.1）；R25 实测 M2=0.2498 持平达标，M1/压缩/vetoed 三辅助全保持，P95 基线 45.56ms 首建（§9 红线 200ms 的 23%）。
+
+#### 附 · R25 未闭环事项
+
+| # | 事项 | 接手方 |
+|---|---|---|
+| 1 | R25 全部改动（T0/A/B/C/D/E 六线）**未 commit / 未 push**（红线⑧） | 业主示意后主 agent 收口提交 |
+| 2 | 门禁 `[11]` PG 真机往返 SKIP（门禁默认不配 PG env；C 线已单独在 `lightmem_r25_t0` 真机闭环 access_count） | 需 PG 真机门禁时 export 环境变量 |
+| 3 | sqlite-vec 备选路线（C 扩展，需换 cgo 驱动，破零依赖承诺） | 业主拍板，默认不做 |
+| 4 | 多租户向量预筛候选（附·观察 2） | 未来轮次，solo 引入多租户时再议 |

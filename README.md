@@ -23,6 +23,13 @@ sh integrations/quickstart/install.sh      # 一条命令：起服务 + 签 toke
 - **AI 看**：[`AGENTS.md`](AGENTS.md)（工具清单 + 接入事实 + 开发红线）
 
 > 个人档默认 **SQLite，零外部依赖**（不用装 PostgreSQL / Docker）。
+>
+> ⚠️ **能力边界（R25-D 如实化）**：
+> - ✅ 零外部依赖：Solo 档仅需 SQLite 文件，无需 PG/Docker/Qdrant。
+> - ✅ 向量检索：R25-B 后纯 Go 余弦可用（BLOB 存储），仍零依赖。
+> - ❌ 无 jail / MAC / IPsec / KMS：Solo 档安全组件为极简形态。
+> - ❌ 无多租户 / 跨 Agent 共享：Solo 档为单用户形态。
+> - 完整档位能力矩阵见 [`docs/档位能力矩阵.md`](docs/档位能力矩阵.md)。
 
 ---
 
@@ -101,6 +108,7 @@ curl "http://localhost:8080/search?q=客户A偏好&tenant_id=t1&viewer=u1"
 | **token 签发** | `integrations/agent-onboarding/issue_token.py` | 为每个 AI 签发独立 token（防冒充） |
 | **配置生成** | `integrations/agent-onboarding/gen_configs.py` | 生成 8 家可直接粘贴的 MCP 配置片段 |
 | 架构设计文档 | `lightmem.md` | 完整架构设计（v2.4.1，含 v2.4 Monty 建议与 v2.4.1 收口） |
+| **档位能力矩阵** | `docs/档位能力矩阵.md` | 四档能力边界如实标注（Solo/Family/SMB/Enterprise），每格附 file:line 或实测命令支撑 |
 | 收口报告 | `.dumate/inbox/_R138_B线收口报告.md` | R138-B 任务交付报告 v5 |
 | 极简开发计划 | `.dumate/inbox/_R138_B线极简开发计划_4小时版.md` | 4 小时权重校准计划 |
 | 宣传文档 | `docs/lightmem_promo_v2.3.md` | 产品宣传文档 |

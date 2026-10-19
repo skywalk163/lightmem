@@ -321,9 +321,17 @@ func (s *APIServer) handleVectorSearch(w http.ResponseWriter, r *http.Request) {
 		TopK:     req.TopK,
 	})
 	if err != nil {
-		// §4.2 降级契约：向量检索失败 → 503 + 提示降级
-		writeJSON(w, http.StatusServiceUnavailable,
-			map[string]string{"error": err.Error(), "downgrade": "use GET /search?q=..."})
+		// §4.2 降级契约：向量检索失败 → 503 + 提示降级。
+		// R25-B · L-232：区分「solo 档无向量数据」与「后端不支持」——
+		// 前者给出明确补救建议（先 /vector/backfill 补向量），后者仅提示降级。
+		resp := map[string]string{
+			"error":     err.Error(),
+			"downgrade": "use GET /search?q=...",
+		}
+		if strings.Contains(err.Error(), "no vectors stored") {
+			resp["suggestion"] = "run POST /vector/backfill to populate solo vectors, then retry /search/vector"
+		}
+		writeJSON(w, http.StatusServiceUnavailable, resp)
 		return
 	}
 	writeJSON(w, http.StatusOK, res)

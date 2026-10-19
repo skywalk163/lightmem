@@ -233,7 +233,14 @@ func (s *APIServer) RecallAndFuse(ctx context.Context, rc RouterContext) (Router
 	var lookupFallback string
 	if s.lookupEnabled {
 		if fastRes, hit, reason := s.tryLookupFastPath(ctx, rc); hit {
-			s.NoteRecall(fusedIDsOf(fastRes.Fused))
+			// R25-C · L-230：快车道命中必须记 FastHits，否则 AccessTracker 的 FastHits 恒 0，
+			// ClassifyAccessMode 的 deterministic 分支在生产永不可达。
+			// access 非 *AccessTracker（如未注入/其它实现）时回退 NoteRecall，保持既有零回归语义。
+			if at, ok := s.access.(*AccessTracker); ok {
+				at.MarkFast(fusedIDsOf(fastRes.Fused))
+			} else {
+				s.NoteRecall(fusedIDsOf(fastRes.Fused))
+			}
 			return fastRes, nil
 		} else {
 			lookupFallback = reason

@@ -33,11 +33,15 @@ type sqliteBackend struct {
 	path string
 	db   *sql.DB
 	mu   sync.Mutex // 串行化所有 DB 访问（Solo 量级的简单正确方案）
+
+	// vec 是 solo 档纯 Go 向量存储（R25-B · L-232）。与后端共享同一 *sql.DB 与
+	// mu，不另开连接、不引入第二真源；nil 仅在极端装配失败时出现（此处必非 nil）。
+	vec *SQLiteVectorStore
 }
 
 // newSQLiteBackend 装配 SQLite 后端。
 // path 为空（含 cfg==nil）→ :memory:（隔离、无文件残留）；否则落盘到该路径。
-func newSQLiteBackend(_ context.Context, cfg *StorageConfig) (StorageBackend, error) {
+func newSQLiteBackend(ctx context.Context, cfg *StorageConfig) (StorageBackend, error) {
 	path := ""
 	if cfg != nil && cfg.SQLite != nil {
 		path = cfg.SQLite.Path
@@ -87,11 +91,19 @@ func newSQLiteBackend(_ context.Context, cfg *StorageConfig) (StorageBackend, er
 		return nil, fmt.Errorf("sqlite create table: %w", err)
 	}
 
-	return &sqliteBackend{
+	b := &sqliteBackend{
 		name: "sqlite", // R19-B：不再含 "skeleton"
 		path: path,
 		db:   db,
-	}, nil
+	}
+	// R25-B · L-232：装配 solo 档纯 Go 向量存储（共享同一 *sql.DB 与 mu）。
+	b.vec = newSQLiteVectorStore(b.db, &b.mu)
+	if err := b.vec.ensureSchema(ctx); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("sqlite vector schema: %w", err)
+	}
+
+	return b, nil
 }
 
 func (b *sqliteBackend) Name() string { return b.name }
@@ -277,9 +289,109 @@ func (b *sqliteBackend) Query(ctx context.Context, q QueryParams) ([]QueryResult
 	return res, nil
 }
 
-// VectorSearch 暂不提供向量：返回明确错误由调度层降级（与原骨架一致，无 sqlite-vec）。
-func (b *sqliteBackend) VectorSearch(ctx context.Context, _ QueryParams) ([]QueryResult, error) {
-	return nil, fmt.Errorf("vector search not available on %s; downgrade to text (vector_status=pending)", b.name)
+// VectorSearch 向量检索（R25-B · L-232）：solo 档纯 Go 暴力余弦。
+//
+// 降级契约（§4.2 / 判据 4 零回归）：
+//   - 向量表为空（尚未 BackfillVectors）→ 返回与 6cd26e0 逐位一致的降级错误
+//     （"downgrade to text"），调度层据此回落文本检索；不返回垃圾结果。
+//   - 有向量但全部不可见 → 同样返回降级错误，避免泄露不可见记忆。
+//   - 仅当向量表非空且存在可见命中时，返回按余弦排序的 QueryResult（Source 取记忆
+//     自身 source 字段，标明其落库档位）。
+//
+// 线程安全：store 各方法各自持 mu，本方法在 store 调用间隙用不持锁的 lookupMemory
+// 取记忆 JSON，避免对 b.mu 的重复进入（sync.Mutex 非可重入）。
+func (b *sqliteBackend) VectorSearch(ctx context.Context, q QueryParams) ([]QueryResult, error) {
+	if len(q.Vector) == 0 {
+		return nil, fmt.Errorf("vector search requires embedding vector")
+	}
+	n, err := b.vec.Count(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite vector count: %w", err)
+	}
+	if n == 0 {
+		// 与 6cd26e0 行为逐位一致：solo 档尚无向量数据 → 降级文本检索。
+		return nil, fmt.Errorf("vector search not available on %s: no vectors stored; run POST /vector/backfill to populate, then downgrade to text (vector_status=pending)", b.name)
+	}
+	hits, err := b.vec.Search(ctx, q.Vector, q.TopK)
+	if err != nil {
+		return nil, err
+	}
+	var res []QueryResult
+	for _, h := range hits {
+		m, err := b.lookupMemory(ctx, h.MemoryID)
+		if err != nil {
+			continue // 记忆已被删：跳过
+		}
+		if !m.canView(q.Viewer, q.TenantID) {
+			continue // 不可见：跳过（与 Query 的硬过滤一致）
+		}
+		res = append(res, b.toResult(m, h.Score))
+	}
+	if len(res) == 0 {
+		// 所有命中都不可见，或命中记忆均已删除：返回降级提示，不返回空结果冒充成功。
+		return nil, fmt.Errorf("vector search returned no visible results on %s; downgrade to text", b.name)
+	}
+	return res, nil
+}
+
+// lookupMemory 不持锁读取单条记忆 JSON（调用方已不在 b.mu 临界区内）。
+// 与 Get 的区别：不做 visibility 校验、不重复进入 b.mu（VectorSearch 已释放 mu）。
+// DB 单连接（MaxOpenConns=1）在 SQLite 层天然串行化，故无锁读取安全。
+func (b *sqliteBackend) lookupMemory(ctx context.Context, memoryID string) (*Memory, error) {
+	var data string
+	err := b.db.QueryRowContext(ctx, `SELECT data FROM memories WHERE memory_id=?`, memoryID).Scan(&data)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("memory %s not found", memoryID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("sqlite get: %w", err)
+	}
+	var m Memory
+	if err := json.Unmarshal([]byte(data), &m); err != nil {
+		return nil, fmt.Errorf("sqlite unmarshal: %w", err)
+	}
+	return &m, nil
+}
+
+// BackfillVectors 实现 VectorBackfiller（R25-B · L-232）：补全 solo 档缺失的向量。
+//
+// 语义：扫描全部记忆，对尚无向量（memory_vectors 表无对应行）者用 embedder 生成向量
+// 并 Put。幂等：已有向量者跳过（existingIDs 一次性加载）；第二次运行 Vectorized 不再增长。
+// 与 PG/Qdrant 的同名方法签名一致（VectorBackfiller 冻结接口，§9）。
+func (b *sqliteBackend) BackfillVectors(ctx context.Context, embed func(string) ([]float32, error)) (BackfillReport, error) {
+	var rep BackfillReport
+	mems, err := b.loadAll(ctx) // loadAll 内部持锁读全量后释放，避免与下方 vec 调用死锁
+	if err != nil {
+		return rep, err
+	}
+	have, err := b.vec.existingIDs(ctx)
+	if err != nil {
+		return rep, err
+	}
+	for _, m := range mems {
+		if m == nil {
+			continue
+		}
+		rep.Scanned++
+		if have[m.MemoryID] {
+			continue
+		}
+		if embed == nil {
+			rep.Failed++
+			continue
+		}
+		vec, err := embed(m.Fact)
+		if err != nil {
+			rep.Failed++
+			continue
+		}
+		if err := b.vec.Put(ctx, m.MemoryID, vec); err != nil {
+			rep.Failed++
+			continue
+		}
+		rep.Vectorized++
+	}
+	return rep, nil
 }
 
 func (b *sqliteBackend) CountByKind(ctx context.Context, kind MemoryKind, tenant string) (int64, error) {

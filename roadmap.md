@@ -223,3 +223,34 @@
 
 
 > **推送状态**：已于 2026-10-19 推送。commit `7cb0f83`（34 files，+7235/−38）；origin/gitea 与 gitcode 的 main 均为 `7cb0f83`（`git ls-remote` 复核一致）；github 因历史为「内容等价但 SHA 不同」的重放版，采用**非破坏性 cherry-pick** 同步，其 main 为 `f5e172b`（tree `ba38966...` 与 `7cb0f83` 的 tree 逐字节相同，已核对）。
+
+## 三·七、R25 收口留痕（2026-10-19）
+
+> 轮次：R25「收尾债清零 + solo 档向量补全 + 北极星换代」，六条线 T0/A/B/C/D/E。
+> 基线 `6cd26e0`（R24 收口）；提交态实测基线 **PASS 11 / FAIL 2 / SKIP 1**（T0 勘误 E2，注意不是任务书初版的 12/1/1）；
+> 收口门禁 **PASS 13 / FAIL 0 / SKIP 1**（**R15 门禁矩阵有记录以来首次 FAIL=0**；新增 FAIL=0、存量 FAIL 清零）。
+> **北极星换代**：M1 连续四轮饱和 → 主判据改 **M2 控制面占比 ≤ 0.2498**；R25 实测 **M2=0.2498（持平达标）**，
+> M1=1.0000 / hit@1=1.0000 / 压缩 35.33% / vetoed=0 全保持；P95 基线首建 **/search=45.56ms**（§9 红线 200ms 的 23%）。
+> 详见 `lightmem.md` §D.3.1（换代口径 + R25 五数）与 §D.12（L-229~L-233 关闭记录）。
+
+| 线 | 交付 | 关键判据 |
+|---|---|---|
+| **T0** | 0.88 对齐重装到 `6cd26e0…`；L-231 双脚本等端口释放（主+mcp 两处，勘误 E3）；基线勘误 E1/E2 | 连续两轮升级 18443/18444 均 200 且日志零 `bind: address already in use`；提交态基线 11/2/1 如实记录（判据 4 不达标部分转 A 线，非 T0 回归） |
+| **A** | gofmt 历史债 12 文件清零（含 T0 勘误出的 `router_seam_dump_test.go`） | `git diff` +30/−30 完全对称、纯 tag 列宽重排零逻辑；`[1]`/`[1b]` 双转 PASS；commit `1a4a04e` |
+| **B** | `kernel/sqlite_vector.go`（新）：`SQLiteVectorStore` BLOB + Go 侧暴力余弦；`VectorSearch` 可用化；`BackfillVectors` | §5.2 八判据全过（往返一致 N=120、HTTP 集成 200、降级路径在、默认关零回归、`go.mod`/`go.sum` 零变化、Backfill 幂等、11 Test、`-race` 绿） |
+| **C** | `router_mem.go:236` 快车道接线 `MarkFast`（L-230，只改一处）+ PG 真机闭环 | FastHits=1 / 4快+1慢→deterministic；PG 独立库 `access_count=5`、衰减分 10.0 逐位；`-race` 绿 |
+| **D** | `docs/档位能力矩阵.md`（新，四档逐格附 file:line/命令）+ README 边界说明（只增不删） | 与 `profiles/*.yaml` 逐一核对；B 线结论回填 solo 向量格；三运维开关落表 |
+| **E** | 北极星换代复跑 + P95 基线 + gate 登记 + D.12/roadmap 留痕 + 收口报告 | 五数见上；`NEW_FILES += sqlite_vector:11`、`NEW_GO += R25 改动 17 个 .go`；`eval/scripts/bench_p95.py`（只读，标准库零依赖） |
+
+### R25 收口实测锚点
+
+- 北极星：`eval/reports/r25_final_holdout_20261019-032803.json`（832191 B，md5 `e98c7839dd0060ad7d83d7d131b272f9`，与 R24 报告同字节数、五数逐位相同）。
+- P95 基线：`eval/reports/r25_p95_baseline.md`（/search P95=45.56ms，n=300 全 200）与 `r25_p95_baseline_vector.md`（/search/vector P95=17.91ms，285×200+15×503 多租户降级观察）。
+- 命令：北极星复跑见 `lightmem.md` §D.3.1；P95 复现见 `eval/scripts/bench_p95.py` 文件头（solo/SQLite 独立临时库，勿碰生产 `lims_dsh`）。
+
+### 对后续轮次的输入
+
+1. **R25 全部改动未 commit / 未 push**（红线⑧）→ 业主示意后统一提交推送三远端。
+2. **多租户向量预筛候选**：solo 向量检索全局 top-k 后才过滤可见性，双租户语料下 5% 查询降级（D.12 附·观察 2）；solo 单租户设计下不影响生产，引入多租户时再议。
+3. sqlite-vec 备选路线（需 cgo，破零依赖承诺）仍待业主拍板。
+4. 门禁 `[11]` PG 真机往返默认 SKIP（env 未配）；C 线已单独真机闭环，需全量 PG 门禁时 export 环境变量。
