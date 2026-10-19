@@ -184,7 +184,19 @@ for _pid in $(pgrep -f "lightmem-kernel .*-listen :$PORT" 2>/dev/null || true); 
     say "停掉占用 :$PORT 的旧实例 pid=$_pid"
     kill "$_pid" 2>/dev/null || true
 done
-sleep 1
+# R25-T0 · L-231：kill 是异步的，SIGTERM 后进程还要 graceful drain，端口不是
+# 立刻消失。原实现这里固定 `sleep 1` 就往下启动，R24 实测因此撞过
+# "bind: address already in use"，导致 18443/18444 双停（只能手工 service start 恢复）。
+# 改为轮询等端口真正释放：最多 30s，超时告警后仍尝试启动（不阻塞升级）。
+_i=0
+while sockstat -l -P tcp -p "$PORT" 2>/dev/null | grep -q ":$PORT"; do
+    _i=$((_i + 1))
+    if [ "$_i" -gt 30 ]; then
+        say "警告：等待 :$PORT 释放超时（30s），仍尝试启动"
+        break
+    fi
+    sleep 1
+done
 
 if [ "$DO_START" -eq 0 ]; then
     say "已安装（--no-start，未启动）。手动启动：service lightmem start"
