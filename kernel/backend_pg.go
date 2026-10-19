@@ -238,8 +238,10 @@ func (b *pgBackend) Get(ctx context.Context, memoryID, viewer, tenant string) (*
 	_ = json.Unmarshal(fbJSON, &m.FeedbackRecords)
 	_ = json.Unmarshal(vhJSON, &m.VersionHistory)
 
+	// R27-A（业主裁定规则 1）：与 backend_sqlite.go 同口径——不可见一律表现为 not found，
+	// 不泄漏资源归属/存在性（详见 backend_sqlite.go 同段注释）。
 	if !m.canView(viewer, tenant) {
-		return nil, fmt.Errorf("memory %s not visible to %s/%s", memoryID, viewer, tenant)
+		return nil, fmt.Errorf("memory %s not found", memoryID)
 	}
 	return &m, nil
 }
@@ -273,7 +275,7 @@ func (b *pgBackend) Get(ctx context.Context, memoryID, viewer, tenant string) (*
 // 函数签名、调用点参数序一律未动。
 func pgVisibilityPredicate(viewerParam, tenantParam string) string {
 	return fmt.Sprintf(`(
-       (visibility = 'private'      AND user_id = %[1]s AND %[1]s <> '')
+       (visibility = 'private'      AND user_id = %[1]s AND %[1]s <> '' AND tenant_id = %[2]s)
     OR (visibility = 'shared_user' AND %[1]s <> '' AND (user_id = %[1]s OR permission->'readers' ? %[1]s))
     OR (visibility = 'tenant'      AND tenant_id = %[2]s AND %[2]s <> '')
     OR (visibility = 'cross_tenant' AND %[2]s <> '' AND %[2]s = ANY(shared_with_tenants))

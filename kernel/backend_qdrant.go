@@ -307,8 +307,10 @@ func (b *qdrantBackend) Get(ctx context.Context, memoryID, viewer, tenant string
 	if err != nil {
 		return nil, err
 	}
+	// R27-A（业主裁定规则 1）：与 backend_sqlite.go 同口径——不可见一律表现为 not found，
+	// 不泄漏资源归属/存在性（详见 backend_sqlite.go 同段注释）。
 	if !m.canView(viewer, tenant) {
-		return nil, fmt.Errorf("memory %s not visible to %s/%s", memoryID, viewer, tenant)
+		return nil, fmt.Errorf("memory %s not found", memoryID)
 	}
 	return m, nil
 }

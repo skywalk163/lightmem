@@ -100,8 +100,47 @@ func TestMain(m *testing.M) {
 			fmt.Fprintf(os.Stderr, "pg e2e schema bootstrap failed: %v\n", err)
 			os.Exit(1)
 		}
+		// R27-C（L-238a，业主裁定三）：**残留自清**。
+		//
+		// 定位：唯一 tenant/user 是主隔离手段，本清理是叠加的兜底——套件自己打过
+		// `source='r10b-e2e'` 标记，开跑前先删掉本套件的历史残留，使「fresh 库」与
+		// 「跑过若干轮的脏库」上结果一致（裁定点名禁止的是**仅靠清理**这一种隔离）。
+		if err := purgeOwnResidue(cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "pg e2e residue purge failed: %v\n", err)
+			os.Exit(1)
+		}
 	}
 	os.Exit(m.Run())
+}
+
+// e2eSourceMarker 本套件写入记忆时打的来源标记（makeTestMemory 统一写入）。
+const e2eSourceMarker = "r10b-e2e"
+
+// purgeOwnResidue 只删**本套件自己**的残留（按 source 标记），绝不动其它来源的数据，
+// 也不动生产库（cfg.dbname 由 LIGHTMEM_PG_TEST_DB 指定为独立测试库）。
+func purgeOwnResidue(cfg *pgTestConfig) error {
+	dsn := fmt.Sprintf("host=%s port=%d user=%s dbname=%s sslmode=disable",
+		cfg.host, cfg.port, cfg.user, cfg.dbname)
+	if cfg.password != "" {
+		dsn += " password=" + cfg.password
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer db.Close()
+	if err := db.Ping(); err != nil {
+		return fmt.Errorf("ping %s/%s: %w", cfg.host, cfg.dbname, err)
+	}
+	res, err := db.Exec(`DELETE FROM memories WHERE source = $1`, e2eSourceMarker)
+	if err != nil {
+		return fmt.Errorf("delete residue: %w", err)
+	}
+	if n, err := res.RowsAffected(); err == nil && n > 0 {
+		fmt.Fprintf(os.Stderr, "pg e2e: purged %d residue rows (source=%s) from %s\n",
+			n, e2eSourceMarker, cfg.dbname)
+	}
+	return nil
 }
 
 // ensurePgSchema 在测试库内应用 pgvector 迁移，保证 memories 表（含 vector 扩展/索引）存在。
@@ -198,6 +237,20 @@ func uniqueID(tag, suffix string) string {
 	return fmt.Sprintf("%s_%d_%d_%s", tag, os.Getpid(), time.Now().UnixNano(), suffix)
 }
 
+// uniqueUser 生成进程级唯一 user（R27-C / L-238a，业主裁定三）。
+//
+// 根因（R26-A 实测归因链第 1 步）：本套件历史上 `user` 是**固定字面量**
+// （u_search / u_roundtrip / …），只有 tenant 是唯一的。于是多轮执行后库里会累积
+// 「同名 user + 不同 tenant」的残留行；在 private 可见性尚未按租户收敛前，这些残留行
+// 对当轮查询可见 → 同 fact 的多条记忆 Score 并列 → `ORDER BY ... LIMIT` 顺序不保证
+// → `TestPgQueryVectorSearch` 的 top-1 断言间歇失败（脏库上 rc 在 0/1 之间摆动）。
+//
+// 与 A 线（产品侧 private 按租户收敛）互为纵深：即使产品语义回退，夹具也不再制造
+// 跨轮同名主体。
+func uniqueUser(tag string) string {
+	return fmt.Sprintf("u_%s_%d_%d", tag, os.Getpid(), time.Now().UnixNano())
+}
+
 // makeTestMemory 构造一条确定性的测试记忆。
 // tenant/user/id 由调用方传入，保证用例间隔离。
 func makeTestMemory(id, tenant, user, fact string) *kernel.Memory {
@@ -229,7 +282,7 @@ func TestPgUpsertGetRoundtrip(t *testing.T) {
 	ctx := context.Background()
 
 	tenant := uniqueTenant("roundtrip")
-	user := "u_roundtrip"
+	user := uniqueUser("roundtrip")
 	memID := uniqueID("mem_roundtrip", "001")
 	m := makeTestMemory(memID, tenant, user, "the sky is blue on a clear day")
 
@@ -312,7 +365,7 @@ func TestPgQueryVectorSearch(t *testing.T) {
 	ctx := context.Background()
 
 	tenant := uniqueTenant("search")
-	user := "u_search"
+	user := uniqueUser("search")
 
 	// 写入 20 条记忆，其中一条是"target"
 	targetID := ""
@@ -408,7 +461,7 @@ func TestPgPersistenceAcrossRestart(t *testing.T) {
 	ctx := context.Background()
 
 	tenant := uniqueTenant("persist")
-	user := "u_persist"
+	user := uniqueUser("persist")
 	memID := uniqueID("mem_persist", "001")
 	m := makeTestMemory(memID, tenant, user, "this fact must survive a backend restart")
 
@@ -516,7 +569,7 @@ func TestPgGDPR(t *testing.T) {
 	ctx := context.Background()
 
 	tenant := uniqueTenant("gdpr")
-	user := "u_gdpr"
+	user := uniqueUser("gdpr")
 
 	// 写入 3 条
 	gdprIDs := make([]string, 3)
@@ -564,7 +617,7 @@ func TestPgIdempotencyKey(t *testing.T) {
 	ctx := context.Background()
 
 	tenant := uniqueTenant("idem")
-	user := "u_idem"
+	user := uniqueUser("idem")
 
 	// 第一次 Upsert
 	memID := uniqueID("mem_idem", "001")
@@ -610,7 +663,7 @@ func TestPgBackfillVectors(t *testing.T) {
 	ctx := context.Background()
 
 	tenant := uniqueTenant("backfill")
-	user := "u_backfill"
+	user := uniqueUser("backfill")
 
 	// 写入一条 pending 状态的记忆
 	memID := uniqueID("mem_backfill", "001")
@@ -670,7 +723,7 @@ func TestPgConcurrent(t *testing.T) {
 	ctx := context.Background()
 
 	tenant := uniqueTenant("conc")
-	user := "u_conc"
+	user := uniqueUser("conc")
 
 	var wg sync.WaitGroup
 	errCh := make(chan error, 20)

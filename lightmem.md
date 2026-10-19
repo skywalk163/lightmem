@@ -1823,6 +1823,15 @@ md5 `e98c7839dd0060ad7d83d7d131b272f9`，与 R24 报告同字节数）：
 `GET /search` **P95=45.56ms**（n=300 全 200，800 条语料，solo/SQLite 独立临时库，hash embedder），
 为 §9 红线 200ms 的 23%；`POST /search/vector` P95=17.91ms（285×200 + 15×503 降级，见 D.12 附·观察 2）。
 
+**R27 收口实测**（`eval/reports/r27_final_holdout_20261019-161420.json`，
+md5 `e98c7839dd0060ad7d83d7d131b272f9`——与 R26 报告**逐字节相同**）：
+`M1=1.0000（800/800）/ hit@1=1.0000 / M2=0.2498 / 压缩 35.33% / vetoed=0`
+——R27 收紧了 `private` 的租户作用域（见 §D.14，业主裁定），但 holdout 为离线语料、
+判分逻辑零改动，故五数仍逐位相同、报告逐字节一致。延迟 P95（R27-E 复跑）：
+`GET /search` **P95=35.75ms**（300×200，与 R26 的 35.63ms 噪声级持平）；
+`POST /search/vector` **P95=22.92ms**（300×200，503 保持清零；较 R26 的 25.91ms 改善 11.5%，
+**仍超 §0.4 的 19.70ms 红线**——该红线校准自 R25 含 15 次快速 503 降级的混合分布，详见 §D.14 L-239）。
+
 **R26 收口实测**（`eval/reports/r26_final_holdout_20261019-145806.json`，832191 B，
 md5 `e98c7839dd0060ad7d83d7d131b272f9`——与 R25 报告**逐字节相同**）：
 `M1=1.0000（800/800）/ hit@1=1.0000 / M2=0.2498（control=43126, data=129537）/ 压缩 35.33% / vetoed=0`
@@ -2270,3 +2279,56 @@ R14 任务书 §九.3 写"holdout_v2 全 L1 且无 entity / recorded_at"，其�
 | 4 | `.env` 的 `GITCODE_TOKEN` 仍失效（401） | 业主更新 token |
 
 > ~~PG 主机 `10.0.10.10` 不可达~~ **已关闭**：业主修复 0.88（重启后 lightmem 服务恢复，healthz 18443/18444 均 200）后 PG 同步恢复，14/0/0 已复跑达成（`_r26_088_gate.log`）。
+
+### D.14 业主裁定落地：private 租户内强隔离 + 夹具隔离 + L-239 收尾（R27 新增）
+
+> 来源：业主 2026-10-19 深夜对 **L-238** 的正式裁定（`_R27_并行任务书.md` §0）+ R27 五线执行。
+> 验证环境：192.168.0.88（FreeBSD 15.1，go1.25.14）。基线 `0e7f097`（R26 收口）。
+> **门禁**：**PASS 14 / FAIL 0 / SKIP 0**（`_r27_088_gate.log`）；kernel 全量 `go test -count=1 .` ok（36s）。
+> **北极星**：M1=1.0000 / M2=0.2498 / 压缩 35.33% / vetoed=0——`r27_final_holdout_20261019-161420.json`
+> 与 R26 报告**逐字节相同**（md5 `e98c7839dd0060ad7d83d7d131b272f9`）。
+> **P95**：`/search`=35.75ms（红线内）；`/search/vector`=**22.92ms**（R26 的 25.91ms → −11.5%，503 保持清零），
+> 仍超 19.70ms 红线 → L-239 **部分修复**。
+
+#### L-238b · `private` 可见性不校验 tenant（**已关闭**，A 线；业主裁定 P0）
+
+| 字段 | 内容 |
+|---|---|
+| 现象 | `canView` 的 `VisPrivate` 与 `pgVisibilityPredicate` 的 private 分支**均无 tenant 约束** → 两个租户存在同名 `user_id` 时，A 租户可读到 B 租户该 user 的 private 记忆 |
+| 裁定 | 「private 严格租户内不可见，无例外」：①跨租户与不存在不可区分（同类错误/状态码/消息体，不得 403 vs 404 泄漏归属）②admin 不构成跨租户读 private 的依据，确需全局可见应另立 `platform_shared`/`audit_visible` 级别 |
+| 处置 | 两侧同改（防 R21-B 的 G8 分叉假绿）：`canView` 加 `&& m.TenantID == tenant`（**等值**，solo 两侧同空仍可见，避免生产回归）；PG 谓词加 `AND tenant_id = $2`；**另**：三处 `Get`（sqlite/pg/qdrant）「不可见」返回由 `not visible to %s/%s` 统一改为 `not found`（消除存在性泄漏，规则 1） |
+| 验收 | 先证伪：新用例修复前三红（跨租户 canView=true / Get 读到 / Query 泄漏）→ 修复后全绿；PG 真机负样本不可见+正样本可见；既有 `TestPGVisibility*` 零回归；kernel 全量 36s 绿；`-race` 绿 |
+| 遗留 | 是否引入 `platform_shared`/`audit_visible` 新级别待业主定（本轮无需求） |
+
+#### L-238a · `eval/e2e/pg` 夹具隔离不完整（**已关闭**，C 线）
+
+| 字段 | 内容 |
+|---|---|
+| 现象 | 夹具 `tenant` 唯一但 `user` 为固定字面量 + 共享库残留 → 脏库上 `TestPgQueryVectorSearch` 同分并列 top-1 不确定，`[4]` 间歇 FAIL（R26-A 实测 rc 0/1/0 摆动） |
+| 处置 | 新增 `uniqueUser()`（7 处固定 user 全部唯一化，`grep` 零残留）+ `TestMain` 新增 `purgeOwnResidue()`（按套件自有标记 `source='r10b-e2e'` 清本套件残留，不动其它来源与生产库）+ 新用例声明式正负样本（夹具建不出来即 `t.Fatalf`，绝不 Skip） |
+| 验收 | **脏库连跑 3 次 rc=0/0/0**（基线 0/1/0）；门禁 `[4]` 2/2 通过 |
+| 遗留 | 裁定三主方案「每测试事务+回滚」未落地（套件经 `StorageBackend` API 驱动，需后端事务注入重构）→ 登记专题轮；等效性由四重叠加达成并实测 |
+
+#### L-238c · 缺跨租户防回归用例（**已关闭**，D 线）
+
+新增 `kernel/visibility_tenant_test.go`（4 个 Test）：`TestCanViewPrivateTenantScoped`（单元，含 solo 空租户防回归断言）、
+`TestPrivateCrossTenantGetIndistinguishableFromNotFound`（规则 1：跨租户错误模板 == not found）、
+`TestPrivateCrossTenantQueryLeaksNothing`、`TestPGPrivateCrossTenantInvisible`（PG 真机，声明式正负样本）。
+
+#### L-239 · `visibleMemoryIDs` 全量加载（**部分修复**，E 线）
+
+`backend_sqlite.go` 的 `visibleMemoryIDs` 由 `loadAll`（全量正文反序列化）改为定向 `SELECT memory_id, data` +
+只反序列化可见性字段（`r27VisibilityFields`），判定仍**复用 `canView`**（禁止 SQL 侧 `json_extract` 另造可见性判断）。
+实测 `/search/vector` P95 **25.91 → 22.92ms**（mean 24.58→20.94，−11.5%），300×200 与 503 清零保持。
+**仍未达 19.70ms 红线**——该红线校准自 R25 的 17.91ms（混有 15 次近零延迟的 503 降级，与全量真实检索不可比）；
+残余开销在「800 行 data blob 扫描 + JSON 解析」，进一步下降需可见性缓存或冗余列（有分叉风险）→ 专题评估。
+
+#### 附 · R27 未闭环事项
+
+| # | 事项 | 接手方 |
+|---|---|---|
+| 1 | `/search/vector` P95=22.92ms 仍超 19.70ms 红线 | 专题轮（缓存/冗余列评估） |
+| 2 | 裁定二：断言连接仍为 superuser（未建非 superuser 角色） | 业主拍板（涉 PG 角色体系，红线③） |
+| 3 | 裁定三：每测试事务回滚未落地 | 专题轮 |
+| 4 | R27 改动**未 push**（已本地 commit，红线⑧） | 业主示意后 `scripts/push_all_remotes.sh` |
+| 5 | `.env` 的 `GITCODE_TOKEN` 仍失效（401） | 业主更新 token |

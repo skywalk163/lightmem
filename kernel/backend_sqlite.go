@@ -211,8 +211,11 @@ func (b *sqliteBackend) Get(ctx context.Context, memoryID, viewer, tenant string
 	if err := json.Unmarshal([]byte(data), &m); err != nil {
 		return nil, fmt.Errorf("sqlite unmarshal: %w", err)
 	}
+	// R27-A（业主裁定规则 1）：不可见与不存在必须**完全不可区分**——同错误类型、
+	// 同消息体。旧的 "not visible to %s/%s" 会让调用方区分出「资源存在但你无权看」，
+	// 从而泄漏资源归属/存在性；跨租户读取一律对外表现为 not found。
 	if !m.canView(viewer, tenant) {
-		return nil, fmt.Errorf("memory %s not visible to %s/%s", memoryID, viewer, tenant)
+		return nil, fmt.Errorf("memory %s not found", memoryID)
 	}
 	return &m, nil
 }
@@ -353,16 +356,53 @@ func (b *sqliteBackend) VectorSearch(ctx context.Context, q QueryParams) ([]Quer
 // visibleMemoryIDs 返回对 (viewer, tenant) 可见的 memory_id 集合（B 线 B1，L-235）。
 // 复用既有 Memory.canView 可见性逻辑，不另造权限判断。供 VectorSearch 做余弦前预筛。
 // 返回 nil 表示「无租户过滤上下文」（由调用方据此 short-circuit 到全局 Search）。
+// r27VisibilityFields 只含可见性判定所需字段（R27-E · L-239）。
+//
+// 目的：避免每查询把整条记忆正文（fact / version_history / feedback_records …）
+// 全部反序列化——R26-E 同机对拍实测那部分开销约 15ms/查询，占 `/search/vector`
+// P95 的六成。判定逻辑仍**复用 Memory.canView**，只是喂给它一个最小载体。
+type r27VisibilityFields struct {
+	MemoryID          string     `json:"memory_id"`
+	TenantID          string     `json:"tenant_id"`
+	UserID            string     `json:"user_id"`
+	Visibility        Visibility `json:"visibility"`
+	SharedWithTenants []string   `json:"shared_with_tenants,omitempty"`
+	Permission        Permission `json:"permission"`
+}
+
 func (b *sqliteBackend) visibleMemoryIDs(ctx context.Context, viewer, tenant string) (map[string]bool, error) {
-	mems, err := b.loadAll(ctx)
+	// R27-E（L-239）：定向取 memory_id + data，只反序列化可见性字段。
+	// ⚠️ 可见性判定**必须**仍走 canView（与 Query/Get 同一真源）——禁止在 SQL 侧
+	// 用 json_extract 另造可见性判断，那是 R21-B 的 G8 分叉教训（两侧分叉 = 假绿）。
+	rows, err := b.db.QueryContext(ctx, `SELECT memory_id, data FROM memories`)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite visible ids: %w", err)
 	}
-	set := make(map[string]bool, len(mems))
-	for _, m := range mems {
-		if m.canView(viewer, tenant) {
-			set[m.MemoryID] = true
+	defer rows.Close()
+	set := make(map[string]bool)
+	for rows.Next() {
+		var id, data string
+		if err := rows.Scan(&id, &data); err != nil {
+			return nil, fmt.Errorf("sqlite visible ids scan: %w", err)
 		}
+		var v r27VisibilityFields
+		if err := json.Unmarshal([]byte(data), &v); err != nil {
+			continue // 脏行跳过（与 loadAll 的容错口径一致，不因单条坏数据中断检索）
+		}
+		m := Memory{
+			MemoryID:          id,
+			TenantID:          v.TenantID,
+			UserID:            v.UserID,
+			Visibility:        v.Visibility,
+			SharedWithTenants: v.SharedWithTenants,
+			Permission:        v.Permission,
+		}
+		if m.canView(viewer, tenant) {
+			set[id] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sqlite visible ids rows: %w", err)
 	}
 	return set, nil
 }
@@ -689,7 +729,13 @@ func (b *sqliteBackend) FindByIdempotencyKey(ctx context.Context, tenant, user, 
 func (m *Memory) canView(viewer, tenant string) bool {
 	switch m.Visibility {
 	case VisPrivate:
-		return viewer != "" && m.UserID == viewer
+		// R27-A（L-238b，业主裁定）：private 仅在**归属租户内**对 owner 可见——
+		// 两个租户存在同名 user_id 时，A 租户不得读到 B 租户该 user 的 private 记忆。
+		//
+		// 用**等值**比较（含两侧同为 "" 的默认租户），刻意不要求 tenant 非空：
+		// solo 档与「未传租户上下文」下两侧同为空即同一默认租户，若要求非空会把
+		// solo 的 private 记忆整体打成不可见（生产级回归）。跨租户（值不同）一律不可见。
+		return viewer != "" && m.UserID == viewer && m.TenantID == tenant
 	case VisSharedUser:
 		return viewer != "" && (m.UserID == viewer || contains(m.Permission.Readers, viewer))
 	case VisTenant:

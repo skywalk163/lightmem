@@ -166,7 +166,8 @@ kernel/admin.go kernel/authn_ory.go \
 kernel/frontend/backend.go kernel/frontend/passhash.go kernel/frontend/passhash_test.go \
 kernel/frontend/pbkdf2.go kernel/frontend/server_test.go \
 kernel/frontend/store.go kernel/frontend/store_test.go \
-kernel/frontend/templates.go kernel/frontend/util.go"
+kernel/frontend/templates.go kernel/frontend/util.go \
+kernel/visibility_tenant_test.go"
 GOFMT_BAD=""
 for f in $NEW_GO; do
     [ -f "$ROOT/$f" ] || continue
@@ -329,7 +330,7 @@ fi
 COV_FAIL=0
 COV_NOTE=""
 COV_TESTONLY=""
-NEW_FILES="forgetting_drift flush edge_persist edge_persist_pg poison_detect drift_pipeline flush_pipeline backend_qdrant:4 node_role:4 topology:3 connector_app:4 auth:12 mcp:12 workflow:12 lookup:12 reindex:12 access:12 refstore:12 sqlite_vector:15"
+NEW_FILES="forgetting_drift flush edge_persist edge_persist_pg poison_detect drift_pipeline flush_pipeline backend_qdrant:4 node_role:4 topology:3 connector_app:4 auth:12 mcp:12 workflow:12 lookup:12 reindex:12 access:12 refstore:12 sqlite_vector:15 visibility_tenant:4"
 for entry in $NEW_FILES; do
     case "$entry" in
         *:*) f="${entry%%:*}"; THRESH="${entry##*:}" ;;
