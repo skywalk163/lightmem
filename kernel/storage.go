@@ -48,4 +48,9 @@ type QueryParams struct {
 	Vector      []float32
 	TopK        int
 	AsOf        *string // YYYY-MM-DD 显式回溯
+	// IncludeSuperseded 是否返回已被取代的历史版本（R24-B · L-226）。
+	// 默认 false = 只返回当前生效版本，与 recall 路径（router_mem.go）既有语义对齐；
+	// 置 true 时才带出 superseded_by IS NOT NULL 的行。
+	// AsOf != nil（显式历史回溯）时，调用方需同时置 true 才能取到历史版本。
+	IncludeSuperseded bool
 }

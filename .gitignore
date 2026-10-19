@@ -26,5 +26,12 @@ kernel/lightmem-mcp
 kernel/lightmem-frontend
 # gate.sh 每次运行产生的门禁报告
 eval/reports/
+# 北极星向量产物（BGE-m3 静态嵌入，18.8MB；**只在 0.88，未入 git**）
+# 复现命令见 lightmem.md 附录 D.3；生成工具链在 eval/vectors/*.py
+eval/vectors/*.npy
+eval/vectors/*.npy.bak*
+eval/vectors/vectors_index.jsonl
+eval/vectors/vectors_meta.json
+eval/vectors/corpus*.txt
 # 会话临时 scratch
 .tmp/

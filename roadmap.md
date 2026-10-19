@@ -186,3 +186,39 @@
 ---
 
 > 本路线图为 **v5 真实进度修订版**，**HTML 已同步**为 `lightmem/roadmap-v5.html`（新增 P8 泳道、更新四泳道真实进度、画布高度扩展至 1208px）。roadmap-v1~v4.html 是历史静态快照，保留备查，不作为权威。所有改动须遵守红线 1–3；本机仅编辑，实跑在 0.88。
+
+---
+
+## 三·六、R24 收口留痕（2026-10-19）
+
+> 轮次：R24「索引-内容解耦 + 静态记忆快车道（3FS / Engram 架构映射）」，五条线 T0/A/B/C/D/E。
+> 基线 `c908091`（R23.3）；北极星 **M1=1.0000**（七个数字与 R15 收口值逐位相同）；门禁 **PASS 12 / FAIL 1 / SKIP 1**（FAIL 项 `[1b]` 11 个文件**全为历史遗留**，与干净基线逐行相同 ⇒ 新增 FAIL = 0）。
+
+| 线 | 交付 | 关键判据 |
+|---|---|---|
+| **T0** | 0.88 对齐并重装到 `c9080917a6de...`；L-225 热修；接缝预埋零回归对拍 | PG 真机 public 跨租户可读 + 四值零回归；三端点 12 条记录 sha256 全等 |
+| **A** | `kernel/lookup.go`：L2 确定性查找表 + 快车道（Engram 映射） | 34 条查询跨树对拍 sha256 全等；快慢一致率 30/30；bench ≈ **1/33.8** |
+| **B** | `kernel/reindex.go`：`Reconcile`/`RebuildIndex` + 可选接口 `VectorBackfiller`/`VectorIndexAuditor`；L-226/L-227 | Qdrant 重建后 `zero=0 pending=0`；`Reconcile` 幂等且只读；三后端 superseded 一致 |
+| **C** | `kernel/access.go`：`AccessTracker` + 访问模式分类 + 死引擎接线（L-223/L-224） | `access_count` 真实递增；衰减误差 <1e-9；`-race` 绿；budget 引擎 moved 4 |
+| **D** | `kernel/refstore.go`：L3 引用式存储（RefStore） | 21 Test（含中文/1MB/100 随机条目往返）；篡改被拒；`PurgeRefsForMemories` GDPR 级联 |
+| **E** | 向量产物重建 + 北极星复跑 + gate.sh 登记 + 收口报告 | **M1=1.0000**；`NEW_FILES` 追加 `lookup:12 reindex:12 access:12 refstore:12` |
+
+### ⚠️ 北极星向量产物：只在 0.88，复跑必须去 0.88
+
+`eval/vectors/{vectors.npy, vectors_meta.json, vectors_index.jsonl}`（4595 条，18.8MB）**从未入 git**，
+只存在于 **0.88** 的 `/home/workbuddy/lightmem/eval/vectors/`；`.gitignore:31-35` 已显式排除。
+本地仓库只有生成/合流脚本（`gen_vectors.py`、`gen_vectors_inc.py`、`merge_r12_final.py`、`merge_vectors_inc.py`）。
+
+**R24-E 重建过程**（此前 A/B/C/D 四条线的判据⑥因此全部"未闭环"）：A 路 3597 条（`/home/workbuddy/r11a`）
++ B 路 600 条（`/tmp/r12b`）合流 → 4197 条 → M1=0.9962 → 定位缺 locomo_v2 文本 → 增量 398 条嵌入 → **4595 条** → M1=1.0000。
+完整命令、md5 与工具链说明见 `lightmem.md` 附录 **D.3.1**。
+
+### 对后续轮次的输入
+
+1. `gofmt -l kernel/` 剩 `admin.go`、`authn_ory.go`（+ frontend 9 个），均基线遗留 → 独立 PR。
+2. C 线线上 `FastHits` 恒 0，`deterministic` 分类生产不生效 → 需 A 线改 `router_mem.go` 一行。
+3. 0.88 安装脚本 `kill` 后只 `sleep 1` 就启动，升级时可能 `bind: address already in use` 双停 → 改为轮询等端口释放。
+4. B/C 线管理端点已按开关接线但**默认关**（`LIMS_ADMIN_REINDEX=1` / `LIMS_ADMIN_LIFECYCLE=1`）→ 运维按需开启。
+5. Qdrant 1.19 的 point upsert **强制要求合法 vector 字段**（省略或写 null 均 400）——后续动 qdrant 写入路径前必读 `lightmem.md` D.11 L-227。
+
+> **推送状态**：R24 全部改动**未 commit、未 push**，等业主示意（红线⑧）。

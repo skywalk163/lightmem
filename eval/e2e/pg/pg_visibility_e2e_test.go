@@ -217,7 +217,7 @@ func TestPgVisibilityVectorSearchPrivateIsolation(t *testing.T) {
 	// 库内可能堆积历史 pending 行（BackfillVectors 每轮 LIMIT 100）→ 轮询补全，
 	// 直到 owner 视角能向量召回本条（确定性收敛，不依赖库的干净程度）。
 	type backfiller interface {
-		BackfillVectors(ctx context.Context, embed func(string) ([]float32, error)) error
+		BackfillVectors(ctx context.Context, embed func(string) ([]float32, error)) (kernel.BackfillReport, error)
 	}
 	bf := be.(backfiller)
 	embed := func(string) ([]float32, error) {
@@ -230,7 +230,7 @@ func TestPgVisibilityVectorSearchPrivateIsolation(t *testing.T) {
 	queryVec, _ := embed(tag)
 	vectorized := false
 	for i := 0; i < 10 && !vectorized; i++ {
-		if err := bf.BackfillVectors(ctx, embed); err != nil {
+		if _, err := bf.BackfillVectors(ctx, embed); err != nil {
 			t.Fatalf("BackfillVectors: %v", err)
 		}
 		res, err := be.VectorSearch(ctx, kernel.QueryParams{

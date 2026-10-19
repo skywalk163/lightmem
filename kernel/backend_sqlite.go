@@ -223,6 +223,11 @@ func (b *sqliteBackend) Query(ctx context.Context, q QueryParams) ([]QueryResult
 		if len(q.MemoryKinds) > 0 && !containsKind(q.MemoryKinds, m.MemoryKind) {
 			continue
 		}
+		// R24-B · L-226：默认只返回当前生效版本（与 recall 路径既有语义对齐）。
+		// IncludeSuperseded=true 才带出被取代的历史版本。
+		if !q.IncludeSuperseded && m.SupersededBy != nil {
+			continue
+		}
 		if q.AsOf != nil && !m.visibleAt(*q.AsOf) {
 			continue
 		}
