@@ -142,9 +142,9 @@ func TestDumpR24SeamHTTP(t *testing.T) {
 
 	// 3) GET /search —— 读路径
 	searches := []string{
-		"/search?tenant_id=t1&q=%E5%AE%A2%E6%88%B701&viewer=u1", // 客户01
-		"/search?tenant_id=t1&q=%E5%81%8F%E5%A5%BD&viewer=u1",   // 偏好（多命中）
-		"/search?tenant_id=t1&q=nonexistent&viewer=u1",          // 空集
+		"/search?tenant_id=t1&q=%E5%AE%A2%E6%88%B701&viewer=u1",    // 客户01
+		"/search?tenant_id=t1&q=%E5%81%8F%E5%A5%BD&viewer=u1",      // 偏好（多命中）
+		"/search?tenant_id=t1&q=nonexistent&viewer=u1",             // 空集
 		"/search?tenant_id=t1&text=%E4%BA%8B%E9%A1%B902&viewer=u1", // text 别名：事项02
 		"/search?q=%E5%81%8F%E5%A5%BD&viewer=u1",                   // 缺 tenant_id → 400
 		"/search?tenant_id=t1&viewer=u1",                           // 缺 q → 400
