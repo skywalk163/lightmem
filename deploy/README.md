@@ -104,11 +104,23 @@ psql -h "$PGHOST" -U postgres -c 'SELECT pg_reload_conf()'
 > ⚠️ 收紧后**所有** psql / 应用连接都必须带口令。排障用 `psql -w`（`-w` = 不提示密码、直接失败），
 > 否则非 tty 环境会因等待输入而挂住。
 
-### `local` 为什么保留 trust
+### `local` 已收紧为 peer（trust 全清零）
 
-该通道要求**先登录主机**（unix socket），风险等级与网络可达的 TCP 完全不同；
-改成 `peer` 会要求 OS 用户名与 PG 角色同名（workbuddy ≠ postgres）→ **锁死所有本地管理入口**。
-故保留 local trust、把网络侧彻底收紧。若要连 local 一并收紧，需先建同名 OS 用户，属下一步选项。
+**前提发现**：PG 跑在 jail（10.0.10.10）内，unix socket 也在 jail 内——从 0.88 宿主**走不了 socket**
+（`find` 不到、`sudo -u postgres psql` 报 `No such file or directory`），即 `local` 规则**实际无人使用**。
+排查确认无 socket 免密依赖：workbuddy 无 crontab、系统 cron 无 psql、仓库脚本的 psql 全走 TCP（`-h`）。
+
+```sh
+# local 一并收紧（trust → peer）
+sudo -n sed -i '' -E 's/^(local[[:space:]]+.*)[[:space:]]+trust$/\1 peer/' \
+     /var/db/pgdata/pg_hba.conf
+psql -c 'SELECT pg_reload_conf()'
+```
+
+- jail 内管理入口：`sudo -u postgres psql`（OS 用户 postgres 与 PG 角色同名，peer 认证通过）。
+- **残余未知**：jail 内部无法 ssh 进入（22 端口拒绝），若 jail 内有 cron/脚本走 socket 免密会受影响
+  （风险极低：该库为 lightmem 专用测试/开发库，应用全走 TCP）。
+- **回退**：`sudo -n cp /var/db/pgdata/pg_hba.conf.bak.r28b /var/db/pgdata/pg_hba.conf` + reload。
 
 ### 口令注入路径（代码零改动）
 
