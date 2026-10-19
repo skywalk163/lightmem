@@ -131,13 +131,17 @@ func TestPgVisibilityMatrix_G8Regression(t *testing.T) {
 	tenant := uniqueTenant("g8matrix")
 	tenantB := uniqueTenant("g8matrix_b")
 	tenantC := uniqueTenant("g8matrix_c")
+	cleanupTenantsOnExit(t, tenant, tenantB, tenantC)
 	tag := "g8matrix-probe-" + tenant // 查询令牌：只用一次，全库唯一
 
-	owner := "u_owner_a"
-	stranger := "u_stranger_b" // 同租户异用户
-	reader := "u_reader_c"
-	sharedOwner := "u_shared_owner_d"
-	writer := "u_writer_e"
+	// R28-B（业主裁定三）：user 一律带 pid+纳秒后缀，绝不只用测试名——
+	// 并发/多轮执行时同名 user 会互相污染（private 语义已按租户收敛，
+	// 但夹具层面仍要杜绝同名主体）。
+	owner := uniqueUser("g8_owner")
+	stranger := uniqueUser("g8_stranger") // 同租户异用户
+	reader := uniqueUser("g8_reader")
+	sharedOwner := uniqueUser("g8_shared_owner")
+	writer := uniqueUser("g8_writer")
 
 	mPriv := visMemory(uniqueID("mem_g8", "priv"), tenant, owner, kernel.VisPrivate, tag+" private secret")
 	mTenant := visMemory(uniqueID("mem_g8", "tenant"), tenant, writer, kernel.VisTenant, tag+" tenant shared note")
@@ -201,9 +205,10 @@ func TestPgVisibilityVectorSearchPrivateIsolation(t *testing.T) {
 	ctx := context.Background()
 
 	tenant := uniqueTenant("g8vec")
+	cleanupTenantsOnExit(t, tenant)
 	tag := "g8vec-probe-" + tenant
-	owner := "u_vec_owner"
-	stranger := "u_vec_stranger"
+	owner := uniqueUser("g8vec_owner")
+	stranger := uniqueUser("g8vec_stranger")
 
 	mPriv := visMemory(uniqueID("mem_g8vec", "priv"), tenant, owner, kernel.VisPrivate, tag+" private vector secret")
 	mTenant := visMemory(uniqueID("mem_g8vec", "tenant"), tenant, owner, kernel.VisTenant, tag+" tenant vector note")
@@ -285,17 +290,20 @@ func TestPgVisibilityCrossTenantSharedWith(t *testing.T) {
 	ctx := context.Background()
 
 	tenant := uniqueTenant("g8cross")
+	cleanupTenantsOnExit(t, tenant)
 	sharedTo := uniqueTenant("g8cross_to")
 	unrelated := uniqueTenant("g8cross_no")
+	anyUser := uniqueUser("g8cross_any") // 任意 viewer（共享租户侧查询用，同样唯一化）
+	cleanupTenantsOnExit(t, tenant, sharedTo, unrelated)
 	tag := "g8cross-probe-" + tenant
 
-	m := visMemory(uniqueID("mem_g8cross", "001"), tenant, "u_cross_owner",
+	m := visMemory(uniqueID("mem_g8cross", "001"), tenant, uniqueUser("g8cross_owner"),
 		kernel.VisCrossTenant, tag+" cross tenant shared payload")
 	// shared_with_tenants 数组列走直连 SQL 补写（既有 Upsert 缺陷，见 seedCrossTenant 注释）
 	seedCrossTenant(t, cfg, be, m, []string{sharedTo})
 
 	// 共享目标租户：可见
-	res, err := be.Query(ctx, kernel.QueryParams{TenantID: sharedTo, Viewer: "u_any", Text: tag, TopK: 10})
+	res, err := be.Query(ctx, kernel.QueryParams{TenantID: sharedTo, Viewer: anyUser, Text: tag, TopK: 10})
 	if err != nil {
 		t.Fatalf("Query shared tenant: %v", err)
 	}
@@ -304,7 +312,7 @@ func TestPgVisibilityCrossTenantSharedWith(t *testing.T) {
 	}
 
 	// 未共享租户：不可见
-	res2, err := be.Query(ctx, kernel.QueryParams{TenantID: unrelated, Viewer: "u_any", Text: tag, TopK: 10})
+	res2, err := be.Query(ctx, kernel.QueryParams{TenantID: unrelated, Viewer: anyUser, Text: tag, TopK: 10})
 	if err != nil {
 		t.Fatalf("Query unrelated tenant: %v", err)
 	}
@@ -321,10 +329,11 @@ func TestPgVisibilitySharedUserAnonymousIsolation(t *testing.T) {
 	ctx := context.Background()
 
 	tenant := uniqueTenant("g8shared")
+	cleanupTenantsOnExit(t, tenant)
 	tag := "g8shared-probe-" + tenant
-	owner := "u_sh_owner"
-	reader := "u_sh_reader"
-	stranger := "u_sh_stranger"
+	owner := uniqueUser("g8sh_owner")
+	reader := uniqueUser("g8sh_reader")
+	stranger := uniqueUser("g8sh_stranger")
 
 	m := visMemory(uniqueID("mem_g8shared", "001"), tenant, owner,
 		kernel.VisSharedUser, tag+" shared user only payload")

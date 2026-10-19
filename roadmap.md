@@ -324,3 +324,32 @@
 4. **（业主拍板）** 裁定二要求「断言连接非 superuser」：本轮仍用 postgres superuser，建独立非 superuser 角色涉 PG 角色体系与红线③。
 5. ~~PG 主机 `10.0.10.10`~~ 已关闭（R26 收口前已恢复；R27 全程可用）。
 6. R27 改动**已本地 commit，未 push**（红线⑧，等业主示意）；`.env` 的 `GITCODE_TOKEN` 仍失效（401）。
+
+## 三·十、R28 收口留痕（2026-10-20 凌晨）
+
+**地基**：业主对 R27 三项未闭环的**逐条裁定**（`_R28_并行任务书.md` §0）。
+**结论**：门禁 **PASS 15 / FAIL 0 / SKIP 0**（新增 `[12]`）；北极星与 R27 **逐字节相同**；
+裁定二/三闭环；裁定一红线数值达标但**不得据缓存宣布闭环**（命中率 6.67% < 60%）。
+
+| 线 | 动作 | 实测 |
+|---|---|---|
+| **A** | 启动期 superuser 断言（`pg_superuser_check.go`）+ `deploy/init-roles.sql`（bootstrap，与 `migrations/` 物理隔离）+ 连接串切换 | **必答题实测**：原为 `postgres`（`rolsuper=t`）→ 已切 `lightmem_app`（`rolsuper=f`）；切换后暴露并补齐 3 道授权缺口；真机 13/13 全 PASS；服务 `/healthz` ok |
+| **B** | 夹具两道保险：固定 user 全部唯一化（3 个文件 grep 归零）+ 用例级 `t.Cleanup` + CI 残留检查 `[12]` | **已证伪**：造残留 → FAIL（含定位样例）→ 清理 → PASS |
+| **C** | 内存可见性索引（`visindex.go`）+ 结果缓存 LRU/TTL（`vector_cache.go`）+ 命中率埋点（`X-Vector-Cache` 响应头） | `/search/vector` P95 **32.96 → 15.95ms**（−51.6%）；**仅索引 15.77ms** → 改善归因于索引；**命中率 6.67%** |
+| **F** | gate 登记（`pg_superuser_check:4 visindex:3 vector_cache:5`）+ 北极星/P95 复跑 + D.15/roadmap 留痕 | 五数逐字节持平；门禁 15/0/0；`go.mod`/`go.sum` 零变化；`migrations/` 零改动 |
+
+### R28 实测锚点
+
+- 门禁：`_r28_088_gate.log`（15/0/0，md5 `e67e93afe82d7fcde0b3f70fb2bd26de`）；`[12]` 首次纳入并 PASS。
+- 北极星：`eval/reports/r28_final_holdout_20261019-171400.json`（md5 `e98c7839…`，与 R27 逐字节相同）。
+- P95：`/search/vector` 15.95ms（基线 32.96ms；仅索引 15.77ms；命中率 6.67%）；`/search` 44.97ms（关优化 48.92ms → 环境漂移）。
+- PG：`lightmem_app` 非 superuser；测试库 `lightmem_r28_gate`；备份 `/var/db/lightmem/gate.env.bak.r28`、`/etc/rc.conf.bak.r28`。
+
+### 对后续轮次的输入
+
+1. **（下一轮·必选项，业主裁定）** 缓存命中率 6.67% < 60% → 冗余列 + 索引 **migration 为下一轮必选项**（红线数值已由内存索引达标，非缓存之功）。
+2. **（下一轮 migration 候选）** **L-241**：PG 未启用 RLS、无 policy → 数据库层零深度防御。
+3. **（技术债）** 裁定三主方案「每测试事务 + 回滚」未落地；已知缺口按裁定原话登记：「测试间无事务隔离，依赖命名空间隔离」，并发度提升后需重新评估。
+4. **（复测）** `/search` P95 44.97ms（关掉本轮优化仍 48.92ms，与 R28 无关）逼近红线 50.12ms，需复测确认是否回落。
+5. **（业主拍板）** PG 走 **trust 免密**：`lightmem_app` 已设口令但认证不强制，能连 5432 者可冒充该角色；收紧 pg_hba 属部署变更。
+6. **（流程）** R28 改动**已本地 commit，未 push**（红线⑧，等业主示意）；`.env` 的 `GITCODE_TOKEN` 仍 401。

@@ -71,6 +71,16 @@ func newPgBackend(ctx context.Context, cfg *StorageConfig) (StorageBackend, erro
 		return nil, fmt.Errorf("pg ping: %w", err)
 	}
 
+	// R28-A（L-240 / 业主裁定二 2026-10-20）：superuser 启动自检。
+	// 位置：**连接池初始化之后、对外 ready 之前**（裁定原文要求）。
+	// 只读 pg_roles 系统视图，零 migration 成本（红线③不受影响）。
+	// 默认策略 fail-fast：superuser 连接 → 阻断启动（安全底线，非可选项）；
+	// 过渡期可用 LIMS_PG_SUPERUSER_CHECK=warn 只告警。
+	if err := EnforcePgSuperuserPolicy(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+
 	return &pgBackend{db: db, conf: cfg.PG, dim: dim, table: "memories"}, nil
 }
 
