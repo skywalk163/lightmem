@@ -186,7 +186,7 @@ curl "http://localhost:8080/search?q=客户A偏好&tenant_id=t1&viewer=u1"
 | [0]–[5] go 版本 / gofmt / vet / build / test / race | PASS |
 | [6] 新增文件覆盖（含 R16 S1–S3 骨架文件） | PASS |
 | [7]–[10] 红线抽查 / 投毒检测 / 合并度激活 / 接线默认关 | PASS |
-| [11] PG 真机往返 | SKIP（`LIGHTMEM_PG_HOST` 未配置，非假 PASS） |
+| [11] PG 真机往返 | SKIP（`LIGHTMEM_PG_HOST` 未配置，非假 PASS）｜**R26-A 起（2026-10-19）**：0.88 已固化 env（`/var/db/lightmem/gate.env`，不入 git），真机往返 13 项全 PASS，收口态 **14/0/0**（首次 SKIP=0）；未配 env 时仍显式 SKIP，可移植性不破 |
 | **合计** | **PASS 12 / FAIL 0 / SKIP 1** |
 
 > 验证环境：192.168.0.88（FreeBSD 15.1，go1.25.14，PG 18.6 + pgvector 0.8.2）
@@ -380,6 +380,12 @@ storage_backend: sqlite
 - 运行平台优先级：**FreeBSD > Linux > Windows**（用户拍板）；Windows 仅文档编辑与传输，不装 Go
 - 门禁 [11] PG 真机往返：未配置 → 显式 SKIP（绝不静默当 PASS，R15 口径）
 - R16 门禁 [6] 新增文件覆盖清单含 `backend_qdrant:4` / `node_role:4` / `topology:3` / `connector_app:4`（骨架契约单测阈值，向后兼容默认 12）
+
+---
+
+## 📤 三远端推送（R26-C）
+
+> 三远端（origin/gitea、gitcode、github）推送走 `scripts/push_all_remotes.sh` 命令序列：脚本封装三远端推送、打印 `git ls-remote` 复核结果，并在 gitcode token 失效 / github git 协议被代理拦截时给出明确排错指引。按红线⑧脚本不自动 push，执行前需业主示意。
 
 ---
 

@@ -34,6 +34,25 @@
 # 退出码：0 = 全部门禁通过（SKIP 不阻断）；1 = 至少一项 FAIL。
 set -u
 
+# ---------------------------------------------------------------------------
+# R26-A（缺陷 L-234）：**可选的**本机门禁 env 加载 hook。
+#
+# 背景：`[11] PG 真机往返` 的判定逻辑本身是对的（见文件末尾 [11] 段：未配置 → 显式 SKIP、
+#       已配置 → 硬阻断），缺的只是 0.88 上 PG 环境变量从未固化，导致 [11] 长期 SKIP，
+#       门禁矩阵无法达成 SKIP=0。本 hook 只解决「固化」，不改任何判定逻辑。
+#
+# 策略：**文件在才 source，不在则原样**——
+#   - 存在本机凭据文件（默认 /var/db/lightmem/gate.env，不入 git、建议 chmod 600）时加载之，
+#     使本机 `sh scripts/gate.sh` 不必手工 export 即可让 [11] 真实跑真机往返；
+#   - 文件不存在（异地 checkout / CI / 生产机）时**不改变既有行为**：[11] 仍输出
+#     `SKIP: PG env not set` 并计入汇总——绝不静默当通过，也不把凭据写进 git。
+#   - 文件存在但不可读/有语法错时，source 失败不影响后续（本脚本无 set -e），
+#     退化为原有 SKIP 行为，不会假绿。
+# ---------------------------------------------------------------------------
+if [ -f /var/db/lightmem/gate.env ]; then
+    . /var/db/lightmem/gate.env
+fi
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # GATE_ROOT 显式覆盖；否则从脚本位置推导。
 if [ -n "${GATE_ROOT:-}" ]; then
@@ -310,7 +329,7 @@ fi
 COV_FAIL=0
 COV_NOTE=""
 COV_TESTONLY=""
-NEW_FILES="forgetting_drift flush edge_persist edge_persist_pg poison_detect drift_pipeline flush_pipeline backend_qdrant:4 node_role:4 topology:3 connector_app:4 auth:12 mcp:12 workflow:12 lookup:12 reindex:12 access:12 refstore:12 sqlite_vector:11"
+NEW_FILES="forgetting_drift flush edge_persist edge_persist_pg poison_detect drift_pipeline flush_pipeline backend_qdrant:4 node_role:4 topology:3 connector_app:4 auth:12 mcp:12 workflow:12 lookup:12 reindex:12 access:12 refstore:12 sqlite_vector:15"
 for entry in $NEW_FILES; do
     case "$entry" in
         *:*) f="${entry%%:*}"; THRESH="${entry##*:}" ;;

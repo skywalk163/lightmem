@@ -255,3 +255,37 @@
 3. sqlite-vec 备选路线（需 cgo，破零依赖承诺）仍待业主拍板。
 4. 门禁 `[11]` PG 真机往返默认 SKIP（env 未配）；C 线已单独真机闭环，需全量 PG 门禁时 export 环境变量。
 5. `.env` 的 `GITCODE_TOKEN` 已失效（API 401）——本次 gitcode 推送靠 GCM 缓存凭据；**下次 gitcode 推送前需更新该 token**。
+
+## 三·八、R26 收口留痕（2026-10-19）
+
+> 轮次：R26「可信度收口 · PG 门禁消 SKIP + solo 向量两实测缺陷修平 + 三远端推送固化」，六条线 T0/A/B/C/D/E。
+> 基线 `82d31e0`（R25 收口，已推三远端）；T0 提交态 clean tree 基线门禁 **PASS 13 / FAIL 0 / SKIP 1**（唯一 SKIP=`[11]`）。
+> **收口门禁（E 线实测，0.88）：PASS 14 / FAIL 0 / SKIP 0**——`[11]` 真机往返 13 项全 PASS，`[4]` 根 module（含 `eval/e2e/pg` 真跑）2/2 通过，**R15 门禁矩阵引入以来首次 SKIP=0**（日志 `_r26_088_gate.log`，md5 `da65f88e…`）。历程：E 线首次测量时 PG 主机 `10.0.10.10` 整机不可达（0.88 当日重启后），按文档化可移植性形态测得 13/0/1（不冒充 PASS）；业主修复 0.88（healthz 双 200）后 PG 恢复，重置测试库复跑达成 14/0/0。
+> **北极星**：M1=1.0000 / hit@1=1.0000 / **M2=0.2498（主判据，持平达标）** / 压缩 35.33% / vetoed=0——报告与 R25/R24 **逐字节相同**（832191 B，md5 `e98c7839…`）。
+> **P95**：`/search`=35.63ms（红线 50.12ms 内）；`/search/vector`=25.91ms 且 **300×200（503 清零）**——503 清零达成，但超 19.70ms 字面红线，根因 **L-239**（`visibleMemoryIDs` 每查询全量 `loadAll`，同机基线对拍 9.29ms→24.58ms）。
+> 详见 `lightmem.md` §D.3.1（R26 五数 + P95）与 §D.13（L-234~L-237 关闭记录 + L-238/L-239 新登记）。
+
+| 线 | 交付 | 关键判据 |
+|---|---|---|
+| **T0** | 0.88 对齐 `82d31e0` + clean tree 基线 13/0/1 + PG 独立库 `lightmem_r26_gate` | 基线在提交态实测；healthz 200/200 |
+| **A** | `/var/db/lightmem/gate.env`（600、不入 git、无密码）+ `gate.sh` 头部可选 hook（+19/−0，`[11]` 判定段逐字未改） | `[11]` SKIP→PASS（真机往返 13 项）；干净库矩阵 **14/0/0**（首次 SKIP=0）；env 不在时与基线逐字节相同；新登记 **L-238**（脏库间歇 FAIL，待裁定） |
+| **B** | `SearchAllowed` 余弦前可见租户预筛（B1）+ `PutBatch` 单事务批量 upsert（B2） | 双租户不再 503（E 线 bench 300×200 实测）；800 条 backfill 单次 409.7ms（基线 11700ms，~28×）；`go.mod`/`go.sum` 零变化；`-race` 全绿；测试 11→15 |
+| **C** | `scripts/push_all_remotes.sh`（三远端命令序列 + token 排错 + inline 回退，不自动 push） | §6.2 五判据全过；README 指针（D 线） |
+| **D** | 矩阵回填 B 线结论 + sqlite-vec「默认不做」决策 + PG env 运维段 + README `[11]` 行更新 | §7.2 四判据全过；与 A/B 实测逐项对齐 |
+| **E** | 北极星复跑 + P95 对拍 + gate 登记（`sqlite_vector:11→15`）+ D.13/roadmap 留痕 + 收口报告 | 五数逐字节持平；`/search` 35.63ms；`/search/vector` 503 清零但 25.91ms 超红线（L-239）；门禁 **14/0/0**（首次 SKIP=0；PG 主机当日曾不可达，修复后复跑达成） |
+
+### R26 收口实测锚点
+
+- 北极星：`eval/reports/r26_final_holdout_20261019-145806.json`（832191 B，md5 `e98c7839dd0060ad7d83d7d131b272f9`，与 R25/R24 逐字节相同）。
+- P95：`eval/reports/r26_p95_search.md`（35.63ms，300×200）、`eval/reports/r26_p95_vector.md`（25.91ms，300×200，503 清零）、`eval/reports/r25cmp_p95_vector.md`（`82d31e0` 同机对拍：285×200+15×503，11.47ms 混合分布）。
+- 门禁：**14/0/0**（`_r26_088_gate.log`，md5 `da65f88e…`；首次 SKIP=0；PG 主机当日曾不可达，业主修复后复跑达成）。
+- 命令：北极星复跑见 `lightmem.md` §D.3.1；P95 复现见 `eval/scripts/bench_p95.py` 文件头。
+
+### 对后续轮次的输入
+
+1. ~~**PG 主机 `10.0.10.10` 待排查**~~ **已关闭**：业主修复 0.88（重启后服务恢复）后 PG 同步恢复，14/0/0 已复跑达成（`_r26_088_gate.log`）。
+2. **L-239（P2，B 线域）**：`visibleMemoryIDs` 改定向 `SELECT memory_id, user_id, tenant_id, visibility`（不取正文），恢复 `/search/vector` 延迟至基线量级；建议下一轮处理。
+3. **L-238（P2，待业主裁定）**：`eval/e2e/pg` 夹具隔离（固定 `user` 字面量）+ `private` 可见性不校验 tenant 的语义问题（跨租户同名 user 可读）；推荐修夹具 + 门禁前置重置测试库。
+4. sqlite-vec（cgo）路线：R26 已决策**默认不做**（破零依赖承诺），备选待业主拍板。
+5. `.env` 的 `GITCODE_TOKEN` 仍失效（401）——下次 gitcode 推送前需更新（`scripts/push_all_remotes.sh` 有排错指引）。
+6. R26 全部改动**未 commit / 未 push**（红线⑧），等业主示意。
