@@ -151,7 +151,19 @@ for _pid in $(pgrep -f "lightmem-mcp -transport http -listen :$PORT" 2>/dev/null
     say "停掉占用 :$PORT 的旧实例 pid=$_pid"
     kill "$_pid" 2>/dev/null || true
 done
-sleep 1
+# R25-T0 · L-231（同族）：kill 是异步的，SIGTERM 后进程还要 graceful drain，
+# 端口不是立刻消失。原实现固定 `sleep 1` 就启动，R24 实测撞过
+# "bind: address already in use" 导致 18443/18444 双停。
+# 主服务脚本 install_lims_rc_d.sh 同处已改为轮询等端口释放，本脚本一并改（同一缺陷）。
+_i=0
+while sockstat -l -P tcp -p "$PORT" 2>/dev/null | grep -q ":$PORT"; do
+    _i=$((_i + 1))
+    if [ "$_i" -gt 30 ]; then
+        say "警告：等待 :$PORT 释放超时（30s），仍尝试启动"
+        break
+    fi
+    sleep 1
+done
 
 if [ "$DO_START" -eq 0 ]; then
     say "已安装（--no-start，未启动）。手动启动：service lightmem_mcp start"
