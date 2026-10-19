@@ -207,22 +207,36 @@ func TestReconcileDriftedIDsCap(t *testing.T) {
 }
 
 // TestRebuildIndexUnsupportedBackend 不支持补向量的后端：返回明确错误，不静默成功。
+//
+// R25-B · L-232 偏离登记（必要连带修改）：SQLite 自 R25-B 起实现 VectorBackfiller，
+// 故原「SQLite 未实现 → 走兜底」前提失效。本测试改为验证新契约：
+//   - 后端支持 backfill 但 embedder 为 nil → RebuildIndex 明确报错（不静默成功）；
+//   - 提供 embedder → 真正补全向量（scanned=vectorized）。
+//
+// 原「兜底路径」覆盖由 TestRebuildIndexNoBackend（nil backend）间接保留。
 func TestRebuildIndexUnsupportedBackend(t *testing.T) {
-	// SQLite 未实现 VectorBackfiller → 走兜底路径（无 embedder 时全部计 failed）。
 	_, b := newSearchTestEnv(t)
 	putReindexMemory(t, b, "rx-fb", "t1", "u1", "fallback probe", nil)
-	rep, err := RebuildIndex(context.Background(), b, nil, "t1")
+	// nil embedder：后端支持 backfill 但无 embedder → 明确错误（不静默）。
+	if _, err := RebuildIndex(context.Background(), b, nil, "t1"); err == nil {
+		t.Fatal("rebuild with nil embedder on backfill-capable backend: want error, got nil")
+	}
+	// 有 embedder：真正补向量。
+	rep, err := RebuildIndex(context.Background(), b, HashEmbedder(32), "t1")
 	if err != nil {
-		t.Fatalf("rebuild with nil embedder: %v", err)
+		t.Fatalf("rebuild with embedder: %v", err)
 	}
 	if rep.Backend != b.Name() {
 		t.Errorf("backend: %q want %q", rep.Backend, b.Name())
 	}
-	if rep.Scanned == 0 {
-		t.Error("scanned must be > 0")
+	if rep.Scanned != 1 {
+		t.Errorf("scanned = %d, want 1", rep.Scanned)
 	}
-	if rep.Failed == 0 {
-		t.Error("nil embedder: failed must be > 0 (no silent success)")
+	if rep.Vectorized != 1 {
+		t.Errorf("vectorized = %d, want 1", rep.Vectorized)
+	}
+	if rep.Failed != 0 {
+		t.Errorf("failed = %d, want 0", rep.Failed)
 	}
 }
 

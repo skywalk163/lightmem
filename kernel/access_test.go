@@ -277,6 +277,165 @@ func TestAccessMarkFast(t *testing.T) {
 }
 
 // ------------------------------------------------------------------
+// R25-C · L-230：MarkFast 接线到生产快车道（router_mem.go:236）
+// ------------------------------------------------------------------
+
+// recallFastM01 打一次 RecallAndFuse 快车道（命中 m01 的精确查询）。
+func recallFastM01(t *testing.T, srv *APIServer) {
+	t.Helper()
+	if _, err := srv.RecallAndFuse(context.Background(), RouterContext{
+		Text: "客户01的偏好", TenantID: "t1", UserID: "u1",
+	}); err != nil {
+		t.Fatalf("recall fast: %v", err)
+	}
+}
+
+// containsFusedID 判断融合结果里是否含某 memory_id（防御性断言用，防假绿）。
+func containsFusedID(fused []FusedResult, id string) bool {
+	for _, f := range fused {
+		if f.MemoryID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// TestAccessMarkFastWiredOnFastPath 判据①：注入 *AccessTracker 后走一次快车道命中，
+// StatsOf(m01).FastHits==1 且 SlowHits==0。修复前（236 行走 NoteRecall）FastHits 恒 0。
+func TestAccessMarkFastWiredOnFastPath(t *testing.T) {
+	srv, b := newSearchTestEnv(t)
+	seedLookupCorpus(t, b, 1, "t1", "u1", LayerL2)
+	idx := NewLookupIndex()
+	rebuildIndex(t, b, idx, "t1")
+	srv.SetLookupIndex(idx)
+	srv.SetLookupEnabled(true)
+
+	tr := NewAccessTracker(0)
+	srv.SetAccessTracker(tr)
+
+	recallFastM01(t, srv)
+	st := tr.StatsOf("m01")
+	if st.FastHits != 1 {
+		t.Fatalf("after 1 fast hit: FastHits=%d, want 1 (L-230: fast path must call MarkFast)", st.FastHits)
+	}
+	if st.SlowHits != 0 {
+		t.Errorf("after 1 fast hit: SlowHits=%d, want 0 (must not double-count as slow)", st.SlowHits)
+	}
+	if st.Total != 1 {
+		t.Errorf("Total=%d, want 1", st.Total)
+	}
+}
+
+// TestAccessDeterministicReachableOnFastPath 判据②：同一记忆快车道 4 次 + 慢车道 1 次
+// → ModeOf == deterministic。修复前慢车道那 1 次也走 NoteRecall、快车道那 4 次也被算成
+// SlowHits，FastHits 恒 0，deterministic 分支在生产永不可达。
+func TestAccessDeterministicReachableOnFastPath(t *testing.T) {
+	srv, b := newSearchTestEnv(t)
+	seedLookupCorpus(t, b, 1, "t1", "u1", LayerL2)
+	idx := NewLookupIndex()
+	rebuildIndex(t, b, idx, "t1")
+	srv.SetLookupIndex(idx)
+	srv.SetLookupEnabled(true)
+	tr := NewAccessTracker(0)
+	srv.SetAccessTracker(tr)
+
+	// 4 次快车道命中（无 AsOf → 唯一精确命中）
+	for i := 0; i < 4; i++ {
+		recallFastM01(t, srv)
+	}
+	// 1 次慢车道：设 AsOf 强制回退慢车道（tryLookupFastPath 对 AsOf 返回 miss）。
+	asof := "2026-01-01T00:00:00Z"
+	slowRes, err := srv.RecallAndFuse(context.Background(), RouterContext{
+		Text: "客户01的偏好", TenantID: "t1", UserID: "u1", AsOf: &asof,
+	})
+	if err != nil {
+		t.Fatalf("recall slow: %v", err)
+	}
+	if slowRes.Trace == nil || slowRes.Trace.FastPath {
+		t.Fatalf("AsOf 必须回退慢车道: %+v", slowRes.Trace)
+	}
+	// 防御：慢车道确实召回了 m01，否则下面 SlowHits==1 会假绿。
+	if !containsFusedID(slowRes.Fused, "m01") {
+		t.Fatalf("slow lane must recall m01 for this query, fused=%+v", slowRes.Fused)
+	}
+
+	st := tr.StatsOf("m01")
+	if st.FastHits != 4 || st.SlowHits != 1 || st.Total != 5 {
+		t.Fatalf("stats: %+v, want fast=4 slow=1 total=5", st)
+	}
+	if got := tr.ModeOf("m01", DefaultAccessPolicy()); got != AccessDeterministic {
+		t.Fatalf("ModeOf 4/5 fast: got %q, want deterministic", got)
+	}
+}
+
+// TestAccessFlushPGRoundTrip C2 · PG 真机闭环：同一记忆混合访问 N 次（快 MarkFast + 慢
+// Record）→ Flush → DB 直查 access_count==N 且 recent_access_score 符合衰减公式（容差 1e-6）。
+// 无 LIGHTMEM_PG_HOST 时 t.Skip（独立测试库，绝不动生产库 lims_dsh）。
+func TestAccessFlushPGRoundTrip(t *testing.T) {
+	cfg := loadPgVisConfig()
+	if cfg == nil {
+		t.Skip("LIGHTMEM_PG_HOST not set; skipping real-PG access flush round-trip")
+	}
+	b := newPgVisBackend(t, cfg)
+
+	id := "acc-c2-pg-01"
+	m := &Memory{
+		MemoryID: id, IdempotencyKey: id, TenantID: "t1", UserID: "u1",
+		Visibility: VisTenant, MemoryKind: KindFact, Fact: "R25-C PG access flush probe",
+		Confidence: 0.9, Permission: Permission{Owner: "u1"},
+	}
+	if err := b.Upsert(context.Background(), m); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	// 预置 RecentAccessScore = 5.0（与 TestAccessFlushDecaysScore 同一套路数）。
+	seed, _ := b.Get(context.Background(), id, "u1", "t1")
+	seed.RecentAccessScore = 5.0
+	if err := b.Upsert(context.Background(), seed); err != nil {
+		t.Fatalf("seed score: %v", err)
+	}
+
+	tr := NewAccessTracker(0)
+	now := time.Now().UTC()
+	// 混合：MarkFast 2 + Record 3 = N=5，覆盖两条计数路径。
+	tr.MarkFast([]string{id, id})
+	tr.Record(id, now)
+	tr.Record(id, now)
+	tr.Record(id, now)
+
+	flushed, err := tr.Flush(context.Background(), b, "t1")
+	if err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if flushed != 1 {
+		t.Fatalf("flushed rows=%d, want 1", flushed)
+	}
+
+	// DB 直查（绕过 backend.Get，直读 PG 表）。
+	pgdb := b.(*pgBackend).db
+	var accessCount int64
+	var score float64
+	if err := pgdb.QueryRow(
+		`SELECT access_count, recent_access_score FROM memories WHERE memory_id=$1`, id,
+	).Scan(&accessCount, &score); err != nil {
+		t.Fatalf("direct pg query: %v", err)
+	}
+	if accessCount != 5 {
+		t.Fatalf("access_count=%d, want 5 (mixed fast+slow must all land)", accessCount)
+	}
+	// 衰减公式：同一次 Flush 内 Δt≈0（毫秒级）→ score = seed·exp(≈0/τ) + N = 5.0 + 5 = 10.0。
+	// 残差 = seed·Δt/τ ≪ 1e-6（τ=7d），故可用 1e-6 容差钉死 read-modify-write 往返。
+	want := 5.0 + 5.0
+	if math.Abs(score-want) > 1e-6 {
+		t.Fatalf("recent_access_score=%.9f, want %.9f (seed 5.0 + 5 hits, Δt≈0 decay identity)", score, want)
+	}
+	t.Logf("PG round-trip OK: access_count=%d recent_access_score=%.9f (want %.9f)", accessCount, score, want)
+	// 行级清理：独立测试库内只删自己的探针行，绝不 touch 生产库 lims_dsh。
+	t.Cleanup(func() {
+		_, _ = b.(*pgBackend).db.Exec(`DELETE FROM memories WHERE memory_id=$1`, id)
+	})
+}
+
+// ------------------------------------------------------------------
 // C3 · 成本感知晋升（默认关零回归）
 // ------------------------------------------------------------------
 
