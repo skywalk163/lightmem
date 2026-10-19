@@ -312,7 +312,23 @@ func (b *sqliteBackend) VectorSearch(ctx context.Context, q QueryParams) ([]Quer
 		// 与 6cd26e0 行为逐位一致：solo 档尚无向量数据 → 降级文本检索。
 		return nil, fmt.Errorf("vector search not available on %s: no vectors stored; run POST /vector/backfill to populate, then downgrade to text (vector_status=pending)", b.name)
 	}
-	hits, err := b.vec.Search(ctx, q.Vector, q.TopK)
+	// B 线 B1（L-235）：余弦前按 (viewer, tenant) 可见性预筛。
+	// 单租户裸查（无 viewer/tenant 上下文）→ allowedIDs=nil → 退回原 Search 全局路径
+	// （判据 3 short-circuit，行为与 82d31e0 逐位一致，零额外开销）。
+	// 多租户场景：先算可见 memory_id 集合，再在其内做余弦 top-k，避免少数派被多数派挤占。
+	var allowed map[string]bool
+	if q.Viewer != "" || q.TenantID != "" {
+		allowed, err = b.visibleMemoryIDs(ctx, q.Viewer, q.TenantID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	var hits []VectorHit
+	if allowed == nil {
+		hits, err = b.vec.Search(ctx, q.Vector, q.TopK)
+	} else {
+		hits, err = b.vec.SearchAllowed(ctx, q.Vector, q.TopK, allowed)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -323,7 +339,7 @@ func (b *sqliteBackend) VectorSearch(ctx context.Context, q QueryParams) ([]Quer
 			continue // 记忆已被删：跳过
 		}
 		if !m.canView(q.Viewer, q.TenantID) {
-			continue // 不可见：跳过（与 Query 的硬过滤一致）
+			continue // 防御性：预筛后仍校验可见性（与 Query 的硬过滤一致）
 		}
 		res = append(res, b.toResult(m, h.Score))
 	}
@@ -332,6 +348,23 @@ func (b *sqliteBackend) VectorSearch(ctx context.Context, q QueryParams) ([]Quer
 		return nil, fmt.Errorf("vector search returned no visible results on %s; downgrade to text", b.name)
 	}
 	return res, nil
+}
+
+// visibleMemoryIDs 返回对 (viewer, tenant) 可见的 memory_id 集合（B 线 B1，L-235）。
+// 复用既有 Memory.canView 可见性逻辑，不另造权限判断。供 VectorSearch 做余弦前预筛。
+// 返回 nil 表示「无租户过滤上下文」（由调用方据此 short-circuit 到全局 Search）。
+func (b *sqliteBackend) visibleMemoryIDs(ctx context.Context, viewer, tenant string) (map[string]bool, error) {
+	mems, err := b.loadAll(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite visible ids: %w", err)
+	}
+	set := make(map[string]bool, len(mems))
+	for _, m := range mems {
+		if m.canView(viewer, tenant) {
+			set[m.MemoryID] = true
+		}
+	}
+	return set, nil
 }
 
 // lookupMemory 不持锁读取单条记忆 JSON（调用方已不在 b.mu 临界区内）。
@@ -368,6 +401,22 @@ func (b *sqliteBackend) BackfillVectors(ctx context.Context, embed func(string) 
 	if err != nil {
 		return rep, err
 	}
+	// B 线 B2（L-236）：攒批 → PutBatch 单事务批量落盘，避免逐条 Put 在 >800 条语料下
+	// 反复提交超服务端 30s ctx（R25 bench 须靠幂等重试多次调用才收敛）。批大小 50 实测定；
+	// 幂等：已有向量者跳过（existingIDs 一次性加载），二次 backfill Vectorized 不再增长。
+	const batchSize = 50
+	batch := make([]VectorPutItem, 0, batchSize)
+	flush := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		if err := b.vec.PutBatch(ctx, batch); err != nil {
+			return err
+		}
+		rep.Vectorized += int64(len(batch))
+		batch = batch[:0]
+		return nil
+	}
 	for _, m := range mems {
 		if m == nil {
 			continue
@@ -385,11 +434,17 @@ func (b *sqliteBackend) BackfillVectors(ctx context.Context, embed func(string) 
 			rep.Failed++
 			continue
 		}
-		if err := b.vec.Put(ctx, m.MemoryID, vec); err != nil {
-			rep.Failed++
-			continue
+		batch = append(batch, VectorPutItem{MemoryID: m.MemoryID, Vec: vec})
+		if len(batch) >= batchSize {
+			if err := flush(); err != nil {
+				rep.Failed += int64(len(batch))
+				return rep, err
+			}
 		}
-		rep.Vectorized++
+	}
+	if err := flush(); err != nil {
+		rep.Failed += int64(len(batch))
+		return rep, err
 	}
 	return rep, nil
 }

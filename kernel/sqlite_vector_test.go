@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // putVectorMemory 写一条带 source 的记忆（聚焦向量检索侧断言）。
@@ -398,6 +399,217 @@ func TestSQLiteBackendVectorSearchMissingQuery(t *testing.T) {
 	if _, err := b.VectorSearch(context.Background(), QueryParams{}); err == nil {
 		t.Fatal("VectorSearch without vector: want error")
 	}
+}
+
+// B1（L-235）· 多租户预筛：少数派租户查询不再被多数派挤占（复刻 R25 D.12 观察 2 场景）。
+// 双租户语料（t-beam=600 多数派 / t-lc-v2=200 少数派），以少数派 viewer/tenant 查询，
+// 命中应全部来自少数派且不降级（不返回 no visible results / 503）。
+func TestSQLiteBackendVectorSearchMultiTenantNoCrowdOut(t *testing.T) {
+	ctx := context.Background()
+	b := newPersistBackend(t, filepathTmp(t, "mt.sqlite"))
+	defer b.Close()
+	sb := b
+	const majN, minN = 600, 200
+	for i := 0; i < majN; i++ {
+		putVectorMemory(t, sb, sprintfID("maj", i), "t-beam", "u-beam", "多数派事实编号"+itoaStr(i), "sqlite:vector")
+	}
+	for i := 0; i < minN; i++ {
+		putVectorMemory(t, sb, sprintfID("min", i), "t-lc-v2", "u-lc", "少数派事实编号"+itoaStr(i), "sqlite:vector")
+	}
+	if _, err := sb.BackfillVectors(ctx, HashEmbedder(32)); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	qvec, err := HashEmbedder(32)("少数派事实编号" + itoaStr(3))
+	if err != nil {
+		t.Fatalf("embed query: %v", err)
+	}
+	res, err := sb.VectorSearch(ctx, QueryParams{
+		TenantID: "t-lc-v2", Viewer: "u-lc", Vector: qvec, TopK: 10,
+	})
+	if err != nil {
+		t.Fatalf("minority VectorSearch: %v (应为可见命中，不应降级 no visible results)", err)
+	}
+	if len(res) == 0 {
+		t.Fatal("minority VectorSearch returned empty, want non-empty")
+	}
+	majLeak := 0
+	for _, r := range res {
+		if strings.HasPrefix(r.MemoryID, "maj") {
+			majLeak++
+		}
+		// 每条结果 source 必须标明 sqlite 向量路径。
+		if !strings.Contains(r.Source, "sqlite") {
+			t.Fatalf("result %s source %q not labeled sqlite", r.MemoryID, r.Source)
+		}
+	}
+	if majLeak > 0 {
+		t.Fatalf("minority query leaked %d majority-tenant memories into results (pre-filter failed)", majLeak)
+	}
+	found := false
+	for _, r := range res {
+		if r.MemoryID == "min3" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("min3 (queried minority fact) not in results; visibility pre-filter failed")
+	}
+}
+
+// B1（L-235）· SearchAllowed 在 allowedIDs 集合内的余弦排序与参考实现逐一相同；
+// 且 allowedIDs==nil 时等价于全局 Search（判据 3 short-circuit）。
+func TestSQLiteVectorStoreSearchAllowedMatchesReference(t *testing.T) {
+	ctx := context.Background()
+	b := newPersistBackend(t, filepathTmp(t, "sa.sqlite"))
+	defer b.Close()
+	store := b.vec
+	const dim, N, topK = 16, 60, 10
+	embed := HashEmbedder(dim)
+	items := make([]struct {
+		id  string
+		vec []float32
+	}, 0, N)
+	for i := 0; i < N; i++ {
+		vec, _ := embed(factText(i))
+		id := sprintfID("v", i)
+		if err := store.Put(ctx, id, vec); err != nil {
+			t.Fatalf("put %s: %v", id, err)
+		}
+		items = append(items, struct {
+			id  string
+			vec []float32
+		}{id, vec})
+	}
+	allowed := make(map[string]bool)
+	for i := 0; i < 30; i++ {
+		allowed[sprintfID("v", i)] = true
+	}
+	query := items[5].vec
+	got, err := store.SearchAllowed(ctx, query, topK, allowed)
+	if err != nil {
+		t.Fatalf("SearchAllowed: %v", err)
+	}
+	if len(got) != topK {
+		t.Fatalf("SearchAllowed returned %d, want %d", len(got), topK)
+	}
+	var allowedItems []struct {
+		id  string
+		vec []float32
+	}
+	for _, it := range items {
+		if allowed[it.id] {
+			allowedItems = append(allowedItems, it)
+		}
+	}
+	want := refCosineRank(query, allowedItems, topK)
+	for i := range want {
+		if got[i].MemoryID != want[i].MemoryID {
+			t.Fatalf("allowed rank %d: got %s want %s", i, got[i].MemoryID, want[i].MemoryID)
+		}
+		if math.Abs(got[i].Score-want[i].Score) > 1e-6 {
+			t.Fatalf("allowed rank %d score: got %v want %v", i, got[i].Score, want[i].Score)
+		}
+	}
+	// allowedIDs=nil → 等价于全局 Search。
+	gotNil, err := store.SearchAllowed(ctx, query, topK, nil)
+	if err != nil {
+		t.Fatalf("SearchAllowed(nil): %v", err)
+	}
+	wantGlobal := refCosineRank(query, items, topK)
+	if len(gotNil) != len(wantGlobal) {
+		t.Fatalf("nil-allowed len = %d, want %d", len(gotNil), len(wantGlobal))
+	}
+	for i := range wantGlobal {
+		if gotNil[i].MemoryID != wantGlobal[i].MemoryID {
+			t.Fatalf("nil rank %d: got %s want %s", i, gotNil[i].MemoryID, wantGlobal[i].MemoryID)
+		}
+	}
+}
+
+// B2（L-236）· PutBatch 单事务批量写入：≥800 条一次收敛，Count 正确，覆盖写幂等，
+// 空 batch 安全，非法项（空 id）回滚并报错（不残留脏数据）。
+func TestSQLiteVectorStorePutBatch(t *testing.T) {
+	ctx := context.Background()
+	b := newPersistBackend(t, filepathTmp(t, "pb.sqlite"))
+	defer b.Close()
+	store := b.vec
+	const N = 800
+	items := make([]VectorPutItem, 0, N)
+	for i := 0; i < N; i++ {
+		items = append(items, VectorPutItem{MemoryID: sprintfID("pb", i), Vec: []float32{float32(i % 7), float32(i % 3), 0.5}})
+	}
+	if err := store.PutBatch(ctx, items); err != nil {
+		t.Fatalf("PutBatch: %v", err)
+	}
+	if c, _ := store.Count(ctx); c != N {
+		t.Fatalf("post-batch count = %d, want %d", c, N)
+	}
+	// 幂等：再次 PutBatch 同 id（不同向量）→ 覆盖写，计数不增。
+	re := make([]VectorPutItem, 0, 10)
+	for i := 0; i < 10; i++ {
+		re = append(re, VectorPutItem{MemoryID: sprintfID("pb", i), Vec: []float32{0.1, 0.2, 0.3}})
+	}
+	if err := store.PutBatch(ctx, re); err != nil {
+		t.Fatalf("PutBatch 2nd: %v", err)
+	}
+	if c, _ := store.Count(ctx); c != N {
+		t.Fatalf("post-batch idempotent count = %d, want %d (覆盖写不应增长)", c, N)
+	}
+	// 空 batch 安全。
+	if err := store.PutBatch(ctx, nil); err != nil {
+		t.Fatalf("PutBatch(nil): %v", err)
+	}
+	if c, _ := store.Count(ctx); c != N {
+		t.Fatalf("post-nil-batch count = %d, want %d", c, N)
+	}
+	// 非法项（空 id）立即回滚并报错。
+	bad := []VectorPutItem{{MemoryID: "", Vec: []float32{1, 2, 3}}}
+	if err := store.PutBatch(ctx, bad); err == nil {
+		t.Fatal("PutBatch empty id: want error")
+	}
+	if c, _ := store.Count(ctx); c != N {
+		t.Fatalf("post-bad-batch count = %d, want %d (应回滚)", c, N)
+	}
+}
+
+// B2（L-236）· BackfillVectors 在 ≥800 条 pending 下，单次调用一次收敛（不再逐条 Put 超 ctx），
+// Count==N、幂等（二次 vectorized=0）。计时打印供回归对照。
+func TestSQLiteBackendBackfillVectorsLargeBatch(t *testing.T) {
+	ctx := context.Background()
+	b := newPersistBackend(t, filepathTmp(t, "bfl.sqlite"))
+	defer b.Close()
+	sb := b
+	const n = 800
+	for i := 0; i < n; i++ {
+		putVectorMemory(t, sb, sprintfID("bfl", i), "t1", "u1", factText(i), "sqlite:vector")
+	}
+	t0 := time.Now()
+	rep, err := sb.BackfillVectors(ctx, HashEmbedder(32))
+	elapsed := time.Since(t0)
+	if err != nil {
+		t.Fatalf("BackfillVectors (large): %v", err)
+	}
+	if rep.Scanned != n {
+		t.Fatalf("scanned = %d, want %d", rep.Scanned, n)
+	}
+	if rep.Vectorized != n {
+		t.Fatalf("vectorized = %d, want %d", rep.Vectorized, n)
+	}
+	if rep.Failed != 0 {
+		t.Fatalf("failed = %d, want 0", rep.Failed)
+	}
+	if c, _ := sb.vec.Count(ctx); c != n {
+		t.Fatalf("post-backfill count = %d, want %d", c, n)
+	}
+	// 幂等：二次 backfill 不重复增长。
+	rep2, err := sb.BackfillVectors(ctx, HashEmbedder(32))
+	if err != nil {
+		t.Fatalf("BackfillVectors 2nd: %v", err)
+	}
+	if rep2.Vectorized != 0 {
+		t.Fatalf("2nd vectorized = %d, want 0 (idempotent)", rep2.Vectorized)
+	}
+	t.Logf("backfill %d items in one call took %s", n, elapsed)
 }
 
 // ------------------------------------------------------------------
