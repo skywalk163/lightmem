@@ -289,3 +289,38 @@
 4. sqlite-vec（cgo）路线：R26 已决策**默认不做**（破零依赖承诺），备选待业主拍板。
 5. `.env` 的 `GITCODE_TOKEN` 仍失效（401）——下次 gitcode 推送前需更新（`scripts/push_all_remotes.sh` 有排错指引）。
 6. R26 全部改动**未 commit / 未 push**（红线⑧），等业主示意。
+
+## 三·九、R27 收口留痕（2026-10-19→20）
+
+> 轮次：R27「private 租户内强隔离落地（业主裁定执行）+ 夹具隔离 + L-239 收尾」。
+> 基线 `0e7f097`（R26 收口）；**触发**：业主 2026-10-19 深夜对 L-238 下达正式裁定。
+> **门禁**：**PASS 14 / FAIL 0 / SKIP 0**（`_r27_088_gate.log`）；kernel 全量 `go test -count=1 .` ok（36s）。
+> **北极星**：M1=1.0000 / M2=0.2498 / 压缩 35.33% / vetoed=0——`r27_final_holdout` 与 R26 **逐字节相同**（md5 `e98c7839…`）。
+> **P95**：`/search`=35.75ms（红线内）；`/search/vector`=**22.92ms**（25.91 → −11.5%），仍超 19.70ms 红线。
+> 详见 `lightmem.md` §D.3.1（R27 五数）与 §D.14（裁定落地逐条记录）。
+
+| 线 | 交付 | 关键判据 |
+|---|---|---|
+| **T0** | 0.88 对齐 `0e7f097` + PG 独立库 `lightmem_r27_gate` + clean tree 基线 14/0/0 | 门禁 14/0/0；healthz 双 200 |
+| **A** | `canView` + `pgVisibilityPredicate` **两侧同加 tenant 等值约束**；三处 `Get` 不可见统一改 `not found`（规则 1） | 先证伪：新用例修复前三红 → 修复后全绿；PG 真机负样本不可见/正样本可见；solo 空租户零回归 |
+| **B** | 返回码与 admin 旁路审计（只读） | 读侧无 403（谓词过滤→不存在）；写侧 `EnforcePrivateOwner` 403 属入参校验，非跨租户读泄漏；无 admin 读 private 路径 |
+| **C** | `eval/e2e/pg`：`uniqueUser()`（7 处固定 user 唯一化）+ `TestMain` 残留自清 + 声明式正负样本 | **脏库连跑 3× rc=0/0/0**（R26-A 基线 0/1/0 摆动） |
+| **D** | `kernel/visibility_tenant_test.go`（新，4 用例） | 跨租户同 user 读 private = 不存在；负样本缺失 Fatal；PG 真机覆盖 |
+| **E** | `visibleMemoryIDs` 定向取列 + 只反序列化可见性字段（仍复用 `canView`，禁止 SQL 侧另造判断） | `/search/vector` P95 25.91→22.92ms（−11.5%），300×200 与 503 清零保持 |
+| **F** | gate 登记（`visibility_tenant:4`）+ 北极星复跑 + P95 复跑 + D.14/roadmap 留痕 | 五数逐字节持平；门禁 14/0/0；`go.mod`/`go.sum` 零变化 |
+
+### R27 实测锚点
+
+- 门禁：`_r27_088_gate.log`（14/0/0，md5 `5b7b3151…`）；`[6]` 含 `sqlite_vector:15`、`visibility_tenant:4`。
+- 北极星：`eval/reports/r27_final_holdout_20261019-161420.json`（md5 `e98c7839…`，与 R26 逐字节相同）。
+- P95：`eval/reports/r27_p95_search.md`（35.75ms）、`r27_p95_vector.md`（22.92ms，300×200）。
+- 裁定原文与落地边界：`_R27_并行任务书.md` §0；逐条核对：`_R27_收口报告.md`。
+
+### 对后续轮次的输入
+
+1. **（业主拍板）** 是否引入 `platform_shared`/`audit_visible` 新可见性级别（本轮无需求，仅登记）。
+2. **（专题轮）** `/search/vector` P95 22.92ms 仍超 19.70ms：残余为 800 行 data 扫描 + JSON 解析，需评估可见性缓存或冗余列（有分叉风险）。
+3. **（专题轮）** 裁定三主方案「每测试事务 + 回滚」未落地：套件经 `StorageBackend` API 驱动，需后端事务注入重构；当前由「唯一 tenant/user + 残留自清 + 产品侧租户收敛」四重叠加等效达成（实测 3× rc=0）。
+4. **（业主拍板）** 裁定二要求「断言连接非 superuser」：本轮仍用 postgres superuser，建独立非 superuser 角色涉 PG 角色体系与红线③。
+5. ~~PG 主机 `10.0.10.10`~~ 已关闭（R26 收口前已恢复；R27 全程可用）。
+6. R27 改动**已本地 commit，未 push**（红线⑧，等业主示意）；`.env` 的 `GITCODE_TOKEN` 仍失效（401）。
