@@ -44,8 +44,12 @@ import urllib.request
 HTTP_TIMEOUT = 30.0
 
 
-def http_json(url, method="GET", body=None, timeout=HTTP_TIMEOUT):
-    """发一次 HTTP 请求，返回 (status, parsed_json_or_text, elapsed_ms)。"""
+def http_json(url, method="GET", body=None, timeout=HTTP_TIMEOUT, resp_headers=None):
+    """发一次 HTTP 请求，返回 (status, parsed_json_or_text, elapsed_ms)。
+
+    resp_headers：可选 dict，传入则回填响应头（小写键）。
+    R28-C2：bench 用它读 `X-Vector-Cache` 统计缓存命中率（业主裁定一的埋点硬要求）。
+    """
     data = None
     headers = {}
     if body is not None:
@@ -57,9 +61,19 @@ def http_json(url, method="GET", body=None, timeout=HTTP_TIMEOUT):
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read()
             code = resp.status
+            if resp_headers is not None:
+                try:
+                    resp_headers.update({k.lower(): v for k, v in resp.headers.items()})
+                except Exception:
+                    pass
     except urllib.error.HTTPError as e:
         raw = e.read()
         code = e.code
+        if resp_headers is not None:
+            try:
+                resp_headers.update({k.lower(): v for k, v in e.headers.items()})
+            except Exception:
+                pass
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
     try:
         parsed = json.loads(raw.decode("utf-8"))
@@ -157,20 +171,28 @@ def phase_bench(base, rows, endpoint, queries, warmup, topk):
         sample.append(rows[i])
     sample = sample[:queries]
 
-    def one(row):
+    # R28-C2：缓存命中率埋点统计（只统计计时阶段，warmup 不计入，口径与 P95 对齐）。
+    cache_tally = {"hit": 0, "miss": 0, "off": 0, "none": 0, "other": 0}
+
+    def one(row, count_cache=True):
         mem, q, tenant, user = row
+        hdrs = {} if count_cache else None
         if endpoint == "vector":
             url = base + "/search/vector"
             code, _, ms = http_json(url, "POST",
-                                    {"query": q, "tenant_id": tenant, "viewer": user, "top_k": topk})
+                                    {"query": q, "tenant_id": tenant, "viewer": user, "top_k": topk},
+                                    resp_headers=hdrs)
         else:
             qs = urllib.parse.urlencode({"tenant_id": tenant, "q": q, "viewer": user, "top_k": topk})
             code, _, ms = http_json(base + "/search?" + qs, "GET")
+        if hdrs:
+            state = hdrs.get("x-vector-cache", "none")
+            cache_tally[state if state in cache_tally else "other"] += 1
         return code, ms
 
-    # warmup（不计入统计）
+    # warmup（不计入统计，也不计入命中率）
     for row in sample[:warmup]:
-        one(row)
+        one(row, count_cache=False)
 
     lat = []
     codes = {}
@@ -189,6 +211,14 @@ def phase_bench(base, rows, endpoint, queries, warmup, topk):
         "p95_ms": percentile(lat, 95),
         "p99_ms": percentile(lat, 99),
         "max_ms": lat[-1] if lat else float("nan"),
+        # R28-C2 命中率埋点：hit/(hit+miss)；off = 缓存关闭（无意义，不计入分母）
+        "cache_hits": cache_tally["hit"],
+        "cache_misses": cache_tally["miss"],
+        "cache_off": cache_tally["off"],
+        "cache_none": cache_tally["none"],
+        "cache_hit_rate": (float(cache_tally["hit"]) /
+                           float(cache_tally["hit"] + cache_tally["miss"])
+                           if (cache_tally["hit"] + cache_tally["miss"]) > 0 else float("nan")),
     }
     return stats, lat
 
@@ -248,6 +278,18 @@ def main():
     print("mean=%sms p50=%sms p90=%sms p95=%sms p99=%sms max=%sms" % (
         fmt(stats["mean_ms"]), fmt(stats["p50_ms"]), fmt(stats["p90_ms"]),
         fmt(stats["p95_ms"]), fmt(stats["p99_ms"]), fmt(stats["max_ms"])))
+    # R28-C2（业主裁定一）：命中率是「能否宣布红线闭环」的判据，必须显式输出。
+    if args.endpoint == "vector":
+        hits, misses = stats["cache_hits"], stats["cache_misses"]
+        denom = hits + misses
+        rate = stats["cache_hit_rate"]
+        print("cache: hits=%d misses=%d off=%d none=%d hit_rate=%s" % (
+            hits, misses, stats["cache_off"], stats["cache_none"],
+            ("%.2f%%" % (rate * 100.0)) if rate == rate else "n/a"))
+        if denom > 0 and rate == rate and rate < 0.6:
+            print("  ⚠️ 命中率 %.2f%% < 60%%：查询呈长尾分布，缓存兜不住 —— "
+                  "按业主裁定，**不得据此宣布红线闭环**；冗余列/索引 migration 为下一轮必选项。"
+                  % (rate * 100.0))
 
     if args.report:
         lines = []

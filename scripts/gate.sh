@@ -167,7 +167,8 @@ kernel/frontend/backend.go kernel/frontend/passhash.go kernel/frontend/passhash_
 kernel/frontend/pbkdf2.go kernel/frontend/server_test.go \
 kernel/frontend/store.go kernel/frontend/store_test.go \
 kernel/frontend/templates.go kernel/frontend/util.go \
-kernel/visibility_tenant_test.go"
+kernel/visibility_tenant_test.go \
+kernel/pg_superuser_check.go kernel/pg_superuser_check_test.go"
 GOFMT_BAD=""
 for f in $NEW_GO; do
     [ -f "$ROOT/$f" ] || continue
@@ -330,7 +331,7 @@ fi
 COV_FAIL=0
 COV_NOTE=""
 COV_TESTONLY=""
-NEW_FILES="forgetting_drift flush edge_persist edge_persist_pg poison_detect drift_pipeline flush_pipeline backend_qdrant:4 node_role:4 topology:3 connector_app:4 auth:12 mcp:12 workflow:12 lookup:12 reindex:12 access:12 refstore:12 sqlite_vector:15 visibility_tenant:4"
+NEW_FILES="forgetting_drift flush edge_persist edge_persist_pg poison_detect drift_pipeline flush_pipeline backend_qdrant:4 node_role:4 topology:3 connector_app:4 auth:12 mcp:12 workflow:12 lookup:12 reindex:12 access:12 refstore:12 sqlite_vector:15 visibility_tenant:4 pg_superuser_check:4 visindex:3 vector_cache:5"
 for entry in $NEW_FILES; do
     case "$entry" in
         *:*) f="${entry%%:*}"; THRESH="${entry##*:}" ;;
@@ -614,6 +615,46 @@ else
         PASS=$((PASS + 1))
     fi
     rm -f "$PG_LOG" 2>/dev/null || true
+fi
+
+# ---------------------------------------------------------------------------
+# [12] PG 夹具残留检查（R28-B / 业主裁定三·保险二）。
+#
+#     业主裁定原文：「自清失败留垃圾：CI 里加一个『测试后 DB 残留检查』步骤——
+#     跑完测试后查测试前缀的记录数，非零则 fail。这比事后人工发现强。」
+#
+#     口径与 [11] 一致：未配置 PG env → 显式 SKIP（计入汇总，绝不静默当通过）；
+#     已配置 → 残留非零即 FAIL。
+#
+#     **顺序要求**：必须在本套件用例跑完之后。包内用例执行顺序不可靠，
+#     故由本项单独 `-run TestPgFixtureResidue` 复跑一次，确保检的是「跑完之后」。
+# ---------------------------------------------------------------------------
+RES_TEST_FILE="$ROOT/eval/e2e/pg/pg_residue_test.go"
+if [ ! -f "$RES_TEST_FILE" ]; then
+    row '[12] PG 夹具残留检查' SKIP 'pg_residue_test.go 缺失（无残留检查）'
+    SKIP=$((SKIP + 1))
+elif [ -z "$PG_HOST" ] || [ -z "$PG_DB" ]; then
+    row '[12] PG 夹具残留检查' SKIP 'SKIP: PG env not set（LIGHTMEM_PG_HOST / LIGHTMEM_PG_TEST_DB 未配置）'
+    SKIP=$((SKIP + 1))
+else
+    RES_LOG="$(mktemp -t r15_res.XXXXXX 2>/dev/null || echo /tmp/r15_res.$$)"
+    ( cd "$ROOT/eval/e2e/pg" && go test -run 'TestPgFixtureResidue' -count=1 -v . ) > "$RES_LOG" 2>&1
+    RES_RC=$?
+    RES_PASS="$(grep -c '^--- PASS' "$RES_LOG" 2>/dev/null || true)"
+    [ -z "$RES_PASS" ] && RES_PASS=0
+    if [ $RES_RC -ne 0 ]; then
+        row '[12] PG 夹具残留检查' FAIL "测试残留非零或检查失败（详见记录）"
+        record 'PG 夹具残留检查' "$(tail -40 "$RES_LOG")"
+        FAIL=$((FAIL + 1))
+    elif [ "$RES_PASS" -eq 0 ]; then
+        row '[12] PG 夹具残留检查' FAIL "已配置 PG 但残留检查 0 项执行（检查连接与库名）"
+        record 'PG 夹具残留检查' "$(tail -40 "$RES_LOG")"
+        FAIL=$((FAIL + 1))
+    else
+        row '[12] PG 夹具残留检查' PASS "测试残留为 0（${RES_PASS} 项检查通过）"
+        PASS=$((PASS + 1))
+    fi
+    rm -f "$RES_LOG" 2>/dev/null || true
 fi
 
 # ---------------------------------------------------------------------------

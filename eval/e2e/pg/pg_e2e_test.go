@@ -251,6 +251,60 @@ func uniqueUser(tag string) string {
 	return fmt.Sprintf("u_%s_%d_%d", tag, os.Getpid(), time.Now().UnixNano())
 }
 
+// purgeTenants 删除指定 tenant 下的全部记忆（R28-B teardown 用）。
+//
+// 与 purgeOwnResidue（按 source 标记、套件级兜底）互补：本函数按 **tenant 精确**
+// 清理，只删本用例的租户，不动其它用例 / 其它来源的数据——因此即使将来引入
+// t.Parallel 并发执行也不会互相误删（并发污染防护）。
+func purgeTenants(cfg *pgTestConfig, tenants ...string) error {
+	if len(tenants) == 0 {
+		return nil
+	}
+	dsn := fmt.Sprintf("host=%s port=%d user=%s dbname=%s sslmode=disable",
+		cfg.host, cfg.port, cfg.user, cfg.dbname)
+	if cfg.password != "" {
+		dsn += " password=" + cfg.password
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer db.Close()
+	if err := db.Ping(); err != nil {
+		return fmt.Errorf("ping %s/%s: %w", cfg.host, cfg.dbname, err)
+	}
+	for _, tn := range tenants {
+		if tn == "" {
+			continue
+		}
+		if _, err := db.Exec(`DELETE FROM memories WHERE tenant_id = $1`, tn); err != nil {
+			return fmt.Errorf("delete tenant %s: %w", tn, err)
+		}
+	}
+	return nil
+}
+
+// cleanupTenantsOnExit 注册 t.Cleanup：用例结束（PASS / FAIL / panic 皆然）时删除
+// 本用例 tenant 的全部记忆。
+//
+// R28-B（业主裁定三·保险一）：「夹具的创建和清理要包在 try/finally 或 teardown 里，
+// 确保**断言失败时**也执行清理」。此前只有 TestMain 里的 purgeOwnResidue（套件级
+// 兜底，只在开跑前清），断言失败后本轮残留会一直留到下一轮——本函数是**用例级**保证。
+func cleanupTenantsOnExit(t *testing.T, tenants ...string) {
+	t.Helper()
+	cfg := loadPgTestConfigOrNil()
+	if cfg == nil {
+		return
+	}
+	t.Cleanup(func() {
+		if err := purgeTenants(cfg, tenants...); err != nil {
+			// 清理失败不置用例为 FAILED（避免掩盖真实失败原因），但必须留痕：
+			// 漏网的残留会由 CI 的 [12] 残留检查捕获。
+			t.Logf("警告：用例 teardown 清理失败（将由 CI [12] 残留检查捕获）：%v", err)
+		}
+	})
+}
+
 // makeTestMemory 构造一条确定性的测试记忆。
 // tenant/user/id 由调用方传入，保证用例间隔离。
 func makeTestMemory(id, tenant, user, fact string) *kernel.Memory {
@@ -282,6 +336,7 @@ func TestPgUpsertGetRoundtrip(t *testing.T) {
 	ctx := context.Background()
 
 	tenant := uniqueTenant("roundtrip")
+	cleanupTenantsOnExit(t, tenant)
 	user := uniqueUser("roundtrip")
 	memID := uniqueID("mem_roundtrip", "001")
 	m := makeTestMemory(memID, tenant, user, "the sky is blue on a clear day")
@@ -365,6 +420,7 @@ func TestPgQueryVectorSearch(t *testing.T) {
 	ctx := context.Background()
 
 	tenant := uniqueTenant("search")
+	cleanupTenantsOnExit(t, tenant)
 	user := uniqueUser("search")
 
 	// 写入 20 条记忆，其中一条是"target"
@@ -461,6 +517,7 @@ func TestPgPersistenceAcrossRestart(t *testing.T) {
 	ctx := context.Background()
 
 	tenant := uniqueTenant("persist")
+	cleanupTenantsOnExit(t, tenant)
 	user := uniqueUser("persist")
 	memID := uniqueID("mem_persist", "001")
 	m := makeTestMemory(memID, tenant, user, "this fact must survive a backend restart")
@@ -517,13 +574,16 @@ func TestPgTenantIsolation(t *testing.T) {
 	ctx := context.Background()
 
 	// tenant A 的私有记忆
-	mA := makeTestMemory(uniqueID("mem_iso", "a"), uniqueTenant("tenantA"), "u_a", "tenant A secret fact")
+	tenantA := uniqueTenant("tenantA")
+	tenantB := uniqueTenant("tenantB")
+	cleanupTenantsOnExit(t, tenantA, tenantB)
+	mA := makeTestMemory(uniqueID("mem_iso", "a"), tenantA, uniqueUser("iso_a"), "tenant A secret fact")
 	if err := be.Upsert(ctx, mA); err != nil {
 		t.Fatalf("Upsert tenantA: %v", err)
 	}
 
 	// tenant B 的用户去 Get tenant A 的记忆 → 应失败（不可见）
-	_, err := be.Get(ctx, mA.MemoryID, "u_b", uniqueTenant("tenantB"))
+	_, err := be.Get(ctx, mA.MemoryID, uniqueUser("iso_b"), tenantB)
 	if err == nil {
 		t.Error("Get cross-tenant: expected error, got nil (memory leaked across tenants)")
 	}
@@ -536,8 +596,9 @@ func TestPgVisibility(t *testing.T) {
 	ctx := context.Background()
 
 	tenant := uniqueTenant("vis")
-	owner := "u_owner"
-	other := "u_other"
+	cleanupTenantsOnExit(t, tenant)
+	owner := uniqueUser("vis_owner")
+	other := uniqueUser("vis_other")
 
 	memID := uniqueID("mem_vis", "001")
 	m := makeTestMemory(memID, tenant, owner, "owner-only private fact")
@@ -569,6 +630,7 @@ func TestPgGDPR(t *testing.T) {
 	ctx := context.Background()
 
 	tenant := uniqueTenant("gdpr")
+	cleanupTenantsOnExit(t, tenant)
 	user := uniqueUser("gdpr")
 
 	// 写入 3 条
@@ -617,6 +679,7 @@ func TestPgIdempotencyKey(t *testing.T) {
 	ctx := context.Background()
 
 	tenant := uniqueTenant("idem")
+	cleanupTenantsOnExit(t, tenant)
 	user := uniqueUser("idem")
 
 	// 第一次 Upsert
@@ -663,6 +726,7 @@ func TestPgBackfillVectors(t *testing.T) {
 	ctx := context.Background()
 
 	tenant := uniqueTenant("backfill")
+	cleanupTenantsOnExit(t, tenant)
 	user := uniqueUser("backfill")
 
 	// 写入一条 pending 状态的记忆
@@ -723,6 +787,7 @@ func TestPgConcurrent(t *testing.T) {
 	ctx := context.Background()
 
 	tenant := uniqueTenant("conc")
+	cleanupTenantsOnExit(t, tenant)
 	user := uniqueUser("conc")
 
 	var wg sync.WaitGroup

@@ -2327,8 +2327,69 @@ R14 任务书 §九.3 写"holdout_v2 全 L1 且无 entity / recorded_at"，其�
 
 | # | 事项 | 接手方 |
 |---|---|---|
-| 1 | `/search/vector` P95=22.92ms 仍超 19.70ms 红线 | 专题轮（缓存/冗余列评估） |
-| 2 | 裁定二：断言连接仍为 superuser（未建非 superuser 角色） | 业主拍板（涉 PG 角色体系，红线③） |
-| 3 | 裁定三：每测试事务回滚未落地 | 专题轮 |
-| 4 | R27 改动**未 push**（已本地 commit，红线⑧） | 业主示意后 `scripts/push_all_remotes.sh` |
+| 1 | `/search/vector` P95=22.92ms 仍超 19.70ms 红线 | **R28 已达标**（15.95ms）——但归因是内存索引，非缓存；见 §D.15 |
+| 2 | 裁定二：断言连接仍为 superuser（未建非 superuser 角色） | **R28 已闭环**（业主裁定：不擦红线③；`lightmem_app` + 启动断言 + 服务已切换） |
+| 3 | 裁定三：每测试事务回滚未落地 | 专题轮（R28 补了两道保险，事务注入仍为技术债） |
+| 4 | R27 改动**未 push** | **已推三远端**（2026-10-20 凌晨：origin/gitcode `9e3092e`，github `5e4b244c31`） |
 | 5 | `.env` 的 `GITCODE_TOKEN` 仍失效（401） | 业主更新 token |
+
+### D.15 业主裁定落地：非 superuser 断言 + 预加载索引/缓存埋点 + 夹具两道保险（R28 新增）
+
+> 来源：业主 2026-10-20 对 R27 三项未闭环的**逐条裁定**（`_R28_并行任务书.md` §0）+ R28 执行。
+> 验证环境：192.168.0.88（FreeBSD 15.1，go1.25.14）；PG 18.6 @ 10.0.10.10。基线 `9e3092e`（R27 收口）。
+> **门禁**：**PASS 15 / FAIL 0 / SKIP 0**（新增 `[12] PG 夹具残留检查`；`_r28_088_gate.log` md5 `e67e93afe82d7fcde0b3f70fb2bd26de`）。
+> **北极星**：M1=1.0000 / M2=0.2498 / 压缩 35.33% / vetoed=0——`r28_final_holdout_20261019-171400.json`
+> 与 R27 报告**逐字节相同**（md5 `e98c7839dd0060ad7d83d7d131b272f9`）。
+
+#### L-240 · 应用以 superuser 连接、且无运行时断言（**已关闭**，A 线；业主裁定：安全底线）
+
+| 字段 | 内容 |
+|---|---|
+| 现象（业主必答题实测） | 服务连接角色 = **`postgres`，`rolsuper=t`**（`/etc/rc.conf:64`）；可登录角色只有 postgres |
+| 裁定 | 「非 superuser 断言必须做，这是安全底线，不是可选项」；但**不擦红线③**——拆成三件独立的事 |
+| 处置 | ①`kernel/pg_superuser_check.go`（新）：启动期 `SELECT rolsuper FROM pg_roles WHERE rolname = current_user`，接线在 `newPgBackend` 的 Ping 之后、ready 之前；策略 `LIMS_PG_SUPERUSER_CHECK`（默认 **fail-fast**，`warn` 过渡，`off` 显式关闭；自检查询失败 **fail-closed**）②`deploy/init-roles.sql`（bootstrap，**与 `migrations/` 物理隔离**）：`CREATE ROLE lightmem_app ... NOSUPERUSER` + CONNECT/USAGE/CREATE/表 DML 授权 + 应用表 owner 移交 ③`/etc/rc.conf` + `gate.env` 连接串切换（配置变更，代码零改动，均已备份 `.bak.r28`） |
+| 授权验证（业主点名） | 切换后逐层暴露并补齐三道缺口：`permission denied for schema public`（缺 CREATE，因应用确有自建表 DDL `authn_store.go`）→ `GRANT CREATE`；`must be owner of table ...`（PG 对**已存在**对象执行 `CREATE ... IF NOT EXISTS` 仍先做权限检查）→ owner 移交 `lightmem_app`；**无 sequence**（`memory_id` 为 text）→ 无需 GRANT |
+| 验收 | `lightmem_app` 下 `EdgePersistPg` **13/13 全 PASS**；服务重启后 `/healthz` = `ok`；每个连接建立时日志 `[pg-superuser-check] policy=fail: current_user 非 superuser — 通过` |
+| 行为变更 | 默认 fail-fast → **未切换连接串的 superuser 部署将起不来**（安全底线的预期行为；本轮已配套 bootstrap + 实测切换完成） |
+
+#### L-239（续）· `/search/vector` P95 超红线（**已达标**，C 线；但**不得据缓存宣布闭环**）
+
+| 配置（同机单实例） | P95 |
+|---|---|
+| 基线（本轮优化全关） | **32.96ms** |
+| **仅内存索引**（缓存关） | **15.77ms** ← 主贡献 |
+| 默认（索引 + 缓存） | **15.95ms**（红线 19.70ms 内） |
+
+- 业主判断得到实测支持：**瓶颈在每行反序列化，不在扫描行数**——`visibleMemoryIDs` 每查询 800 次 `json.Unmarshal`；
+  改为「一次解析进内存（`kernel/visindex.go`）+ 之后遍历内存条目」后 P95 减半。判定**仍走 `canView`**（单一真源，索引只提供候选集）。
+- **缓存命中率 6.67%（20/300），远低于业主设定的 60% 阈值**：bench 为 300 条去重长尾查询，缓存兜不住。
+  按业主裁定：**不得用缓存把问题盖住宣布闭环** → **冗余列 + 索引 migration 仍登记为下一轮必选项**
+  （定位从「救火」转为「巩固 + 支撑规模增长」）。bench 已内建「命中率 < 60% 即告警」判据。
+
+#### 裁定三 · 夹具两道保险（**已闭环**，B 线）
+
+- **并发污染**：复查发现 R27 只覆盖了主文件——`pg_visibility_e2e_test.go` / `pg_bench_test.go` 仍残留大量固定 user
+  （`u_owner_a`、`u_sh_reader`、`u_bench`…）。本轮**全部唯一化**，grep 复查 `"u_xxx"` 字面量**归零**。
+- **断言失败也清理**：新增 `cleanupTenantsOnExit(t, tenants...)`（按 tenant 精确清理，并发安全），
+  在 12 个写库用例注册 `t.Cleanup`；`TestMain` 的 `purgeOwnResidue` 保留为套件级兜底。
+- **自清失败留垃圾**：新增 `eval/e2e/pg/pg_residue_test.go`（三路前缀统计）+ gate.sh **`[12] PG 夹具残留检查`**。
+  **已证伪**：人为插入残留 → FAIL（打印定位样例）→ 清理后 PASS。
+
+#### L-241（新登记，本轮不做）· PG 未启用 RLS
+
+实测 `public.memories.rowsecurity = false`、`pg_policies` 为空 → 所谓「superuser 绕过 RLS」在本部署实为
+**「无 RLS 可绕」**：多租户隔离**完全依赖应用层 SQL 谓词**，数据库层零深度防御。
+启用 RLS 属 schema 变更（需按租户设计 policy 与 `TO` 子句）→ 登记为下一轮 migration 候选。
+
+#### 附 · R28 未闭环事项
+
+| # | 事项 | 接手方 |
+|---|---|---|
+| 1 | 缓存命中率 6.67% < 60% → **冗余列/索引 migration 为下一轮必选项**（红线数值已由内存索引达标） | 下一轮（走 migration 审批） |
+| 2 | **L-241**：PG 未启用 RLS（数据库层零深度防御） | 下一轮 migration 候选 |
+| 3 | 裁定三：事务注入重构（每测试事务 + 回滚） | 技术债，下一轮 |
+| 4 | 已知缺口（按裁定原话登记）：「测试间无事务隔离，依赖命名空间隔离」——并发度提升后需重新评估 | 下一轮 |
+| 5 | `/search` P95 44.97ms（环境漂移；关掉本轮优化仍 48.92ms → 与 R28 无关），逼近红线 50.12ms | 下一轮复测 |
+| 6 | 新观察：PG 走 **trust 免密**，`lightmem_app` 虽设口令但认证不强制 → 能连 5432 者可冒充该角色 | 业主拍板（收紧 pg_hba） |
+| 7 | R28 改动**未 push**（已本地 commit，红线⑧） | 业主示意后推三远端 |
+| 8 | `.env` 的 `GITCODE_TOKEN` 仍 401 | 业主更新 token |

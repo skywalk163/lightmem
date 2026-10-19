@@ -37,6 +37,12 @@ type sqliteBackend struct {
 	// vec 是 solo 档纯 Go 向量存储（R25-B · L-232）。与后端共享同一 *sql.DB 与
 	// mu，不另开连接、不引入第二真源；nil 仅在极端装配失败时出现（此处必非 nil）。
 	vec *SQLiteVectorStore
+
+	// visIdx 是可见性内存索引（R28-C1 / L-239 续）：把 (memory_id → 可见性字段)
+	// 解析一次放内存，避免每次 /search/vector 都做 800 次 json.Unmarshal。
+	// 只提供候选集，最终判定仍走 canView（单一真源）；默认启用，
+	// LIMS_VIS_INDEX=0 可关闭回退到原 SQL 全量路径。
+	visIdx *visIndex
 }
 
 // newSQLiteBackend 装配 SQLite 后端。
@@ -96,6 +102,8 @@ func newSQLiteBackend(ctx context.Context, cfg *StorageConfig) (StorageBackend, 
 		path: path,
 		db:   db,
 	}
+	// R28-C1：可见性内存索引（写路径同步维护，见 Upsert / DeleteByID / DeleteByScope）。
+	b.visIdx = newVisIndex()
 	// R25-B · L-232：装配 solo 档纯 Go 向量存储（共享同一 *sql.DB 与 mu）。
 	b.vec = newSQLiteVectorStore(b.db, &b.mu)
 	if err := b.vec.ensureSchema(ctx); err != nil {
@@ -190,7 +198,35 @@ func (b *sqliteBackend) Upsert(ctx context.Context, m *Memory) error {
 	if err != nil {
 		return fmt.Errorf("sqlite upsert: %w", err)
 	}
+	// R28-C1：写路径同步维护可见性索引（仍持 b.mu，与 DB 写入原子串行）。
+	if b.visIdx != nil {
+		b.visIdx.put(visibilityFieldsOf(m))
+	}
 	return nil
+}
+
+// visIndexEnabled 报告是否启用可见性内存索引（R28-C1，默认开）。
+// LIMS_VIS_INDEX=0|off|false 时回退到 R27-E 的定向 SELECT 路径。
+func visIndexEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("LIMS_VIS_INDEX"))) {
+	case "0", "off", "false", "disable", "disabled":
+		return false
+	default:
+		return true
+	}
+}
+
+// visibilityFieldsOf 抽取可见性判定所需的全部字段（R28-C1）。
+// 与 r27VisibilityFields 一一对应，不裁剪——索引喂给 canView 的载体必须完整。
+func visibilityFieldsOf(m *Memory) r27VisibilityFields {
+	return r27VisibilityFields{
+		MemoryID:          m.MemoryID,
+		TenantID:          m.TenantID,
+		UserID:            m.UserID,
+		Visibility:        m.Visibility,
+		SharedWithTenants: m.SharedWithTenants,
+		Permission:        m.Permission,
+	}
 }
 
 func (b *sqliteBackend) Get(ctx context.Context, memoryID, viewer, tenant string) (*Memory, error) {
@@ -371,6 +407,24 @@ type r27VisibilityFields struct {
 }
 
 func (b *sqliteBackend) visibleMemoryIDs(ctx context.Context, viewer, tenant string) (map[string]bool, error) {
+	// R28-C1（L-239 续，业主裁定一·预加载热数据）：默认走**内存可见性索引**——
+	// 首次调用时全量解析一次 data（800 行 800 次 Unmarshal），此后每次查询只遍历
+	// 内存条目做判定，**消除每查询的反序列化开销**。这是本轮对 22.92ms 的**真修复**，
+	// 不依赖缓存命中率（与 C2 的结果缓存互补）。
+	//
+	// 调用前提：本方法只被 VectorSearch 调用，而 VectorSearch 在进入前已释放 b.mu，
+	// 故此处可以安全获取 b.mu 做索引构建（无重入死锁）。
+	// LIMS_VIS_INDEX=0 → 回退到下方 R27-E 的定向 SELECT 路径（语义等价，仅更慢）。
+	if b.visIdx != nil && visIndexEnabled() {
+		b.mu.Lock()
+		err := b.visIdx.ensureFromDB(ctx, b.db)
+		b.mu.Unlock()
+		if err != nil {
+			return nil, fmt.Errorf("sqlite visible index: %w", err)
+		}
+		return b.visIdx.visible(viewer, tenant), nil
+	}
+
 	// R27-E（L-239）：定向取 memory_id + data，只反序列化可见性字段。
 	// ⚠️ 可见性判定**必须**仍走 canView（与 Query/Get 同一真源）——禁止在 SQL 侧
 	// 用 json_extract 另造可见性判断，那是 R21-B 的 G8 分叉教训（两侧分叉 = 假绿）。
@@ -568,6 +622,10 @@ func (b *sqliteBackend) DeleteByScope(ctx context.Context, tenant, userID string
 			return nil, fmt.Errorf("sqlite delete by scope: %w", err)
 		}
 	}
+	// R28-C1：写路径同步维护可见性索引（仍持 b.mu）。
+	if b.visIdx != nil {
+		b.visIdx.removeMany(ids)
+	}
 	return ids, nil
 }
 
@@ -580,6 +638,10 @@ func (b *sqliteBackend) DeleteByID(ctx context.Context, memoryID string) error {
 	defer b.mu.Unlock()
 	if _, err := b.db.ExecContext(ctx, `DELETE FROM memories WHERE memory_id=?`, memoryID); err != nil {
 		return fmt.Errorf("sqlite delete by id: %w", err)
+	}
+	// R28-C1：写路径同步维护可见性索引（仍持 b.mu）。
+	if b.visIdx != nil {
+		b.visIdx.remove(memoryID)
 	}
 	return nil
 }

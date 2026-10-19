@@ -314,26 +314,48 @@ func (s *APIServer) handleVectorSearch(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	res, err := s.backend.VectorSearch(ctx, QueryParams{
+
+	qp := QueryParams{
 		TenantID: req.TenantID,
 		Viewer:   req.Viewer,
 		Vector:   vec,
 		TopK:     req.TopK,
-	})
-	if err != nil {
-		// §4.2 降级契约：向量检索失败 → 503 + 提示降级。
-		// R25-B · L-232：区分「solo 档无向量数据」与「后端不支持」——
-		// 前者给出明确补救建议（先 /vector/backfill 补向量），后者仅提示降级。
-		resp := map[string]string{
-			"error":     err.Error(),
-			"downgrade": "use GET /search?q=...",
-		}
-		if strings.Contains(err.Error(), "no vectors stored") {
-			resp["suggestion"] = "run POST /vector/backfill to populate solo vectors, then retry /search/vector"
-		}
-		writeJSON(w, http.StatusServiceUnavailable, resp)
-		return
 	}
+	// R28-C2（业主裁定一）：结果缓存 LRU + TTL，命中率通过响应头
+	// `X-Vector-Cache: hit|miss|off` 暴露，供 bench 统计（埋点是裁定硬要求）。
+	// 语义红线：缓存只加速，**不改变结果集**——key 覆盖全部影响结果的入参。
+	cacheState := "off"
+	cacheOn := vectorCacheEnabled()
+	var res []QueryResult
+	if cacheOn {
+		if cached, ok := globalVectorCache.get(vectorCacheKey(qp), time.Now()); ok {
+			res, cacheState = cached, "hit"
+		} else {
+			cacheState = "miss"
+		}
+	}
+	if res == nil {
+		var err error
+		res, err = s.backend.VectorSearch(ctx, qp)
+		if err != nil {
+			// §4.2 降级契约：向量检索失败 → 503 + 提示降级。
+			// R25-B · L-232：区分「solo 档无向量数据」与「后端不支持」——
+			// 前者给出明确补救建议（先 /vector/backfill 补向量），后者仅提示降级。
+			resp := map[string]string{
+				"error":     err.Error(),
+				"downgrade": "use GET /search?q=...",
+			}
+			if strings.Contains(err.Error(), "no vectors stored") {
+				resp["suggestion"] = "run POST /vector/backfill to populate solo vectors, then retry /search/vector"
+			}
+			writeJSON(w, http.StatusServiceUnavailable, resp)
+			return
+		}
+		if cacheOn {
+			globalVectorCache.put(vectorCacheKey(qp), res, time.Now())
+		}
+	}
+	w.Header().Set("X-Vector-Cache", cacheState)
 	writeJSON(w, http.StatusOK, res)
 }
 
