@@ -52,11 +52,11 @@ func TestHashAndVerifyPassword(t *testing.T) {
 func TestVerifyPasswordMalformed(t *testing.T) {
 	bad := []string{
 		"", "plaintext", "pbkdf2-sha256$1$zz$zz", // 非法 hex
-		"pbkdf2-sha256$abc$00$00",               // 非整数迭代
-		"pbkdf2-sha256$0$00$00",                 // 迭代 0
-		"pbkdf2-sha256$-5$00$00",                // 负迭代
-		"pbkdf2-sha256$1000$",                   // 缺段
-		"bcrypt$10$xx$yy",                       // 异前缀
+		"pbkdf2-sha256$abc$00$00", // 非整数迭代
+		"pbkdf2-sha256$0$00$00",   // 迭代 0
+		"pbkdf2-sha256$-5$00$00",  // 负迭代
+		"pbkdf2-sha256$1000$",     // 缺段
+		"bcrypt$10$xx$yy",         // 异前缀
 	}
 	for _, s := range bad {
 		if verifyPassword("whatever", s) {

@@ -39,16 +39,16 @@ type OryKratosConfig struct {
 
 // KratosIdentity 是 whoami 响应里 identity 的解析结构（只取需要的字段）。
 type KratosIdentity struct {
-	ID       string                 `json:"id"`
-	SchemaID string                 `json:"schema_id"`
-	Traits   map[string]any         `json:"traits"`
+	ID       string         `json:"id"`
+	SchemaID string         `json:"schema_id"`
+	Traits   map[string]any `json:"traits"`
 }
 
 // KratosSession 是 `GET /sessions/whoami` 的响应。
 type KratosSession struct {
-	Active   bool            `json:"active"`
-	ID       string          `json:"id"`
-	Identity KratosIdentity  `json:"identity"`
+	Active    bool           `json:"active"`
+	ID        string         `json:"id"`
+	Identity  KratosIdentity `json:"identity"`
 	ExpiresAt string         `json:"expires_at"`
 }
 
