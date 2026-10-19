@@ -250,7 +250,8 @@
 
 ### 对后续轮次的输入
 
-1. **R25 全部改动未 commit / 未 push**（红线⑧）→ 业主示意后统一提交推送三远端。
+1. ~~R25 全部改动未 commit / 未 push~~ **已推送**（2026-10-19 业主示意后）：origin/gitea = gitcode = `82d31e0`（`git ls-remote` 复核一致）；github = `5157d53ba0`（git 协议被代理 502 拦 → inline API 通道内容等价，tree `0a693558b9…` 与 `82d31e0` 逐字节相同，复跑「无改动，跳过」）。
 2. **多租户向量预筛候选**：solo 向量检索全局 top-k 后才过滤可见性，双租户语料下 5% 查询降级（D.12 附·观察 2）；solo 单租户设计下不影响生产，引入多租户时再议。
 3. sqlite-vec 备选路线（需 cgo，破零依赖承诺）仍待业主拍板。
 4. 门禁 `[11]` PG 真机往返默认 SKIP（env 未配）；C 线已单独真机闭环，需全量 PG 门禁时 export 环境变量。
+5. `.env` 的 `GITCODE_TOKEN` 已失效（API 401）——本次 gitcode 推送靠 GCM 缓存凭据；**下次 gitcode 推送前需更新该 token**。
