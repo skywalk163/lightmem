@@ -2087,4 +2087,5 @@ R14 任务书 §九.3 写"holdout_v2 全 L1 且无 entity / recorded_at"，其�
 | 4 | B/C 线管理端点（`/admin/reconcile`、`/admin/reindex`、`/admin/lifecycle/run`）已按开关接线但**默认关** | 运维按需开启 |
 | 5 | 安装脚本 kill 后未等端口释放 | 下一轮 / 运维 |
 
-> **推送状态**：R24 全部改动**未 commit、未 push**，等业主示意（红线⑧）。
+
+> **推送状态**：已于 2026-10-19 推送。commit `7cb0f83`（34 files，+7235/−38）；origin/gitea 与 gitcode 的 main 均为 `7cb0f83`（`git ls-remote` 复核一致）；github 因历史为「内容等价但 SHA 不同」的重放版，采用**非破坏性 cherry-pick** 同步，其 main 为 `f5e172b`（tree `ba38966...` 与 `7cb0f83` 的 tree 逐字节相同，已核对）。
