@@ -110,10 +110,10 @@ func BenchmarkPgVectorSearch(b *testing.B) {
 		_ = be.Upsert(ctx, m)
 	}
 	type backfiller interface {
-		BackfillVectors(ctx context.Context, embed func(string) ([]float32, error)) error
+		BackfillVectors(ctx context.Context, embed func(string) ([]float32, error)) (kernel.BackfillReport, error)
 	}
 	bf := be.(backfiller)
-	_ = bf.BackfillVectors(ctx, benchEmbed)
+	_, _ = bf.BackfillVectors(ctx, benchEmbed)
 
 	// 查询向量
 	queryVec, _ := benchEmbed("quantum physics vector search test")

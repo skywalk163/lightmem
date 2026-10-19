@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/pprof"
@@ -154,6 +155,47 @@ func main() {
 	cons.SetOnRunOnce(func(rep kernel.ConsolidationReport) {
 		metrics.RecordConsolidate(rep.RanAt)
 	})
+
+	// 5b) R24-C：访问追踪器（L-223）+ 生命周期引擎（L-224）接线。
+	//     **默认全关**：两个开关皆未设时不注入、不注册路由、不起定时器，
+	//     逐位保持 c908091 行为（红线：新能力默认关）。
+	//
+	//     与 A 线的接缝：A 线已在 RecallAndFuse 返回前调用 s.NoteRecall(ids)，
+	//     且 access==nil 时 no-op；这里注入 tracker 后即自动承接命中计数。
+	//     `router_mem.go` 归 A 线独占，C 线不改它。
+	accessTracker := kernel.NewAccessTracker(accessTrackerCapacity())
+	if os.Getenv("LIMS_ACCESS_TRACK") == "1" {
+		srv.SetAccessTracker(accessTracker)
+		log.Printf("[boot] R24-C access tracker enabled (capacity=%d, tau=7d)", accessTrackerCapacity())
+	}
+	// 5c) 访问计数落库定时器（默认关；空/非法值=不启用）
+	if v := os.Getenv("LIMS_ACCESS_FLUSH_INTERVAL"); v != "" {
+		if d, derr := time.ParseDuration(v); derr == nil && d > 0 {
+			go func() {
+				ticker := time.NewTicker(d)
+				defer ticker.Stop()
+				for range ticker.C {
+					if n, err := accessTracker.Flush(context.Background(), backend, ""); err != nil {
+						log.Printf("[access] flush failed: %v", err)
+					} else if n > 0 {
+						log.Printf("[access] flushed %d memories", n)
+					}
+				}
+			}()
+			log.Printf("[boot] R24-C access flush timer enabled: %s", d)
+		} else {
+			log.Printf("[boot] invalid LIMS_ACCESS_FLUSH_INTERVAL=%q, disabled", v)
+		}
+	}
+	// 5d) B/C 两线的管理端点：按开关自注册（默认不启用 → routeHooks 为空 → 零回归）。
+	if os.Getenv("LIMS_ADMIN_REINDEX") == "1" {
+		kernel.EnableReindexRoutes(srv) // B 线：/admin/reconcile、/admin/reindex
+		log.Printf("[boot] R24-B reindex admin endpoints enabled")
+	}
+	if os.Getenv("LIMS_LIFECYCLE_INTERVAL") != "" || os.Getenv("LIMS_ADMIN_LIFECYCLE") == "1" {
+		kernel.EnableLifecycleRoutes(srv) // C 线：/admin/lifecycle/run
+		log.Printf("[boot] R24-C lifecycle admin endpoint enabled")
+	}
 
 	// 6) 装配 HTTP mux：外层 mux 承载 /healthz、/metrics、pprof；
 	//    业务路由整体挂载到 "/"（逐位保留 router.go 全部端点）。
@@ -291,4 +333,19 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// accessTrackerCapacity 访问追踪器的待落库条目上限（LIMS_ACCESS_CAPACITY）。
+// <=0 表示不限（由 Flush 频率兜底）；非法值回退到 10000，避免静默无界增长。
+func accessTrackerCapacity() int {
+	v := os.Getenv("LIMS_ACCESS_CAPACITY")
+	if v == "" {
+		return 10000
+	}
+	var n int
+	if _, err := fmt.Sscanf(v, "%d", &n); err != nil || n < 0 {
+		log.Printf("[boot] invalid LIMS_ACCESS_CAPACITY=%q, using 10000", v)
+		return 10000
+	}
+	return n
 }

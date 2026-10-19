@@ -2,7 +2,7 @@
 // 真源：lightmem.md §3.1「MemoryRouter」、§3.4「多信号检索」、§2.2「四层温度分层」。
 //
 // 职责边界：
-//   - A1（本文件）：规则意图识别（不调 LLM）+ 四层并行召回，输出未融合候选集。
+//   - A1（本文件）：规则意图识别（不调 LLM）+ 四层顺序召回，输出未融合候选集。
 //   - A2（rank_fusion.go）：对候选集做多信号 rank 融合（由 RecallAndFuse 调用）。
 //
 // 只增不改：本文件不修改 model.go 既有 Schema 字段语义。
@@ -160,6 +160,9 @@ type RetrievalTrace struct {
 	Mode          string                 `json:"mode"`
 	TotalCands    int                    `json:"total_candidates"`
 	FilteredCands int                    `json:"filtered_candidates"`
+	// R24-A：快车道标记（只增字段，omitempty；开关关 / 未回退时不输出，逐位零回归）。
+	FastPath       bool   `json:"fast_path,omitempty"`
+	FallbackReason string `json:"fallback_reason,omitempty"`
 }
 
 // TraceLayer 单层召回的 trace。
@@ -207,7 +210,7 @@ type TraceRankedCandidate struct {
 // defaultRecallTopK 每层默认 top-k（任务书 §2.3）。
 const defaultRecallTopK = 5
 
-// Route 执行 A1：意图识别 + 四层并行召回，返回未融合候选集。
+// Route 执行 A1：意图识别 + 四层顺序召回，返回未融合候选集。
 func (s *APIServer) Route(ctx context.Context, rc RouterContext) (RouterResult, error) {
 	res := RouterResult{
 		Intent:       ClassifyIntent(rc.Text),
@@ -223,7 +226,19 @@ func (s *APIServer) Route(ctx context.Context, rc RouterContext) (RouterResult, 
 
 // RecallAndFuse 执行 A1+A2：跨层召回后做多信号 rank 融合。
 // FeedbackLoop：过滤用户拒绝的记忆（rejectedIDs）。
+// R24-A：入口先尝试 L2 确定性查找表快车道（开关默认关，关闭时逐位零回归）；
+// 唯一精确命中直接返回（不跑融合）；否则回退慢车道并在 trace 标记回退原因。
 func (s *APIServer) RecallAndFuse(ctx context.Context, rc RouterContext) (RouterResult, error) {
+	// R24-A：快车道分流（仅 lookupEnabled=true 时生效；回退原因留给慢车道 trace 标记）。
+	var lookupFallback string
+	if s.lookupEnabled {
+		if fastRes, hit, reason := s.tryLookupFastPath(ctx, rc); hit {
+			s.NoteRecall(fusedIDsOf(fastRes.Fused))
+			return fastRes, nil
+		} else {
+			lookupFallback = reason
+		}
+	}
 	res, err := s.Route(ctx, rc)
 	if err != nil {
 		return res, err
@@ -348,6 +363,12 @@ func (s *APIServer) RecallAndFuse(ctx context.Context, rc RouterContext) (Router
 
 	res.Trace = trace
 
+	// R24-A：回退慢车道时标记 trace（仅开关开启且发生回退时写入；否则 omitempty 不输出）。
+	if s.lookupEnabled && lookupFallback != "" {
+		res.Trace.FastPath = false
+		res.Trace.FallbackReason = lookupFallback
+	}
+
 	if len(fused) == 0 {
 		res.Mode = "empty"
 	} else if fused[0].RequiresConfirmation {
@@ -359,10 +380,12 @@ func (s *APIServer) RecallAndFuse(ctx context.Context, rc RouterContext) (Router
 	} else {
 		res.Mode = "unique"
 	}
+	// R24-A：命中接缝（C 线 NoteRecall 实现；access 为 nil 时 no-op）。
+	s.NoteRecall(fusedIDsOf(fused))
 	return res, nil
 }
 
-// RecallLayers 四层并行召回（§2.2 + §2.3）。
+// RecallLayers 四层顺序召回（§2.2 + §2.3）。
 // 硬过滤先做：tenant/user/project/visibility（§3.2 安全硬过滤清单）。
 func (s *APIServer) RecallLayers(ctx context.Context, rc RouterContext) ([]RecalledLayer, error) {
 	sc, ok := s.backend.(LayerScanner)

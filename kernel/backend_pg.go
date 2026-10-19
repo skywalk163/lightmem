@@ -253,6 +253,7 @@ func (b *pgBackend) Get(ctx context.Context, memoryID, viewer, tenant string) (*
 //	shared_user  → viewer 非空 且 (user_id = viewer 或 readers 含 viewer)
 //	tenant       → tenant 非空 且 tenant_id = tenant
 //	cross_tenant → tenant 非空 且 shared_with_tenants 含 tenant
+//	public       → viewer 非空（R23.2 新增，L-225 热修补入，见下方 L-225 段）
 //
 // 修复前的缺陷（G8，E 线 0.88 实测复现）：
 //
@@ -264,12 +265,19 @@ func (b *pgBackend) Get(ctx context.Context, memoryID, viewer, tenant string) (*
 // （含不传 viewer）可见。既有单测跑在 SQLite 上，永远测不到此分叉（绿灯假象）。
 //
 // 参数名由调用方给（$N 占位），便于 Query 与 VectorSearch 复用同一谓词。
+//
+// L-225 热修（R24-T0，P1）：原谓词缺 public 分支，导致 R23.2 已定稿的「社区公开」
+// 在 PG 生产档完全不可用——public 记忆在 PG 上谁都检索不到（R23.2 验收跑的是
+// solo/sqlite，故从未暴露）。本次**只追加一个 OR 分支**，与 backend_sqlite.go
+// canView 的 `case VisPublic: return viewer != ""` 逐字对齐；既有四个分支、
+// 函数签名、调用点参数序一律未动。
 func pgVisibilityPredicate(viewerParam, tenantParam string) string {
 	return fmt.Sprintf(`(
        (visibility = 'private'      AND user_id = %[1]s AND %[1]s <> '')
     OR (visibility = 'shared_user' AND %[1]s <> '' AND (user_id = %[1]s OR permission->'readers' ? %[1]s))
     OR (visibility = 'tenant'      AND tenant_id = %[2]s AND %[2]s <> '')
     OR (visibility = 'cross_tenant' AND %[2]s <> '' AND %[2]s = ANY(shared_with_tenants))
+    OR (visibility = 'public'      AND %[1]s <> '')
 )`, viewerParam, tenantParam)
 }
 
@@ -285,6 +293,12 @@ func (b *pgBackend) Query(ctx context.Context, q QueryParams) ([]QueryResult, er
 	args := []any{q.Viewer, q.TenantID}
 	argIdx := 2
 
+	// R24-B · L-226：默认只返回当前生效版本（superseded_by IS NULL），
+	// 与 SQLite / Qdrant 两侧及 recall 路径既有语义一致。IncludeSuperseded=true
+	// 时不加该条件。注意：这是 Go 侧 SQL 拼接，未改 migrations/*.sql（红线）。
+	if !q.IncludeSuperseded {
+		where = append(where, "superseded_by IS NULL")
+	}
 	if q.Text != "" {
 		argIdx++
 		args = append(args, "%"+strings.ToLower(q.Text)+"%")
@@ -405,12 +419,21 @@ func (b *pgBackend) CountByKind(ctx context.Context, kind MemoryKind, tenant str
 }
 
 // BackfillVectors 后台 worker：补全 vector_status='pending' 的 embedding（§4.2）。
-func (b *pgBackend) BackfillVectors(ctx context.Context, embed func(string) ([]float32, error)) error {
+//
+// R24-B · B2：签名由 `error` 改为 `(BackfillReport, error)`，以适配冻结接口
+// `VectorBackfiller`（任务书 §5.1 B2 / §9）。**行为逐位不变**：同样的 SQL、
+// 同样的 LIMIT 100、同样的失败继续（`continue`）语义；唯一差别是新增计数返回值，
+// 失败计数只影响报告不影响流程（原实现对 embed 失败也是 continue 跳过）。
+//
+// 连带修改：`kernel/router.go` 的 handleBackfill 调用点（签名变更的必要适配，
+// 非新增功能，详见 `_R24_B线交付报告.md` §偏离登记）。
+func (b *pgBackend) BackfillVectors(ctx context.Context, embed func(string) ([]float32, error)) (BackfillReport, error) {
+	var rep BackfillReport
 	rows, err := b.db.QueryContext(ctx, `
 	SELECT memory_id, fact FROM memories
 	WHERE vector_status='pending' ORDER BY recorded_at LIMIT 100`)
 	if err != nil {
-		return err
+		return rep, err
 	}
 	type pending struct {
 		id   string
@@ -421,25 +444,67 @@ func (b *pgBackend) BackfillVectors(ctx context.Context, embed func(string) ([]f
 		var p pending
 		if err := rows.Scan(&p.id, &p.fact); err != nil {
 			rows.Close()
-			return err
+			return rep, err
 		}
 		batch = append(batch, p)
 	}
 	rows.Close()
 
+	rep.Scanned = int64(len(batch))
 	for _, p := range batch {
 		vec, err := embed(p.fact)
 		if err != nil {
+			rep.Failed++
 			continue
 		}
 		vecStr := vectorToString(vec)
 		if _, err := b.db.ExecContext(ctx,
 			`UPDATE memories SET embedding=$1::vector, vector_status='vectorized' WHERE memory_id=$2 AND vector_status='pending'`,
 			vecStr, p.id); err != nil {
-			return err
+			rep.Failed++
+			return rep, err
 		}
+		rep.Vectorized++
 	}
-	return nil
+	return rep, nil
+}
+
+// AuditVectorIndex 实现 VectorIndexAuditor（R24-B · B3）：PG 是「元数据与向量
+// 同库同表」，故不存在真正的孤儿索引；缺失索引 = vector_status<>'vectorized'。
+// 零向量统计走 SQL 侧：`embedding` 非空但其 L2 范数为 0（pgvector 的 `<->` 自距离）。
+func (b *pgBackend) AuditVectorIndex(ctx context.Context, tenant string) (*IndexAudit, error) {
+	audit := &IndexAudit{}
+	where := `WHERE ($1 = '' OR tenant_id = $1)`
+	args := []any{tenant}
+
+	var n int64
+	if err := b.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM memories `+where+` AND vector_status='vectorized'`, args...).Scan(&n); err != nil {
+		return nil, err
+	}
+	audit.Indexed = n
+
+	// 零向量：有 embedding 且与自身的欧氏距离为 0（全零向量）。
+	if err := b.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM memories `+where+` AND embedding IS NOT NULL AND embedding <-> embedding = 0`, args...).Scan(&n); err != nil {
+		return nil, err
+	}
+	audit.ZeroVector = n
+
+	rows, err := b.db.QueryContext(ctx,
+		`SELECT memory_id FROM memories `+where+` AND vector_status<>'vectorized' ORDER BY memory_id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		audit.MissingIDs = append(audit.MissingIDs, id)
+	}
+	return audit, rows.Err()
 }
 
 // CountByLayer 返回指定层（layer 为空 = 全部层）的记忆条数（§3.10 温度指标）。

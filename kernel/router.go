@@ -32,6 +32,24 @@ type APIServer struct {
 	// R4-A：multi-hop 二次 hop 证据重排配置。默认零值 = Enabled:false，
 	// 即 RecallAndFuse 逐位保持既有单跳行为（见 kernel/multihop.go）。
 	multiHop MultiHopConfig
+
+	// --- R24 接缝（T0 预埋；A/B/C/D 不得再改本文件，一律通过"字段 + 自注册"接入）---
+	// 各线在自己文件定义具体类型后可把对应 interface{} 替换为具体类型；
+	// 当前保留 interface{} 占位，保证尚未落地的线不造成编译失败。
+	lookup        interface{} // A 线：*LookupIndex    —— L2 确定性查找表
+	access        interface{} // C 线：*AccessTracker  —— 访问追踪
+	refStore      interface{} // D 线：RefStore        —— L3 正文外置
+	reindex       interface{} // B 线：*ReindexService —— 对账/重建
+	lookupEnabled bool        // A 线：L2 快车道开关（setter SetLookupEnabled 见 kernel/lookup.go）
+}
+
+// R24 接缝（T0 预埋）：各线经 RegisterRoutes 自注册路由。
+// routeHooks 为空时 Handler() 输出与基线逐字节一致（零回归红线的对拍前提）。
+var routeHooks []func(mux *http.ServeMux)
+
+// RegisterRoutes 追加一条 R24 各线自带的 HTTP 路由挂载函数（T0 预埋）。
+func RegisterRoutes(fn func(mux *http.ServeMux)) {
+	routeHooks = append(routeHooks, fn)
 }
 
 func NewAPIServer(p *Profile, b StorageBackend) *APIServer {
@@ -129,6 +147,10 @@ func (s *APIServer) Handler() http.Handler {
 	if s.admin != nil {
 		RegisterAdminRoutes(mux, s.admin)
 	}
+	// R24 接缝（T0 预埋）：各线自注册路由；为空时保持基线行为（零回归）。
+	for _, fn := range routeHooks {
+		fn(mux)
+	}
 	return mux
 }
 
@@ -216,6 +238,10 @@ func (s *APIServer) handleSearch(w http.ResponseWriter, r *http.Request) {
 		Text:        text,
 		MemoryKinds: parseKinds(q.Get("kind")),
 		TopK:        atoi(q.Get("top_k"), 10),
+		// R24-B · L-226：可选参数 include_superseded=true，默认 false
+		// （只返回当前生效版本）。这是 B2 之外的**第二处** router.go 改动，
+		// 同样是 B4 的必要接线，已在交付报告登记。
+		IncludeSuperseded: q.Get("include_superseded") == "true",
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
@@ -309,18 +335,28 @@ func (s *APIServer) handleBackfill(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "embedder not configured"})
 		return
 	}
-	pg, ok := s.backend.(*pgBackend)
+	// R24-B · B2：由「写死 *pgBackend」改为**可选接口类型断言**，任何实现了
+	// VectorBackfiller 的后端都可用；不支持时返回含后端名的明确 503 文案。
+	// 注意：本处是 B2 签名变更（error → (BackfillReport, error)）的**必要连带
+	// 修改**，非新增功能；详见 _R24_B线交付报告.md 的偏离登记。
+	bf, ok := s.backend.(VectorBackfiller)
 	if !ok {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "backfill only on pgvector backend"})
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "backfill not supported on " + s.backend.Name() + " backend (requires VectorBackfiller)",
+		})
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	if err := pg.BackfillVectors(ctx, s.embedder); err != nil {
+	rep, err := bf.BackfillVectors(ctx, s.embedder)
+	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "backfilled"})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "backfilled", "scanned": rep.Scanned,
+		"vectorized": rep.Vectorized, "failed": rep.Failed,
+	})
 }
 
 // handleLayerMetrics 返回四层计数（§3.10 温度指标）。

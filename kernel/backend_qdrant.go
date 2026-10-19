@@ -188,6 +188,10 @@ func memoryPayload(m *Memory) (map[string]any, error) {
 		"tenant":  m.TenantID,
 		"user":    m.UserID,
 		"kind":    string(m.MemoryKind),
+		// R24-B · L-227：落 vector_status 便于 VectorSearch 过滤掉 pending /
+		// 零向量点（§5.1 B1「避免 pending 点参与相似度」）。
+		// 只增 key，不改既有 5 个 key 的语义，老 payload 缺该键时按 pending 处理。
+		"vector_status": string(m.VectorStatus),
 	}, nil
 }
 
@@ -234,18 +238,60 @@ func (b *qdrantBackend) Upsert(ctx context.Context, m *Memory) error {
 	if m.RecordedAt.IsZero() {
 		m.RecordedAt = time.Now().UTC()
 	}
+	// R24-B · L-227：修复前这里无条件写 `make([]float32, b.dim)` 全零向量，
+	// 且 Upsert 全程不碰 VectorStatus —— 于是「没有向量」和「有一个全零向量」
+	// 在索引里完全无法区分，VectorSearch 会把零向量当成真实向量参与相似度，
+	// 而 Reconcile 也报不出「零向量」这一档。
+	//
+	// 修复口径（§5.1 B1，并根据**真机实测**修正，见下）：
+	//   - 点已存在且向量可用 → 复用既有向量，vector_status=vectorized；
+	//   - 否则 → vector_status=pending。
+	//
+	// ⚠️ 实测修正（Qdrant 1.19.1，2026-10-19）：任务书 B1 假设「不写 vector 字段，
+	//    或按 Qdrant 契约写 null」都可以。真机实测**两种写法都被拒**：
+	//      · 省略 vector 字段 → 400 `missing field \`vector\``
+	//      · "vector": null   → 400 `data did not match any variant of untagged enum VectorStruct`
+	//    即 Qdrant 1.19 的 point upsert **强制要求**携带合法向量。
+	//    因此本实现改为：**仍写零向量（协议所迫），但把 vector_status 明确标为
+	//    pending，并在 VectorSearch 侧过滤掉非 vectorized 的点**。
+	//    效果与任务书意图等价：pending 点不参与相似度排序，且 Reconcile 能把
+	//    「零向量」这一档如实报出来（判据①正是靠它验证重建后归零）。
+	var vec []float32
+	status := VectorPending
+	if existing, err := b.fetchPoint(ctx, m.MemoryID); err == nil && existing != nil && len(existing.Vector) == b.dim && !isZeroVector(existing.Vector) {
+		vec = existing.Vector
+		status = VectorVectorized
+	}
+	if m.VectorStatus != "" {
+		// 调用方显式声明的状态优先（例如 BackfillVectors 补完后回写 vectorized）。
+		if m.VectorStatus == VectorVectorized && len(vec) == b.dim {
+			status = VectorVectorized
+		} else if m.VectorStatus == VectorPending {
+			status = VectorPending
+		}
+	}
+	// 必须在 memoryPayload(m) **之前**定稿 VectorStatus：payload 是该字段的
+	// 唯一落盘载体（VectorSearch 的 vector_status 过滤与 Reconcile 的统计都读它）。
+	// 早先版本把赋值放在 payload 之后，导致 payload 里的 vector_status 恒为旧值。
+	m.VectorStatus = status
+
+	if len(vec) != b.dim {
+		// Qdrant 强制要求 vector 字段；无真实向量时写零向量并标 pending。
+		vec = make([]float32, b.dim)
+	}
+	// payload 必须在 VectorStatus 定稿**之后**生成：payload 的 `_memory` 与
+	// 顶层 `vector_status` 是该字段的唯一落盘载体（VectorSearch 的过滤与
+	// Reconcile 的统计都读它）。
 	payload, err := memoryPayload(m)
 	if err != nil {
 		return err
 	}
-	// 若点已存在，取回其向量避免零向量覆盖。
-	vec := make([]float32, b.dim)
-	if existing, err := b.fetchPoint(ctx, m.MemoryID); err == nil && existing != nil && len(existing.Vector) == b.dim {
-		vec = existing.Vector
+	pt := map[string]any{
+		"id":      qdrantPointID(m.MemoryID),
+		"vector":  vec,
+		"payload": payload,
 	}
-	upsertReq := map[string]any{
-		"points": []qdrantPoint{{ID: qdrantPointID(m.MemoryID), Vector: vec, Payload: payload}},
-	}
+	upsertReq := map[string]any{"points": []map[string]any{pt}}
 	return b.do(ctx, http.MethodPut, "/collections/"+b.col+"/points?wait=true", upsertReq, nil)
 }
 
@@ -282,6 +328,10 @@ func (b *qdrantBackend) Query(ctx context.Context, q QueryParams) ([]QueryResult
 			continue
 		}
 		if len(q.MemoryKinds) > 0 && !containsKind(q.MemoryKinds, m.MemoryKind) {
+			continue
+		}
+		// R24-B · L-226：默认只返回当前生效版本（三后端一致）。
+		if !q.IncludeSuperseded && m.SupersededBy != nil {
 			continue
 		}
 		if q.AsOf != nil && !m.visibleAt(*q.AsOf) {
@@ -355,14 +405,21 @@ func (b *qdrantBackend) VectorSearch(ctx context.Context, q QueryParams) ([]Quer
 		"limit":        q.TopK,
 		"with_payload": true,
 	}
+	// R24-B · L-227：只让 vectorized 的点参与相似度（§5.1 B1）。
+	// 缺 vector_status 键的老 payload 一律视为 pending，不参与向量检索——
+	// 宁可少召回，也不让零向量污染排序（与 PG 的部分索引 `WHERE vector_status='vectorized'`
+	// 同口径）。
+	must := []map[string]any{{
+		"key":   "vector_status",
+		"match": map[string]any{"value": string(VectorVectorized)},
+	}}
 	if q.TenantID != "" {
-		searchReq["filter"] = map[string]any{
-			"must": []map[string]any{{
-				"key":   "tenant",
-				"match": map[string]any{"value": q.TenantID},
-			}},
-		}
+		must = append(must, map[string]any{
+			"key":   "tenant",
+			"match": map[string]any{"value": q.TenantID},
+		})
 	}
+	searchReq["filter"] = map[string]any{"must": must}
 	var resp struct {
 		Result []struct {
 			ID      string         `json:"id"`
@@ -562,3 +619,121 @@ func (b *qdrantBackend) scrollAll(ctx context.Context) ([]*Memory, error) {
 // 这里不重复声明，避免包级 redeclaration 编译错。
 //
 // 说明：memoryPayload / parseMemoryPayload 是本文件私有，不会与其它文件冲突。
+
+// ---------------------------------------------------------------------
+// R24-B · B2 补向量 + B3 索引审计（可选能力接口，不进 StorageBackend）
+// ---------------------------------------------------------------------
+
+// isZeroVector 判断向量是否全零（L-227 的核心判据）。
+// 空向量视为「无向量」，不计入零向量（无向量是 pending，零向量才是污染）。
+func isZeroVector(v []float32) bool {
+	if len(v) == 0 {
+		return false
+	}
+	for _, x := range v {
+		if x != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// scrollPoints 滚动取出全部点（**带向量**），供补向量与索引审计使用。
+func (b *qdrantBackend) scrollPoints(ctx context.Context) ([]qdrantPoint, error) {
+	var resp struct {
+		Result struct {
+			Points []qdrantPoint `json:"points"`
+		} `json:"result"`
+	}
+	scrollReq := map[string]any{
+		"limit":        1000,
+		"with_payload": true,
+		"with_vector":  true,
+	}
+	if err := b.do(ctx, http.MethodPost, "/collections/"+b.col+"/points/scroll", scrollReq, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Result.Points, nil
+}
+
+// BackfillVectors 实现 VectorBackfiller（B2）：滚动取「无向量或 pending」的点，
+// 逐个算向量后批量回写（带 vector 字段 + vector_status=vectorized）。
+//
+// 与 PG 版同口径：只补不删；补完的点才参与 VectorSearch（见 Upsert 的 status 处理）。
+func (b *qdrantBackend) BackfillVectors(ctx context.Context, embedder func(string) ([]float32, error)) (BackfillReport, error) {
+	var rep BackfillReport
+	if embedder == nil {
+		return rep, fmt.Errorf("qdrant backfill: embedder is nil")
+	}
+	pts, err := b.scrollPoints(ctx)
+	if err != nil {
+		return rep, fmt.Errorf("qdrant backfill: scroll: %w", err)
+	}
+	for _, p := range pts {
+		m, err := parseMemoryPayload(p.Payload)
+		if err != nil || m == nil {
+			continue
+		}
+		rep.Scanned++
+		// 已有真实向量且标记为 vectorized → 无需补。
+		if len(p.Vector) == b.dim && !isZeroVector(p.Vector) && m.VectorStatus == VectorVectorized {
+			continue
+		}
+		vec, err := embedder(m.Fact)
+		if err != nil || len(vec) != b.dim {
+			rep.Failed++
+			continue
+		}
+		m.VectorStatus = VectorVectorized
+		payload, err := memoryPayload(m)
+		if err != nil {
+			rep.Failed++
+			continue
+		}
+		pt := map[string]any{
+			"id":      qdrantPointID(m.MemoryID),
+			"vector":  vec,
+			"payload": payload,
+		}
+		req := map[string]any{"points": []map[string]any{pt}}
+		if err := b.do(ctx, http.MethodPut, "/collections/"+b.col+"/points?wait=true", req, nil); err != nil {
+			rep.Failed++
+			continue
+		}
+		rep.Vectorized++
+	}
+	return rep, nil
+}
+
+// AuditVectorIndex 实现 VectorIndexAuditor（B3）：统计索引侧的点数、零向量数，
+// 以及与元数据的孤儿/缺失差异。
+func (b *qdrantBackend) AuditVectorIndex(ctx context.Context, tenant string) (*IndexAudit, error) {
+	pts, err := b.scrollPoints(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("qdrant audit: scroll: %w", err)
+	}
+	// 元数据侧：以 Scroll（payload）为准——Qdrant 是「元数据与索引同点」的后端，
+	// 故不存在真正的孤儿索引；缺失索引 = 无向量（或零向量）的点。
+	audit := &IndexAudit{}
+	for _, p := range pts {
+		m, err := parseMemoryPayload(p.Payload)
+		if err != nil || m == nil {
+			// payload 无法解析 = 索引有、元数据无 → 孤儿
+			audit.OrphanIDs = append(audit.OrphanIDs, p.ID)
+			continue
+		}
+		if tenant != "" && m.TenantID != tenant {
+			continue
+		}
+		audit.Indexed++
+		if isZeroVector(p.Vector) {
+			audit.ZeroVector++
+			audit.MissingIDs = append(audit.MissingIDs, m.MemoryID)
+			continue
+		}
+		if len(p.Vector) == 0 {
+			audit.MissingIDs = append(audit.MissingIDs, m.MemoryID)
+		}
+	}
+	return audit, nil
+}

@@ -333,7 +333,7 @@ func TestPgQueryVectorSearch(t *testing.T) {
 
 	// backfiller 是 pgBackend 的 BackfillVectors 接口（不在 StorageBackend 公共接口里）。
 	type backfiller interface {
-		BackfillVectors(ctx context.Context, embed func(string) ([]float32, error)) error
+		BackfillVectors(ctx context.Context, embed func(string) ([]float32, error)) (kernel.BackfillReport, error)
 	}
 	bf := be.(backfiller)
 
@@ -351,7 +351,7 @@ func TestPgQueryVectorSearch(t *testing.T) {
 		}
 		return vec, nil
 	}
-	if err := bf.BackfillVectors(ctx, hashEmbed); err != nil {
+	if _, err := bf.BackfillVectors(ctx, hashEmbed); err != nil {
 		t.Fatalf("BackfillVectors: %v", err)
 	}
 
@@ -630,7 +630,7 @@ func TestPgBackfillVectors(t *testing.T) {
 
 	// 执行 Backfill
 	type backfiller interface {
-		BackfillVectors(ctx context.Context, embed func(string) ([]float32, error)) error
+		BackfillVectors(ctx context.Context, embed func(string) ([]float32, error)) (kernel.BackfillReport, error)
 	}
 	bf := be.(backfiller)
 	embed := func(text string) ([]float32, error) {
@@ -640,7 +640,7 @@ func TestPgBackfillVectors(t *testing.T) {
 		}
 		return vec, nil
 	}
-	if err := bf.BackfillVectors(ctx, embed); err != nil {
+	if _, err := bf.BackfillVectors(ctx, embed); err != nil {
 		t.Fatalf("BackfillVectors: %v", err)
 	}
 

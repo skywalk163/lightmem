@@ -1766,6 +1766,49 @@ D 路只动测试与门禁脚本，因此逐字节相同是预期结果，不是
 `data_plane_compression`、`fp_audit` 五节**逐字段相同**，800 条 `details` 的 sha256
 也相同——R14 的三项新增（漂移衰减 / flush 决策 / 位移边持久化）没有动过任何北极星判分输入。
 
+#### D.3.1 向量产物的位置与复跑前提（R24-E 补充，**必读**）
+
+> **这三个产物只在 0.88，本地仓库没有；北极星复跑必须去 0.88 执行。**
+> 它们**从未入 git**（`git log --all -- 'eval/vectors/*'` 只有两个 `.py` 脚本），
+> 体积 18.8MB，`.gitignore` 已显式排除（`eval/vectors/*.npy` 等，见 `.gitignore:31-35`）。
+
+`-embedder vector` 需要三个文件，缺任一即报 `向量文件不在位`（`polaris_holdout.go:417`）：
+
+| 文件 | 大小 | md5 | 说明 |
+|---|---|---|---|
+| `eval/vectors/vectors.npy` | 18821248 B | `16c05aa256800812dbc5945e6f9a0a6b` | `[4595, 1024] float32`，L2 归一化 |
+| `eval/vectors/vectors_index.jsonl` | 765414 B | `43d6f600b603588b0b304d33422bc4d6` | 文本 → 绝对行号 |
+| `eval/vectors/vectors_meta.json` | 329 B | `4522ec632ac079f8f4fd9b6f6be5def8` | `count=4595, merged=true, a_count=3597, b_count=600, inc_count=398` |
+
+**4595 条的构成与重建过程**（R24-E 实测，见 `_R24_收口报告.md` §2）：
+
+1. A 路 3597 条：`/home/workbuddy/r11a/eval/vectors/`（R11a 产物；其 `corpus.txt` 与本地 `md5=a83f3baec...` 逐字节相同，确认与当前语料对应）
+2. B 路 600 条：`/tmp/r12b/lightmem/eval/vectors/`（beam_extend）
+3. 仓内 `merge_r12_final.py` 合 A+B → 4197 条（注意：**该脚本不含 locomo_v2 文本**，其 `[COVERAGE]` 警告"缺失 400"即是信号）
+4. 增量 398 条（locomo_v2 的 query/fact）：`gen_vectors_inc.py`（BGE-m3 确定性嵌入，0.88 约 0.7-0.95 秒/条）+ `merge_vectors_inc.py`（自动给 index 行号 `+offset`，offset 错会导致 Embed 查表指向旧行、语义错乱）
+
+> **4595 与 D.4 记录的「`eval/vectors/` 4595 条」完全吻合**，交叉验证了重建结果的正确性。
+
+**生成/合流工具链**（均在 `eval/vectors/`）：`gen_vectors.py`（全量）、`gen_vectors_inc.py`（增量）、
+`merge_r12_final.py`（A+B 合流）、`merge_vectors_inc.py`（增量追加）。
+⚠️ `gen_vectors_inc.py` 与 `merge_vectors_inc.py` **只在本地仓库有，0.88 默认没有**，用前先上传。
+
+**复跑命令**（在 0.88 的 `/home/workbuddy/lightmem` 下执行，`-now-fixed` 固定基准日期保证确定性）：
+
+```sh
+go run ./eval/polaris/polaris_holdout.go \
+  ./eval/polaris/polaris_fact.go ./eval/polaris/polaris_m1.go \
+  ./eval/polaris/polaris_m2.go ./eval/polaris/polaris_token.go \
+  ./eval/polaris/compress_light.go ./eval/polaris/polaris_fp.go \
+  -holdout eval/holdout/holdout_v2.jsonl \
+  -weights eval/weights/rank_weights_en_r5.json -embedder vector -topk 5 \
+  -now-fixed 2026-10-14 -report r24_final_holdout -reports-dir eval/reports
+```
+
+R24 收口态实测（`eval/reports/r24_final_holdout_20261018-235618.json`，832191 B）：
+`M1=1.0000 / hits=800 / hit@1=1.0000 / M2=0.2498 / control=43126 / data=129537 / 压缩 35.33% / vetoed=0`
+——**七个数字与 R15 收口值逐位相同**，证明 R24 四条线没有改变北极星判定的任何一条输出。
+
 ### D.4 一个口径误判的更正（如实登记：本附录初版写错，已更正）
 
 本附录初版把 R14 的 M2 记为 **0.1772**，并归因为"评测向量集快照变更（`eval/vectors/` 4595 条）"。
@@ -1965,3 +2008,83 @@ R14 任务书 §九.3 写"holdout_v2 全 L1 且无 entity / recorded_at"，其�
 | **L-A1** | `plan_list` 的 `progress`/`status` 为空 | 根因：`/tools/memory/plan` 返回 `[]QueryResult`（§4.4 检索字段，**不含 `goal_detail`**）。已在 plan 响应附带 `goal_detail`（A 线渲染逻辑无需改） | 真机：列计划 `gd.progress=0.5`、`gd.status=active` |
 
 > **推送状态**：R21 五个 commit（`c103584` / `57e6bd0` / `aab5b22` / `d6f1b37` / `4f8f2f8`）**均未 push**，等业主示意（红线⑧）。
+
+---
+
+### D.11 缺陷账 L-223~L-228 关闭记录（R24 新增，如实登记）
+
+> 来源：R24「索引-内容解耦 + 静态记忆快车道（3FS / Engram 架构映射）」（`_R24_并行任务书.md`）。
+> 验证环境：192.168.0.88（FreeBSD，go1.25.14）｜ PG `10.0.10.10:5432`｜ Qdrant `10.0.10.60:6333` **1.19.1**。
+> 门禁：**PASS 12 / FAIL 1 / SKIP 1**（FAIL 项 `[1b]` 的 11 个文件**全为历史遗留**，与干净基线 `c908091` 逐行相同 ⇒ 新增 FAIL = 0）。
+> 北极星：**M1=1.0000**，七个数字与 R15 收口值逐位相同（见 §D.3.1）。
+
+#### L-223 · 访问维度恒 0：`AccessCount`/`RecentAccessScore` 全仓只有读、没有写（**已关闭**）
+
+| 字段 | 内容 |
+|---|---|
+| 现象 | 价值公式的访问维度完全失效：`value = 0.5*importance + 0.3*0 + 0.2*confidence`。全仓对这两个字段**只有读**（`lifecycle.go:158,182,328`、`temperature.go:106`、`model.go:140-141`），唯一赋值在测试夹具 `lifecycle_test.go:17` |
+| 处置 | **C 线**新增 `kernel/access.go`：`AccessTracker`（`Record` 纯内存原子计数 / `Flush` 批量 Get→改→Upsert / 快照 swap）；衰减 `new = old*exp(-Δt/τ) + 1`（τ 默认 7 天）；接 A 线预留的 `NoteRecall` 接缝注入 |
+| 验收 | 3 次 recall → flush → 回读 `access_count==3`；衰减单测误差 **<1e-9**；`-race` 全绿；默认关时 bench `allocs/op` 与 A 线交付态**逐位一致（5453/51）** ⇒ 零增量 |
+| 遗留 | D-1：线上 `FastHits` 恒 0（A 线两个调用点都调 `NoteRecall`，无法区分快/慢车道）→ `deterministic` 分类在生产不生效，需 A 线改 `router_mem.go` 一行 |
+
+#### L-224 · 5 个生命周期引擎零生产调用点（**已关闭**）
+
+| 字段 | 内容 |
+|---|---|
+| 现象 | `BudgetManager` / `ForgettingEngine` / `CoreMemoryManager` / `ArchiveEngine` / `CompressionEngine`（`lifecycle.go:252,286,316,347,388`）与 `NextLifecycle`（`temperature.go:74`）**全部只定义、无调用** |
+| 处置 | **C 线**新增 `RunLifecycleEngines(ctx, backend, embedder, tenant, engines, cfg)` 按名分发；`POST /admin/lifecycle/run` 端点（经 T0 预埋的 `RegisterRoutes` **自注册**，未改 `router.go`）；**默认不起任何定时器** |
+| 验收 | 6 条 L1 / 上限 2 → `moved 4`（真跑）；未知引擎名明确报错；空 engines 不动数据 |
+
+#### L-225 · PG 可见性谓词缺 `public` 分支 → 生产档社区功能不可用（**P1，已关闭**）
+
+| 字段 | 内容 |
+|---|---|
+| 现象 | R23.2 已定稿的「社区公开 `VisPublic`」在 **PG 上谁都检索不到**。SQLite 侧有 `TestCanViewPublic` 覆盖，但 `pgVisibilityPredicate` 完全没这个分支 |
+| 漏网主因 | `scripts/accept_r23.py:96-101` 起的是 solo/sqlite，**public 在 PG 上坏了整整一轮没人发现** |
+| 处置 | **T0 线**只追加一个 OR 分支（`OR (visibility = 'public' AND %[1]s <> '')`），与 `canView` 的 `case VisPublic: return viewer != ""` 逐字对齐；既有四分支、函数签名、调用点参数序一律未动 |
+| 验收 | 新增 `kernel/visibility_pg_test.go`（**真 PG，env-gated，独立测试库** `lightmem_r24_t0`）：public 跨租户可读 + 既有四值 6 组矩阵零回归；**反证实验**：删掉该分支后测试立刻变红；**部署链路 curl 端到端**（临时实例 18446 → 独立库，跨租户 `viewer=bob/tenant-b` 命中） |
+
+#### L-226 · `recall` 过滤 `superseded_by` 但 `/search` 三后端都不过滤（**已关闭**）
+
+| 字段 | 内容 |
+|---|---|
+| 现象 | 时效裁决要求「默认只返回当前生效版本」，`router_mem.go:419` 的 recall 已这么做，但 `QueryParams` 无此概念，三后端 `/search` 一律返回历史版本 |
+| 处置 | **B 线**`QueryParams` 只增 `IncludeSuperseded bool`（默认 false）；SQLite/PG/Qdrant 三后端 `Query` 默认加 `superseded_by IS NULL`（PG 为 Go 侧 SQL 拼接，**未改 `migrations/*.sql`**）；`handleSearch` 增可选参数 `include_superseded=true` |
+| 验收 | 同一数据集三后端矩阵：默认不含 superseded、`true` 时含；sqlite / pg / **qdrant 真机三列全 PASS** |
+
+#### L-227 · Qdrant 拿不到向量就写全零向量冒充（**已关闭**）
+
+| 字段 | 内容 |
+|---|---|
+| 现象 | `backend_qdrant.go:242-244`：取不到既有向量就写 `make([]float32, b.dim)` 全零向量，且 `Upsert` 全程不碰 `VectorStatus` → 「没有向量」与「有一个全零向量」在索引里无法区分，`VectorSearch` 把零向量当真实向量参与相似度 |
+| 处置 | **B 线**：显式标 `vector_status=pending`；`memoryPayload` 落 `vector_status` 便于过滤；`VectorSearch` 只让 `vectorized` 的点参与相似度；新增 `BackfillVectors` + `AuditVectorIndex` |
+| ⚠️ 实测修正 | 任务书假设「不写 vector 字段或写 null」均可。**Qdrant 1.19.1 真机实测两种写法都被拒**：省略 → 400 `missing field \`vector\``；`"vector":null` → 400 `data did not match any variant of untagged enum VectorStruct`。故实际仍写零向量（协议所迫）+ pending 标记 + 检索过滤，效果与任务书意图等价 |
+| 验收 | 10 条 pending 写入 → `Reconcile` 检出 `zero=10 pending=10`（**可发现**）→ `RebuildIndex` → 再 `Reconcile` `zero=0 pending=0` |
+
+#### L-228 · 注释说「四层并行召回」，代码是串行（**已订正**）
+
+| 字段 | 内容 |
+|---|---|
+| 现象 | `router_mem.go` 三处注释写「四层并行召回」，实际是顺序 for 循环 |
+| 处置 | **A 线**只改注释文字，**不改实现**（`grep -rn '并行召回' kernel/ --include=*.go` 已无输出） |
+
+#### 附 · R24 由实测抓出并修掉的实现缺陷（非任务书登记项）
+
+| 缺陷 | 根因 | 处置 |
+|---|---|---|
+| qdrant `vector_status` 未落盘 | `Upsert` 里 `memoryPayload(m)` 在 `m.VectorStatus = status` **之前**执行，payload 落的是旧值 | 把 payload 生成移到状态定稿之后 |
+| 并发 Flush 丢计数（200→150，丢 25%） | 多个 Flush 各自做 read-modify-write，后者的 `Upsert` 覆盖前者 | `AccessTracker` 加 `flushMu` 串行化 Flush |
+| 既有 `TestQdrantRealEndToEnd` 被 L-227 过滤破坏 | 该测试**绕过 `Upsert`** 直接 PUT 向量，payload 的 `vector_status` 未置 `vectorized` → 被新过滤正确拦截 | 让「模拟 embedder 补全」与真实 `BackfillVectors` 对齐（置 `vectorized`），**不是放宽生产语义** |
+| 安装脚本升级时 18443/18444 双停 | `install_lims_rc_d.sh` kill 旧实例后只 `sleep 1` 就拉起新进程 → `bind: address already in use` | 本轮手工恢复；**遗留**：应改为轮询等端口释放 |
+
+#### 附 · R24 未闭环事项
+
+| # | 事项 | 接手方 |
+|---|---|---|
+| 1 | `gofmt -l kernel/` 剩 `admin.go`、`authn_ory.go`（+ frontend 9 个），均基线遗留、不属 R24 任一线文件域 | 下一轮独立 PR |
+| 2 | C 线线上 `FastHits` 恒 0 → `deterministic` 分类生产不生效（需 A 线改 `router_mem.go` 一行） | A 线 |
+| 3 | 向量产物不在 git（18.8MB，`.gitignore` 已排除）；复跑必须去 0.88（见 §D.3.1） | 后续轮次决策是否入库 |
+| 4 | B/C 线管理端点（`/admin/reconcile`、`/admin/reindex`、`/admin/lifecycle/run`）已按开关接线但**默认关** | 运维按需开启 |
+| 5 | 安装脚本 kill 后未等端口释放 | 下一轮 / 运维 |
+
+> **推送状态**：R24 全部改动**未 commit、未 push**，等业主示意（红线⑧）。

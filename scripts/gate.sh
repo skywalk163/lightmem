@@ -134,7 +134,13 @@ kernel/flush.go kernel/flush_test.go kernel/forgetting_drift_drill_test.go \
 kernel/edge_persist.go kernel/edge_persist_test.go kernel/edge_persist_pg_test.go \
 kernel/poison_detect.go kernel/poison_detect_test.go \
 kernel/drift_pipeline.go kernel/drift_pipeline_test.go \
-kernel/flush_pipeline.go kernel/flush_pipeline_test.go"
+kernel/flush_pipeline.go kernel/flush_pipeline_test.go \
+kernel/lookup.go kernel/lookup_test.go kernel/lookup_diffdump_test.go \
+kernel/reindex.go kernel/reindex_test.go \
+kernel/access.go kernel/access_test.go \
+kernel/refstore.go kernel/refstore_test.go \
+kernel/visibility_pg_test.go kernel/router_seam_dump_test.go \
+kernel/backend_qdrant_real_test.go"
 GOFMT_BAD=""
 for f in $NEW_GO; do
     [ -f "$ROOT/$f" ] || continue
@@ -297,7 +303,7 @@ fi
 COV_FAIL=0
 COV_NOTE=""
 COV_TESTONLY=""
-NEW_FILES="forgetting_drift flush edge_persist edge_persist_pg poison_detect drift_pipeline flush_pipeline backend_qdrant:4 node_role:4 topology:3 connector_app:4 auth:12 mcp:12 workflow:12"
+NEW_FILES="forgetting_drift flush edge_persist edge_persist_pg poison_detect drift_pipeline flush_pipeline backend_qdrant:4 node_role:4 topology:3 connector_app:4 auth:12 mcp:12 workflow:12 lookup:12 reindex:12 access:12 refstore:12"
 for entry in $NEW_FILES; do
     case "$entry" in
         *:*) f="${entry%%:*}"; THRESH="${entry##*:}" ;;

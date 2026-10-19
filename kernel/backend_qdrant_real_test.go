@@ -255,7 +255,14 @@ func TestQdrantRealEndToEnd(t *testing.T) {
 	// 应返回全部 3 点且 Source 必须是 qdrant-vector（真机搜索成功，
 	// 而非失败后降级文本检索）。
 	for i, m := range []*Memory{m1, m2, m3} {
-		pl, err := memoryPayload(m)
+		// R24-B · L-227 语义对齐：模拟 embedder 补全时，必须与真实补全流程
+		// （qdrantBackend.BackfillVectors）一样把 vector_status 置为 vectorized。
+		// L-227 之后 VectorSearch 只让 vector_status='vectorized' 的点参与相似度，
+		// 因此这里若沿用修改前的「只写向量不标状态」，会被正确过滤掉。
+		// 注意：这是让**模拟**对齐**真实**，不是放宽生产语义或断言。
+		filled := *m
+		filled.VectorStatus = VectorVectorized
+		pl, err := memoryPayload(&filled)
 		if err != nil {
 			t.Fatalf("memoryPayload(%s): %v", m.MemoryID, err)
 		}
@@ -284,6 +291,9 @@ func TestQdrantRealEndToEnd(t *testing.T) {
 	vecMem := mkMemory("r17real-vec1", "向量检索探针 预置向量", KindFact)
 	vecMem.TenantID, vecMem.UserID = tenant, viewer
 	vecMem.Visibility = VisPrivate
+	// 同上一处：模拟 embedder 产物必须标 vector_status=vectorized，
+	// 否则会被 L-227 之后的 VectorSearch 过滤（真实补全流程就是这样写的）。
+	vecMem.VectorStatus = VectorVectorized
 	payload, err := memoryPayload(vecMem)
 	if err != nil {
 		t.Fatalf("memoryPayload: %v", err)
