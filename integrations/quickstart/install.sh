@@ -120,8 +120,11 @@ fi
 # ---------------------------------------------------------------- 2) 编译
 say "2/6 编译内核与 MCP 服务"
 run "mkdir -p '$RUN_DIR'"
-run "cd '$ROOT/kernel' && go build -o '$KBIN' ./cmd/lightmem-kernel"
-ok "lightmem-kernel -> $KBIN"
+# R29-T0 PE-2：注入 BuildVersion（启动自检的「二进制 vs 库」一致性比对）。
+# 未注入也能跑（退化为不判定）；注入后 /healthz.version 与 VERSION 校验才真正生效。
+BUILD_VER="$(cd "$ROOT" && git rev-parse HEAD 2>/dev/null || echo unknown)"
+run "cd '$ROOT/kernel' && go build -ldflags '-X github.com/lightmem/kernel.BuildVersion=$BUILD_VER' -o '$KBIN' ./cmd/lightmem-kernel"
+ok "lightmem-kernel -> $KBIN (version=$BUILD_VER)"
 if [ "$RUN_MCP" -eq 1 ]; then
     run "cd '$ROOT/kernel' && go build -o '$MBIN' ./cmd/lightmem-mcp"
     ok "lightmem-mcp -> $MBIN"

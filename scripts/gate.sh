@@ -173,7 +173,8 @@ kernel/health_probe.go kernel/health_probe_test.go \
 kernel/scheduler.go kernel/scheduler_test.go \
 kernel/drain.go kernel/drain_test.go \
 kernel/scan_batched.go kernel/scan_batched_test.go \
-kernel/bootreport.go kernel/bootreport_test.go"
+kernel/bootreport.go kernel/bootreport_test.go \
+kernel/healthz_options.go kernel/healthz_options_test.go"
 GOFMT_BAD=""
 for f in $NEW_GO; do
     [ -f "$ROOT/$f" ] || continue
@@ -336,7 +337,7 @@ fi
 COV_FAIL=0
 COV_NOTE=""
 COV_TESTONLY=""
-NEW_FILES="forgetting_drift flush edge_persist edge_persist_pg poison_detect drift_pipeline flush_pipeline backend_qdrant:4 node_role:4 topology:3 connector_app:4 auth:12 mcp:12 workflow:12 lookup:12 reindex:12 access:12 refstore:12 sqlite_vector:15 visibility_tenant:4 pg_superuser_check:4 visindex:3 vector_cache:5 health_probe:6 scheduler:6 drain:6 scan_batched:8 bootreport:6"
+NEW_FILES="forgetting_drift flush edge_persist edge_persist_pg poison_detect drift_pipeline flush_pipeline backend_qdrant:4 node_role:4 topology:3 connector_app:4 auth:12 mcp:12 workflow:12 lookup:12 reindex:12 access:12 refstore:12 sqlite_vector:15 visibility_tenant:4 pg_superuser_check:4 visindex:3 vector_cache:5 health_probe:6 scheduler:6 drain:6 scan_batched:8 bootreport:6 healthz_options:9"
 for entry in $NEW_FILES; do
     case "$entry" in
         *:*) f="${entry%%:*}"; THRESH="${entry##*:}" ;;
