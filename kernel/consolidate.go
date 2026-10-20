@@ -22,6 +22,9 @@ type MemoryScanner interface {
 	ScanAll(ctx context.Context, max int) ([]*Memory, error)
 }
 
+// DefaultConsolidateInterval 整合 worker 默认间隔（保留原 5 分钟，零回归）。
+const DefaultConsolidateInterval = 5 * time.Minute
+
 // ConsolidationReport 一轮整合的动作统计（§3.13）。
 type ConsolidationReport struct {
 	Scanned     int       `json:"scanned"`
@@ -42,15 +45,54 @@ type Consolidator struct {
 	logf     func(string, ...any)
 	// R9-A：每轮整合完成后的回调（nil 表示忽略）。
 	onRunOnce OnRunOnce
+
+	// R29-C（§6.1.3）：运行窗（nil=全时段）与单轮 ctx 截止（0=不截止，保持现状）。
+	window      *Window
+	roundBudget time.Duration
 }
 
 // NewConsolidator 构造整合 worker（默认间隔 5 分钟）。
 func NewConsolidator(b StorageBackend) *Consolidator {
-	return &Consolidator{backend: b, interval: 5 * time.Minute, maxScan: 5000, logf: log.Printf}
+	return &Consolidator{backend: b, interval: DefaultConsolidateInterval, maxScan: 5000, logf: log.Printf}
 }
 
 // SetInterval 设置扫描间隔（测试可用短间隔）。
 func (c *Consolidator) SetInterval(d time.Duration) { c.interval = d }
+
+// SetWindow 设置整合运行窗（§6.1.3 可选窗口 LIMS_CONSOLIDATE_WINDOW；nil=全时段=现状）。
+// 窗口结束让当前轮跑完，不再启新轮。
+func (c *Consolidator) SetWindow(w *Window) { c.window = w }
+
+// SetRoundBudget 设置单轮 ctx 截止（§6.1.3「预算用尽优雅让位」；0=不截止=现状）。
+func (c *Consolidator) SetRoundBudget(d time.Duration) { c.roundBudget = d }
+
+// MaintenanceJob 把整合器包装成一个可调度作业（§6.1.3「consolidate 接入调度器」）。
+// interval<=0 用默认 5 分钟；budget 由调度器侧硬截止（MaxDuration）。
+func (c *Consolidator) MaintenanceJob(interval time.Duration, w *Window, budget Budget) MaintenanceJob {
+	if interval <= 0 {
+		interval = DefaultConsolidateInterval
+	}
+	return MaintenanceJob{
+		Name:     "consolidate",
+		Interval: interval,
+		Window:   w,
+		Budget:   budget,
+		Run: func(ctx context.Context) (Report, error) {
+			start := time.Now()
+			rep, err := c.RunOnce(ctx)
+			if err != nil {
+				return Report{Job: "consolidate", DurationMS: time.Since(start).Milliseconds()}, err
+			}
+			return Report{
+				Job:        "consolidate",
+				Items:      rep.Scanned,
+				Writes:     rep.Merged + rep.Expired + rep.Procedures + rep.Quarantined,
+				DurationMS: time.Since(start).Milliseconds(),
+				Notes:      rep.Notes,
+			}, nil
+		},
+	}
+}
 
 // OnRunOnce 是每轮整合完成后的回调（R9-A 新增，只增不改）：
 // 用于外部（如 main.go 的 ServerMetrics）记录最近一次整合时间戳。
@@ -261,20 +303,37 @@ func (c *Consolidator) RunOnce(ctx context.Context) (ConsolidationReport, error)
 }
 
 // Start 以后台 goroutine 方式启动循环（阻塞直到 ctx 取消）。
+//
+// R29-C（§6.1.3）：tick 到达时先做窗口准入（不在窗口内 → 本轮跳过；在跑的一轮会跑完）；
+// 单轮以 roundBudget 作为 ctx 截止，预算用尽优雅让位（不 kill goroutine）。
+// 未设窗口/预算（零值）时行为与 c203db8 逐位一致。
 func (c *Consolidator) Start(ctx context.Context) {
 	if c.interval <= 0 {
-		c.interval = 5 * time.Minute
+		c.interval = DefaultConsolidateInterval
 	}
 	t := time.NewTicker(c.interval)
 	defer t.Stop()
-	c.logf("[consolidate] worker started interval=%s", c.interval)
+	c.logf("[consolidate] worker started interval=%s window=%s round_budget=%s",
+		c.interval, c.window, c.roundBudget)
 	for {
 		select {
 		case <-ctx.Done():
 			c.logf("[consolidate] worker stopped: %v", ctx.Err())
 			return
 		case <-t.C:
-			rep, err := c.RunOnce(ctx)
+			if !c.window.Allows(time.Now()) {
+				c.logf("[consolidate] outside window %s (skip)", c.window)
+				continue
+			}
+			rctx := ctx
+			var cancel context.CancelFunc
+			if c.roundBudget > 0 {
+				rctx, cancel = context.WithTimeout(ctx, c.roundBudget)
+			}
+			rep, err := c.RunOnce(rctx)
+			if cancel != nil {
+				cancel()
+			}
 			if err != nil {
 				c.logf("[consolidate] run error: %v", err)
 				continue
