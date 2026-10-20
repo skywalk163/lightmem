@@ -81,6 +81,19 @@ func newPgBackend(ctx context.Context, cfg *StorageConfig) (StorageBackend, erro
 		return nil, err
 	}
 
+	// R29-E（L-252 / 行为变更 B2）：启动恢复自检——表存在 + 关键列断言。
+	// 位置：**R28 superuser 断言之后并列追加，不覆盖、不重排**
+	// pg_superuser_check.go 的调用（任务书 §8.1.3）。
+	// 只读 information_schema / to_regclass；缺表或缺列 → fail-fast
+	// （未应用 migrations 的库「起来了但全 500」的根治，G3）。
+	// 该自检同时是 bootreport.go 的 PG 分支复用点（同一实现，两条入口）。
+	if err := pgBootCheck(ctx, &pgBackend{
+		db: db, conf: cfg.PG, dim: dim, table: "memories",
+	}, &BootReport{}); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("pg startup self-check: %w", err)
+	}
+
 	return &pgBackend{db: db, conf: cfg.PG, dim: dim, table: "memories"}, nil
 }
 

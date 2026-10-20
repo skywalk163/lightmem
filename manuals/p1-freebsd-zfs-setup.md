@@ -1269,6 +1269,79 @@ nc -vz 10.30.7.1 9443                     # connected；pf 拦截时应 timeout
 
 ---
 
+## 13. 季度恢复演练（R29-E / 设计稿 §3.4.5）
+
+**目的**：把「备份存在」变成「备份可用」。每季度一次，从快照恢复 → 起服务 → 跑启动自检 → 校验条数与最近整合时间。全程只读快照、不动生产；`rollback` 是显式人工动作（`zfs_backup.sh` 设计要点 1）。
+
+**前置**：R29-E 已落地的三项机制（`kernel/bootreport.go` / `kernel/backend_sqlite.go`）：
+- 启动恢复自检：表存在 + 关键列断言 + 条数 + 恢复点 + 未完成标记（缺表/缺列 → fail-fast）；
+- SQLite 耐久显式化：`storage.sqlite.{synchronous,busy_timeout_ms,wal_autocheckpoint,checkpoint_on_close}`（零值 = 现状）；
+- 未完成排水标记：`<data-dir>/<job>.drain.unfinished`（D 线写、E 线读）。
+
+### 13.1 演练步骤（四步，对应判据 R16/R20）
+
+```sh
+# ── 步骤 0：记录演练前基线（生产侧只读）──
+curl -s http://127.0.0.1:18443/healthz | head -c 400; echo
+# 记录：rows（条数）、backend、recovery report 的 wal_bytes / pg_replay
+
+# ── 步骤 1：确认快照存在（R20 前半）──
+sh scripts/zfs_backup.sh list -p tank/lims -t daily
+# 期望：列出当日 daily-* 快照（无则先 sh scripts/zfs_backup.sh snapshot -t daily）
+
+# ── 步骤 2：恢复到演练 dataset（不动生产）──
+zfs snapshot tank/lims/pg@drill-$(date +%Y%m%d)
+zfs clone tank/lims/pg@drill-$(date +%Y%m%d) tank/drill/pg
+# PG：用 tank/drill/pg 起一个临时实例（改端口，如 5433），指向该数据目录
+
+# ── 步骤 3：起服务 + 跑启动自检（R16/R20 后半）──
+# 临时 profile：storage.pg.host=127.0.0.1 port=5433，-data-dir 指向演练数据目录
+/tmp/limsd-drill --profile /tmp/drill.profile.yaml -data-dir /var/db/lightmem/drill
+# 期望日志（设计稿 §3.4.4 目标形态）：
+#   [boot] recovery report: backend=pgvector table=ok columns=ok rows=<N> ...
+#   [boot] WARN: unfinished drain tasks from prior run: <job>   # 有则记录，无则省略
+# 判据：rows > 0（R20）；表/列 ok（缺表缺列会 fail-fast，演练应立即失败并上报）
+
+# ── 步骤 4：校验条数与最近整合时间 ──
+psql -h 127.0.0.1 -p 5433 -U lightmem_app -d lims -tAc \
+  "select count(*), max(recorded_at) from memories"
+# 对拍步骤 0 的 rows：一致（或按快照时间点的合理差值）→ PASS
+```
+
+### 13.2 演练通过判据
+
+| 判据 | 期望 | 不通过时的含义 |
+|---|---|---|
+| `zfs_backup.sh list` 有当日快照 | 至少 1 条 `daily-*` | 备份链路断（cron / zfs send）——立即查 |
+| 启动自检 `table=ok columns=ok` | 缺表/缺列直接 fail-fast | 迁移未应用或快照损坏——**不得上线** |
+| 自检 `rows > 0` | 与快照时间点匹配 | 空库快照 / 恢复到错 dataset |
+| `rows` 与演练前基线一致 | 差值 ≤ 快照间隔内的写入量 | 数据丢失——按 §3.4.5 RPO 口径上报 |
+| `unfinished` 标记 | 有则记录原因，无则留空 | 上次关机异常（配合 D 线排水日志查） |
+
+### 13.3 演练后清理（必须执行）
+
+```sh
+service lightmem stop                       # 停演练实例
+zfs destroy tank/drill/pg                   # 销毁克隆（不影响快照本身）
+zfs destroy tank/lims/pg@drill-$(date +%Y%m%d)   # 销毁演练快照
+# 确认生产未受影响：
+zfs list -t snapshot -o name tank/lims/pg | grep drill   # 期望空
+```
+
+### 13.4 SQLite 档（Solo）演练差异
+
+Solo 档无 PG：直接复制 `data/lims.sqlite`（+ `-wal`/`-shm`）到演练目录，用同一二进制起服务：
+
+```sh
+mkdir -p /var/db/lightmem/drill
+cp -a /var/db/lightmem/lims.sqlite* /var/db/lightmem/drill/
+/tmp/limsd-drill -data-dir /var/db/lightmem/drill   # 自检同样覆盖表/列/条数/WAL 大小
+```
+
+**留档要求**（判据 R22）：演练结束把自检三行输出（`journal_mode` / `synchronous` / `wal_autocheckpoint` 回读值）与 `rows` 记入 `_R29_F线验收报告.md` 或运维台账。
+
+---
+
 ## 附录 A：常见问题
 
 | 问题 | 排查/修复 |
@@ -1292,5 +1365,6 @@ nc -vz 10.30.7.1 9443                     # connected；pf 拦截时应 timeout
 | 第 6 节 pf | §5.7「网络隔离」+ §5.5「集合体」 |
 | 第 7 节 安全 | §5.7「安全组件」 |
 | 第 9 节 快照容灾 | §5.6「快照与容灾」 |
+| 第 13 节 季度恢复演练 | 设计稿 §3.4.4 启动恢复自检、§3.4.5 备份/RPO/演练 |
 | 第 10 节 快照容灾实操（R16-S7） | §5.6「快照与容灾」 |
 | 全部 | §4.2 一致性骨架（写入链路）|
