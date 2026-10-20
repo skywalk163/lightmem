@@ -187,3 +187,26 @@ curl -s -H "Authorization: Bearer $TOK" 'http://127.0.0.1:18443/search?q=x&tenan
 
 停止逻辑只用「本服务的二进制路径 + profile 路径」精确匹配，**不会**误杀同机上
 `:8443` 的历史实例。安装脚本清理端口时也只针对自己的 `lightmem_listen`。
+
+---
+
+## 已知缺陷与规避（R29-F 真机验收登记）
+
+> 来源：`_R29_F线验收报告.md` §5、`_R29_遗留问题存档.md` §2。**修之前先按规避步骤部署**，
+> 否则会出现「服务起不来」却被误判为产品故障的情况。
+
+| 编号 | 级别 | 缺陷 | 现象 | 规避 |
+|---|---|---|---|---|
+| **L-258** | P0 | `lightmem_start()` 不 `cd ${lightmem_chdir}`；solo profile 的 `sqlite.path` 是相对路径 | `service lightmem start` 20s 健康检查超时；日志刷 `sqlite wal pragma: unable to open database file: out of memory (14)`；根目录冒出 `/data` | profile 改绝对 sqlite 路径（见 `deploy/README.md`「已知部署坑 1」） |
+| **L-259** | P0 | `lightmem_pg_wait=0` 时 `while` 不执行、函数仍 `return 1` | `PostgreSQL <host>:<port> 在 0s 内不可达`（端口其实是通的）；无 PG 的机器上 solo 档也起不来 | `pg_wait` 设 ≥1 且端口可达（无 PG 时可放占位监听） |
+| **L-260** | P1 | `lightmem_stop()` 只杀 pidfile 记录的 supervisor | 存在孤儿 supervisor 时，`stop` 后 20s 内服务「复活」（新 kernel pid） | `sudo pkill -9 -f 'daemon: env'` + `pkill -9 -x lightmem-kernel` + 删 pidfile |
+
+**两个反直觉点（踩过的坑，别用错匹配式）**：
+
+1. `daemon(8)` 的进程 cmdline 是 `daemon: env[<pid>] (daemon)`——**不含** `-f -H -R`，
+   所以 `pkill -f 'daemon -f -H -R'` 打不中；用 `pkill -f 'daemon: env'`。
+2. `pgrep -f lightmem-kernel` 会**匹配到调用它的 shell 自身**（假阳性），判「服务是否在跑」请用
+   `pgrep -x lightmem-kernel`（精确进程名），或以 pidfile + `kill -0` 为准。
+
+**R29 已修好的部分（别再重复踩）**：stop 顺序（先 TERM supervisor 再兜底 pkill）、
+`daemon -R 5 -C 24 -H`（有界重启 + 日志重开）、重启自证四步（见上文）。
