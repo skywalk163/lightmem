@@ -1,0 +1,11 @@
+# R29-T0 P0-A 看门狗：每 2 分钟探 /readyz，失败重启 lightmem（详见 deploy/lightmem-watchdog.sh）
+# 与 rc.d 的 daemon -R/-C 自愈互补：daemon 只管进程退出，看门狗管「进程在但后端不可达」。
+#
+# FreeBSD 安装（任选其一）：
+#   1) 系统 crontab：在 /etc/crontab 追加下行——
+#      */2 * * * *  root  /usr/local/bin/lightmem-watchdog.sh
+#   2) 本文件直接落到 /etc/cron.d/lightmem-watchdog 并 chmod 644（若系统支持 cron.d 目录）。
+#
+# 注意：本机 rc.d 已用 daemon -R 5 -C 24 -H 实现进程级自愈；看门狗是第二道防线，
+#       默认冷却 120s 防抖，避免重启风暴。
+*/2 * * * *  root  /usr/local/bin/lightmem-watchdog.sh

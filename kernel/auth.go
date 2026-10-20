@@ -261,7 +261,9 @@ func constantTimeEqual(a, b string) bool {
 // 一律仍需鉴权；/healthz 只回后端连通性与 profile 名，不含记忆正文。
 func isOperationalEndpoint(path string) bool {
 	switch path {
-	case "/healthz", "/health", "/metrics":
+	// 运维/探针端点：无数据语义，必须免鉴权（否则 rc.d 健康检查与监控探针会 401）。
+	// R29-T0（S0）新增 /livez、/readyz 探针豁免。
+	case "/healthz", "/health", "/metrics", "/livez", "/readyz":
 		return true
 	}
 	return false

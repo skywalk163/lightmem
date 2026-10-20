@@ -108,9 +108,57 @@ tail -f /var/log/lightmem.log
 | `lightmem_user` | `workbuddy` | 运行身份 |
 | `lightmem_listen` | `:18443` | 监听端口（**避开同机既有 `:8443` 旧实例**） |
 | `lightmem_profile` | `<chdir>/profiles/lims-family.profile.yaml` | 档位（默认持久化 pgvector 档） |
-| `lightmem_pg_host/port/user/db` | `10.0.10.10` / `5432` / `postgres` / `lims_dsh` | PG 连接（经 `LIMS_PG_*` 注入内核） |
+| `lightmem_pg_host/port/user/db` | `10.0.10.10` / `5432` / `lightmem_app` / `lims_dsh` | PG 连接（经 `LIMS_PG_*` 注入内核） |
 | `lightmem_pg_wait` | `60` | 启动前等待 PG 就绪的秒数 |
 | `lightmem_start_wait` | `20` | 启动后等待健康检查通过的秒数 |
+| `lightmem_restart_delay` | `5` | **R29-A**：崩溃后重启延迟秒数（`daemon -R`，1–31536000） |
+| `lightmem_restart_count` | `24` | **R29-A**：最多重启次数（`daemon -C`，上限 128）；用尽后 `daemon` 自行退出 → 服务真下线，**防无限刷屏** |
+
+MCP 服务对应 `lightmem_mcp_restart_delay` / `lightmem_mcp_restart_count`（默认同 5/24）。
+
+## 守护与自愈（R29-A，永续运行 L1）
+
+`service lightmem start` 实际拉起的是：
+
+```sh
+/usr/sbin/daemon -f -H -R 5 -C 24 -u workbuddy -P /var/run/lightmem/lightmem.pid \
+    -o /var/log/lightmem.log env HOME=… lightmem-kernel -profile … -listen :18443 -embedder hash
+```
+
+| 参数 | 语义（0.88 `man daemon` 实测） |
+|---|---|
+| `-R 5` | 子进程终止后延迟 5s 重启——把崩溃风暴压成「每 5s 最多一次」的有界节奏 |
+| `-C 24` | 最多重启 24 次；用尽后 `daemon` 自身退出 → **服务真下线**（等人看日志），而非满速刷屏 |
+| `-H` | 收到 SIGHUP 时重开 `-o` 日志文件——配合 `deploy/newsyslog.d/lightmem.conf`（T0 P0-A）做日志轮转，避免长期运行撑满盘（L-257） |
+| `-P` | pidfile 记录 **supervisor** pid（停止目标；勿用 `-p` 的子进程 pid） |
+
+三层守护模型：**init**（rc.d 开机自启 + 等 PG）→ **supervisor**（`daemon -R/-C` 自愈 + 防抖）
+→ **watchdog**（`deploy/` 三件套，T0 P0-A 交付：每 2 分钟探 `/readyz`，失败带 120s 冷却地
+`service lightmem restart`——`-C` 用尽后的最后兜底 + 告警）。
+
+### 重启自证清单（R21；升级 rc.d / 换二进制后必跑）
+
+按顺序执行，每步的期望都写在括号里：
+
+```sh
+# ① stop 后不再被拉起（验证新 stop 顺序 + -R/-C 组合：stop = TERM 监督者，不会被重启）
+sudo service lightmem stop; sleep 20; sudo service lightmem status   # 期望：NOT running，20s 后仍 NOT running
+
+# ② kill -9 后自动恢复（supervisor -R 5 拉起）
+sudo service lightmem status                                        # 先记下 kernel pid
+kill -9 $(pgrep -f lightmem-kernel); sleep 15; sudo service lightmem status
+                                                                     # 期望：RUNNING + 新 pid；healthz 200
+
+# ③ 端口唯一（无孤儿/重复实例）
+sockstat -4l | grep 18443                                          # 期望：恰好 1 行
+
+# ④ 鉴权矩阵四项（见上一节）                                          # 期望：200 / 401 / 200 / 401
+
+# ⑤ 条数不丢（恢复后数据仍在）
+curl -s -H "Authorization: Bearer $TOK" 'http://127.0.0.1:18443/search?q=x&tenant_id=dshteam'  # 与 kill 前一致
+```
+
+> R29-A 在 0.88 的逐项实测记录见 `_R29_A线交付报告.md`。
 
 ## 两个必须知道的坑（已在脚本内注释）
 
@@ -123,6 +171,14 @@ tail -f /var/log/lightmem.log
 2. **自定义 `start_cmd` 不会套用 `${name}_user` 的 `su` 包装。**
    rc.subr 只在 `command` 那条路径上做降权，`*_cmd` 分支不做。
    → 必须显式给 `daemon -u <user>`，否则服务会以 **root** 身份运行。
+
+3. **stop 必须「先 TERM 监督者、再兜底 pkill」（R29-A 修正）。**
+   在 `daemon -R/-C` 监督语义下，先 `pkill` 子进程会被监督者**立刻拉起**新子进程，
+   与随后的 TERM 竞态，可能留下新实例占用端口（下次 `start` 报 `EADDRINUSE`）。
+   daemon(8) 手册：SIGTERM 发给**监督者**（`-P` 记录的就是它）时会转发给子进程，
+   子进程退出、移除 pidfile、监督者随后终止——一步到位。
+   ⚠️ 同理：**不要**把 `-p`（子进程 pidfile）当停止目标，手册明确警告
+   「signal the child → daemon restarts it」。
 
 另外 `daemon -f` 用于先把 stdin/stdout/stderr 指向 `/dev/null` 再按 `-o` 写日志，
 避免子进程继承调用方 fd（否则非交互 SSH 会话会因管道被持有而迟迟不返回）。

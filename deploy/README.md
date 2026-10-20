@@ -143,3 +143,45 @@ secrets 文件缺失 → 空口令 → scram 下**连接失败并显式报错**�
 | 未设置 / `fail` | **默认**：superuser 连接 → 阻断启动 |
 | `warn` | 只告警，不阻断（过渡期） |
 | `off` | 跳过自检（显式关闭，会留日志） |
+
+---
+
+## P0-A 守护件（R29-T0）
+
+> **文件域切分**：本目录（`deploy/`）由 **T0 线独占**，放的是「自愈/轮转/探针」部署件；
+> `integrations/lims-088-rc.d/*`（rc.d 脚本 + 其 README）由 **A 线独占**，T0 只读复用。
+> 两者分工：rc.d 负责 **进程级自愈**（`daemon -R 5 -C 24 -H`），P0-A 负责
+> **应用级探活兜底**（看门狗）+ **日志轮转** + **systemd 模板**。
+
+### 三件套清单
+
+| 件 | 路径 | 职责 |
+|---|---|---|
+| 看门狗脚本 | `deploy/lightmem-watchdog.sh` | 每 2 分钟探 `/readyz`，失败 `service lightmem restart`，冷却 120s 防抖，`logger` 记事件 |
+| 定时条目 | `deploy/cron.d/lightmem-watchdog` | 把看门狗挂进 cron（`*/2 * * * * root ...`） |
+| 日志轮转 | `deploy/newsyslog.d/lightmem.conf` | `lightmem.log` / `lightmem-mcp.log` 按日切、保留 7 份（对应 L-257） |
+| systemd 模板 | `deploy/lightmem.service` | 非 FreeBSD/容器部署用（FreeBSD 真机走 rc.d）；`Restart=always` 等 + 探针注释 |
+
+### 安装（FreeBSD 真机）
+
+```sh
+# 1) 看门狗脚本
+install -m 555 deploy/lightmem-watchdog.sh /usr/local/bin/lightmem-watchdog.sh
+# 2) cron 条目（系统 crontab 或 /etc/cron.d/）
+install -m 644 deploy/cron.d/lightmem-watchdog /etc/cron.d/lightmem-watchdog
+#   或：echo '*/2 * * * * root /usr/local/bin/lightmem-watchdog.sh' >> /etc/crontab
+# 3) newsyslog 轮转
+install -m 644 deploy/newsyslog.d/lightmem.conf /etc/newsyslog.d/lightmem.conf
+```
+
+### 与 rc.d 自愈的关系（重要）
+
+- **rc.d `daemon -R 5 -C 24 -H`**：管「进程崩溃/退出」——内核挂了 5s 拉起，24 次用尽后 daemon 自行退出，看门狗兜底重启。
+- **看门狗 `/readyz`**：管「进程在但后端不可达」——例如 PG 短暂抽风、内核活着却 503，daemon 不会重启，看门狗补这个盲区。
+- 二者**互补不替代**：看门狗有 120s 冷却防抖，避免重启风暴。
+
+### 探针端点（S0 已落地，B 线硬化）
+
+- `/livez`：存活探针，立即 200，不碰任何依赖（最快）。
+- `/readyz`：就绪探针，`Ping` 后端，失败 503（S0 无 TTL 缓存，B 线硬化）。
+- 两者均在 `kernel/auth.go` 的 `isOperationalEndpoint` 豁免清单内（免鉴权），否则 rc.d 健康检查与监控探针会 401。

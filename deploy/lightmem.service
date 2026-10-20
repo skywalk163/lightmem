@@ -1,0 +1,33 @@
+# R29-T0 P0-A：systemd unit（非 FreeBSD / 容器化部署用；FreeBSD 真机走 integrations/lims-088-rc.d/*）
+#
+# 安装：
+#   cp deploy/lightmem.service /etc/systemd/system/lightmem.service
+#   systemctl daemon-reload && systemctl enable --now lightmem
+#
+# 探针（待 B 线交付后由运维在 probe 配置里启用）：
+#   LivenessProbe:  HTTP GET /livez   → 立即 200（不碰依赖）
+#   ReadinessProbe: HTTP GET /readyz  → 200 ready / 503 not_ready
+# 当前 service 文件只声明策略，探针由部署平台（k8s/systemd 外部）按需接入。
+[Unit]
+Description=LightMem (LIMS) memory service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lightmem
+WorkingDirectory=/opt/lightmem
+ExecStart=/opt/lightmem/lightmem-kernel \
+    -profile /opt/lightmem/profiles/lims-family.profile.yaml \
+    -listen :18443
+Restart=always
+RestartSec=2
+StartLimitIntervalSec=60
+StartLimitBurst=5
+TimeoutStopSec=30
+# 存活/就绪探针路径（待 B 线交付后启用 liveness=/livez readiness=/readyz）
+# LivenessProbe:  HTTP GET /livez
+# ReadinessProbe: HTTP GET /readyz
+
+[Install]
+WantedBy=multi-user.target

@@ -17,6 +17,9 @@ storage_backend: pgvector
 storage:
   pg:
     version: "18"
+    # R29-T0（B1 硬约束）：pg 档必须显式声明连接 host，否则启动 fail-fast。
+    # 取原 primary.host 值；primary/replica/sharding 为「声明态，未接线」（L-253）。
+    host: 10.0.20.10
     # 主库（主备节点）
     primary:
       host: 10.0.20.10

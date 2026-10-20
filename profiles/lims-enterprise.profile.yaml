@@ -17,6 +17,9 @@ storage_backend: pgvector+shard
 storage:
   pg:
     version: "18"
+    # R29-T0（B1 硬约束）：pgvector+shard 档必须显式声明连接 host，否则启动 fail-fast。
+    # 取首分片 host 作占位；primary/replica/sharding 为「声明态，未接线」（L-253）。
+    host: 10.30.0.10
     # 分片（§5.4：PG 分片 / TiDB / CockroachDB）
     sharding:
       strategy: tenant_affinity

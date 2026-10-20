@@ -72,6 +72,12 @@ type SQLiteConfig struct {
 	VectorExtension string `yaml:"vector_extension"`
 	WALMode         bool   `yaml:"wal_mode"`
 	FKEnabled       bool   `yaml:"fk_enabled"`
+	// R29-T0（S0 接缝）：SQLite pragma 调优字段。
+	// 零值 = 完全不执行对应 pragma = 与现状逐位一致（E 线 backend_sqlite.go 消费）。
+	Synchronous       string `yaml:"synchronous"`         // "" = 不改（默认现状）
+	BusyTimeoutMS     int    `yaml:"busy_timeout_ms"`     // 0 = 不执行 PRAGMA busy_timeout
+	WALAutocheckpoint int    `yaml:"wal_autocheckpoint"`  // 0 = 不改检查点阈值
+	CheckpointOnClose bool   `yaml:"checkpoint_on_close"` // false = 关闭时不强制 checkpoint
 }
 
 // PGConfig PostgreSQL + pgvector
@@ -293,10 +299,13 @@ func LoadProfile(path string, envLookup func(string) string) (*Profile, error) {
 	if err := yaml.Unmarshal(raw, &p); err != nil {
 		return nil, fmt.Errorf("parse profile %s: %w", path, err)
 	}
+	// R29-T0（B1 预备）：先解析凭据/连接参数覆盖（env），再 validate。
+	// 这样 LIMS_PG_HOST 等环境变量注入的 host 也能被下方 validate 的 B1 看到，
+	// 不会因「YAML 没写 host 但 env 给了」而误报 fail-fast。
+	p.resolveSecrets(envLookup)
 	if err := p.validate(); err != nil {
 		return nil, fmt.Errorf("validate profile %s: %w", path, err)
 	}
-	p.resolveSecrets(envLookup)
 	return &p, nil
 }
 
@@ -314,6 +323,17 @@ func (p *Profile) validate() error {
 	}
 	if p.Storage == nil {
 		return fmt.Errorf("missing storage config")
+	}
+	// B1（R29-T0，行为变更）：pg 档（pgvector / pgvector+shard）必须显式声明连接 host。
+	// 缺失 → fail-fast（明确报错），避免 newPgBackend 在 host 空时产生不直观的连接错误，
+	// 也防止误用未接线的 primary/sharding 子节点充当主连接地址。
+	if p.StorageBackend == BackendPgVector || p.StorageBackend == BackendPgShard {
+		if p.Storage.PG == nil {
+			return fmt.Errorf("storage_backend=%s requires storage.pg config", p.StorageBackend)
+		}
+		if p.Storage.PG.Host == "" {
+			return fmt.Errorf("storage_backend=%s requires storage.pg.host (pg 档不得依赖未接线的 primary/sharding 子节点)", p.StorageBackend)
+		}
 	}
 	// 核心边界：三个不可裁剪特性必须为 true（§2.6）
 	if p.Features != nil {
