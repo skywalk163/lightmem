@@ -185,3 +185,49 @@ install -m 644 deploy/newsyslog.d/lightmem.conf /etc/newsyslog.d/lightmem.conf
 - `/livez`：存活探针，立即 200，不碰任何依赖（最快）。
 - `/readyz`：就绪探针，`Ping` 后端，失败 503（S0 无 TTL 缓存，B 线硬化）。
 - 两者均在 `kernel/auth.go` 的 `isOperationalEndpoint` 豁免清单内（免鉴权），否则 rc.d 健康检查与监控探针会 401。
+
+---
+
+## 已知部署坑（R29-F 真机验收登记，**装之前先看**）
+
+> 来源：`_R29_F线验收报告.md` §5、`_R29_遗留问题存档.md` §2。三条都是**部署侧**问题，与 R29 代码逻辑无关，
+> 但会让人「服务起不来」而误判成产品坏了。
+
+### 1. L-258（P0）· solo 档相对 sqlite 路径会解析到 `/`
+
+`integrations/lims-088-rc.d/lightmem` 的 `lightmem_start()` **不会 `cd ${lightmem_chdir}`**，
+而 `service(8)` 会把 CWD 置为 `/`；仓库自带的 `profiles/lims-solo.profile.yaml` 用的是**相对路径**
+`./data/lims.sqlite` → 实际解析成 `/data/lims.sqlite`，服务用户无权限 → 日志刷
+`sqlite wal pragma: unable to open database file`，健康检查永远不过。
+
+**规避（修复前）**：把 profile 的 sqlite 路径改成绝对路径，并让 `rc.conf` 指向该副本：
+
+```sh
+sudo cp /usr/local/lightmem/profiles/lims-solo.profile.yaml \
+        /usr/local/lightmem/profiles/lims-solo-abs.profile.yaml
+sudo sed -i '' 's#path: ./data/lims.sqlite#path: /usr/local/lightmem/data/lims.sqlite#' \
+        /usr/local/lightmem/profiles/lims-solo-abs.profile.yaml
+sudo sysrc lightmem_profile="/usr/local/lightmem/profiles/lims-solo-abs.profile.yaml"
+```
+
+### 2. L-259（P0）· `lightmem_pg_wait=0` 表达不了「不等 PG」
+
+`0` 会让 `while` 循环体不执行、随后仍 `return 1` → 启动直接失败并打印
+`PostgreSQL <host>:<port> 在 0s 内不可达`（**即使端口是通的**）。solo/无 PG 的机器尤其容易踩。
+
+**规避（修复前）**：把 `lightmem_pg_wait` 设成 ≥1 的秒数，并保证该端口**可达**
+（没有 PG 时可临时放一个占位监听；仅满足 `nc -z` 可达门，solo 档并不会真的连 PG）。
+
+### 3. L-260（P1）· 孤儿 supervisor 会让 `stop` 失效
+
+`lightmem_stop()` 只 `kill -TERM "$(cat ${pidfile})"`。若历史上留下**第二个** supervisor
+（异常启动/重复 start），它不在 pidfile 里，仍会按 `-R` 继续拉起子进程 → 表现为「stop 之后服务自己活了」。
+
+**处置**：`sudo pkill -9 -f 'daemon: env'` + `sudo pkill -9 -x lightmem-kernel` + 删 pidfile。
+注意 daemon 的 cmdline 是 `daemon: env[pid] (daemon)`，用 `pkill -f 'daemon -f -H -R'` **匹配不到**。
+
+### 4. L-261（P1，口径）· PG 档的启动自检是「默认开」
+
+`storage_backend: pgvector*` 时，启动自检（表/关键列）**不依赖 `-data-dir`**，缺表缺列直接 fail-fast。
+这是 B2 的登记行为，但意味着「未设新开关 = 与 R28 逐位一致」只对 sqlite 档成立。
+**部署 PG 档前必须先应用 `kernel/migrations/001_pgvector.up.sql`**，否则服务起不来（这是修复意图，不是故障）。
