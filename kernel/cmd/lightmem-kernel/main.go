@@ -57,6 +57,9 @@ func main() {
 	shutdownTimeout := flag.Duration("shutdown-timeout", 10*time.Second, "graceful shutdown timeout")
 	// R22.2/R22.3：管理 API 独立端口。空 = 不启用（零回归，缺省行为不变）。
 	adminListen := flag.String("admin-listen", "", "enable admin API (R22.2) on this address, e.g. 127.0.0.1:8090 (recommended loopback only); empty = disabled")
+	// R29-T0 S0 接缝：排水未完成标记 / 启动自检的数据目录（与记忆同卷，非 /tmp）。
+	// 空 = 不执行启动自检（默认关，逐位保持 c203db8 行为）；E 线硬化读取标记。
+	dataDir := flag.String("data-dir", "", "data directory for drain markers / boot self-check (empty = disabled)")
 	flag.Parse()
 
 	// 1) 装配 profile
@@ -212,6 +215,10 @@ func main() {
 		mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
 		mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 	}
+	// R29-T0 S0 接缝：存活/就绪探针端点（免鉴权，见 kernel/auth.go 豁免）。
+	// /livez 立即 200；/readyz 探后端 Ping，失败 503（无 TTL 缓存，B 线硬化）。
+	mux.Handle("/livez", kernel.LivezHandler())
+	mux.Handle("/readyz", kernel.ReadyzHandler(kernel.NewBackendProbe(backend, embedderName)))
 	mux.Handle("/", srv.Handler())
 
 	// 6b) R21-B：鉴权装配（task book §3.1/§五 B 线）。
@@ -236,6 +243,37 @@ func main() {
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	defer bgCancel()
 	go cons.Start(bgCtx)
+
+	// R29-T0 S0 接缝：维护调度器（C 线硬化；默认关）。
+	// 仅当 LIMS_MAINTENANCE_INTERVAL 显式设置才启动；否则不创建任何维护 goroutine，
+	// 行为与 c203db8 逐位一致。DefaultMaintenanceJobs 默认返回空 job 列表。
+	var maint *kernel.Maintenance
+	if v := os.Getenv("LIMS_MAINTENANCE_INTERVAL"); v != "" {
+		if d, derr := time.ParseDuration(v); derr == nil && d > 0 {
+			maint = kernel.StartMaintenance(bgCtx,
+				kernel.DefaultMaintenanceJobs(kernel.MaintenanceConfig{Logf: log.Printf}),
+				log.Printf)
+			log.Printf("[boot] maintenance scheduler started interval=%s", d)
+		}
+	}
+
+	// R29-T0 S0 接缝：优雅排水器（D 线硬化；默认不注册任何阶段）。
+	// Run 默认立即返回 true，不会触发 os.Exit(1)；B4 行为变更仅当 D 线注册了
+	// 会超时的排水阶段且真的超时才生效。
+	drainer := kernel.NewDrainer(*shutdownTimeout, log.Printf)
+
+	// R29-T0 S0 接缝：启动自检（E 线硬化；默认关，需 -data-dir 才执行）。
+	// 结果存 main 局部并打日志；/healthz 字段扩展交 E 线（预埋请求）。
+	if *dataDir != "" {
+		if br, berr := kernel.RunBootReport(context.Background(), backend, *dataDir); berr != nil {
+			log.Printf("[boot] boot report error: %v", berr)
+		} else {
+			if br.Unfinished != "" {
+				log.Printf("[boot] WARN: unfinished drain tasks from prior run: %s", br.Unfinished)
+			}
+			log.Printf("[boot] boot report backend=%s unfinished=%q", br.Backend, br.Unfinished)
+		}
+	}
 
 	// 8) HTTP server
 	server := &http.Server{
@@ -294,6 +332,18 @@ func main() {
 	// 10) drain 后台 consolidate
 	log.Printf("[shutdown] cancel consolidate worker")
 	bgCancel()
+
+	// R29-T0 S0 接缝：优雅排水（D 线硬化；默认无注册阶段 → Run 立即返回 true）。
+	// 若 D 线注册了会超时的排水阶段且真的超时，Run 返回 false → os.Exit(1)（B4 行为变更）。
+	if !drainer.Run(shCtx) {
+		log.Printf("[shutdown] drain timeout, forcing exit (B4)")
+		os.Exit(1)
+	}
+
+	// R29-T0 S0 接缝：停止维护调度器（幂等、不阻塞）。
+	if maint != nil {
+		maint.Stop()
+	}
 
 	// 11) 关闭后端连接池
 	log.Printf("[shutdown] closing backend %s", backend.Name())

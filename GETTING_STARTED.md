@@ -187,6 +187,45 @@ kill $(cat ./_lightmem_run/lightmem-mcp.pid)
 
 ---
 
+## 六·五、守护与自愈（FreeBSD 真机）
+
+> 这一节讲服务「挂了怎么自己起来」，面向部署在 `192.168.1.5`（FreeBSD 0.88）的 family 档。
+
+### 两层自愈
+
+| 层 | 机制 | 管什么 |
+|---|---|---|
+| 进程级 | rc.d `daemon -R 5 -C 24 -H` | 内核崩溃/退出 → 5s 拉起；24 次用尽后 daemon 退出，看门狗兜底 |
+| 应用级 | `deploy/lightmem-watchdog.sh`（cron 每 2 分钟） | 进程在但 `/readyz` 503（后端不可达）→ `service lightmem restart`，120s 冷却防抖 |
+
+两者**互补不替代**：daemon 只管进程退出，看门狗补「进程在但后端连不上」的盲区。
+
+### 探针端点（免鉴权）
+
+- `/livez`：存活探针，立即 200，不碰任何依赖。
+- `/readyz`：就绪探针，`Ping` 后端，200=ready / 503=not_ready。
+
+> 这两个端点已加入 `kernel/auth.go` 的运维豁免清单，否则 rc.d 健康检查与监控探针会吃到 401、服务永远起不来。
+
+### 安装看门狗 + 日志轮转
+
+```sh
+install -m 555 deploy/lightmem-watchdog.sh /usr/local/bin/lightmem-watchdog.sh
+install -m 644 deploy/cron.d/lightmem-watchdog /etc/cron.d/lightmem-watchdog
+install -m 644 deploy/newsyslog.d/lightmem.conf /etc/newsyslog.d/lightmem.conf
+```
+
+### 重启自证四步（验证自愈真的生效）
+
+1. `sudo service lightmem status` —— 应 `lightmem is running as pid NNNN`。
+2. 模拟崩溃：`sudo kill -9 $(pgrep -f 'lightmem-kernel -profile')`；等 10 秒。
+3. `sudo service lightmem status` —— 应换了一个新 pid（**自愈成功**）；`curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18443/healthz` 应为 200。
+4. 模拟不可自愈故障：临时改 `lightmem_listen=":99999"` → `service lightmem restart` 必失败；约 24 次重启后 daemon 自行退出、服务稳定 NOT running（**有界、不刷屏**）；改回 `:18443` 再 `service lightmem start` 即恢复。
+
+> 说明：family 档默认走 pgvector 持久化；solo/SQLite 档当前是内存骨架，重启即丢数据，不可用于真实记忆（详见历史问题记录）。
+
+---
+
 ## 七、两种档位
 
 | | **solo**（默认） | **family** |
