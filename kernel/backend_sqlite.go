@@ -34,6 +34,12 @@ type sqliteBackend struct {
 	db   *sql.DB
 	mu   sync.Mutex // 串行化所有 DB 访问（Solo 量级的简单正确方案）
 
+	// sqliteCfg 是 profile 的 storage.sqlite 段（R29-E：L-251）。
+	// 只从中读取 R29-T0 新增的 4 个耐久字段；零值 = 不执行对应 PRAGMA =
+	// 与 c203db8 逐位一致（红线④）。其余既有字段（Path/WALMode/FKEnabled）
+	// 的消费路径未改，仍走 newSQLiteBackend 内的原有 if 守卫。
+	sqliteCfg *SQLiteConfig
+
 	// vec 是 solo 档纯 Go 向量存储（R25-B · L-232）。与后端共享同一 *sql.DB 与
 	// mu，不另开连接、不引入第二真源；nil 仅在极端装配失败时出现（此处必非 nil）。
 	vec *SQLiteVectorStore
@@ -74,6 +80,14 @@ func newSQLiteBackend(ctx context.Context, cfg *StorageConfig) (StorageBackend, 
 	// Solo 单进程：单连接即可，配合 mu 彻底避免并发写锁冲突。
 	db.SetMaxOpenConns(1)
 
+	// R29-E（L-251）：从 profile 解析耐久调优字段（零值 = 不执行 = 默认现状）。
+	// b 在下方 CREATE TABLE 后统一构造，此处先把配置解析到临时结构，
+	// 保证「PRAGMA 执行顺序」= journal_mode → foreign_keys → 耐久三件套。
+	sqliteCfg := &SQLiteConfig{}
+	if cfg != nil && cfg.SQLite != nil {
+		sqliteCfg = cfg.SQLite
+	}
+
 	if useFile {
 		if cfg != nil && cfg.SQLite != nil && cfg.SQLite.WALMode {
 			if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
@@ -89,6 +103,15 @@ func newSQLiteBackend(ctx context.Context, cfg *StorageConfig) (StorageBackend, 
 		}
 	}
 
+	// R29-E（L-251 / B5）：SQLite pragma 显式化。
+	// 逐条 if 守卫：字段空/零值 = **完全不执行**该 PRAGMA = 与 c203db8 逐位一致。
+	// 失败一律 fail-fast（配置显式写了却执行不了 = 运维预期落空，不带病启动）。
+	// busy_timeout 允许作用于 :memory:（与文件档无关，纯连接级参数）。
+	if err := applySQLiteDurabilityPragmas(ctx, db, sqliteCfg, useFile); err != nil {
+		db.Close()
+		return nil, err
+	}
+
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS memories (
 		memory_id TEXT PRIMARY KEY,
 		data       TEXT NOT NULL
@@ -102,6 +125,8 @@ func newSQLiteBackend(ctx context.Context, cfg *StorageConfig) (StorageBackend, 
 		path: path,
 		db:   db,
 	}
+	// R29-E（L-251）：保留 profile 的 storage.sqlite 段引用（零值字段 = 默认现状）。
+	b.sqliteCfg = sqliteCfg
 	// R28-C1：可见性内存索引（写路径同步维护，见 Upsert / DeleteByID / DeleteByScope）。
 	b.visIdx = newVisIndex()
 	// R25-B · L-232：装配 solo 档纯 Go 向量存储（共享同一 *sql.DB 与 mu）。
@@ -115,6 +140,106 @@ func newSQLiteBackend(ctx context.Context, cfg *StorageConfig) (StorageBackend, 
 }
 
 func (b *sqliteBackend) Name() string { return b.name }
+
+// ------------------------------------------------------------------
+// R29-E：SQLite 耐久显式化（L-251 / 行为变更 B5）
+//
+// 字段来源 profile storage.sqlite.{synchronous,busy_timeout_ms,wal_autocheckpoint,
+// checkpoint_on_close}（R29-T0 S0 接缝落字段，E 线消费）。
+//
+// **默认关红线④**：所有字段零值 = 不执行任何 PRAGMA = 与 c203db8 逐位一致。
+// 仅在 profile 显式配置时才改变行为；未配置时本文件新增代码零执行路径。
+// ------------------------------------------------------------------
+
+// sqliteDurabilityPragmas 是允许执行的 synchronous 值集合（SQLite 文档口径）。
+// 大小写不敏感；不在此表中的值视为配置错误 → fail-fast（绝不静默忽略，
+// 否则运维以为配了却没生效，比不配更危险）。
+var sqliteDurabilityPragmas = map[string]bool{
+	"off":    true,
+	"normal": true,
+	"full":   true,
+	"extra":  true,
+	"0":      true,
+	"1":      true,
+	"2":      true,
+	"3":      true,
+}
+
+// sqliteDurability 是解析后的耐久配置（实例字段载体）。
+// 零值 = 不执行对应 PRAGMA = 默认现状（红线④）。
+type sqliteDurability struct {
+	synchronous       string
+	busyTimeout       time.Duration
+	walAutocheckpoint int
+	checkpointOnClose bool
+}
+
+// parseSQLiteDurability 从 profile 字段解析耐久配置（零值 = 默认现状）。
+func parseSQLiteDurability(cfg *SQLiteConfig) sqliteDurability {
+	d := sqliteDurability{}
+	if cfg == nil {
+		return d
+	}
+	d.synchronous = strings.TrimSpace(cfg.Synchronous)
+	if ms := cfg.BusyTimeoutMS; ms > 0 {
+		d.busyTimeout = time.Duration(ms) * time.Millisecond
+	}
+	d.walAutocheckpoint = cfg.WALAutocheckpoint
+	d.checkpointOnClose = cfg.CheckpointOnClose
+	return d
+}
+
+// applySQLiteDurabilityPragmas 按 profile 字段逐条执行 PRAGMA。
+// useFile=false（:memory:）时跳过 wal_autocheckpoint（无 WAL 文件，无意义）。
+// 返回值非 nil = 启动失败（fail-fast）。
+func applySQLiteDurabilityPragmas(ctx context.Context, db *sql.DB, cfg *SQLiteConfig, useFile bool) error {
+	d := parseSQLiteDurability(cfg)
+	if d.busyTimeout > 0 {
+		// busy_timeout 是连接级参数，:memory: 同样适用（防御 :memory: 上的并发等锁）。
+		ms := int(d.busyTimeout / time.Millisecond)
+		if _, err := db.ExecContext(ctx, fmt.Sprintf("PRAGMA busy_timeout=%d", ms)); err != nil {
+			return fmt.Errorf("sqlite busy_timeout pragma (%dms): %w", ms, err)
+		}
+	}
+	if d.synchronous != "" {
+		if !sqliteDurabilityPragmas[strings.ToLower(d.synchronous)] {
+			return fmt.Errorf("sqlite invalid storage.sqlite.synchronous=%q "+
+				"(want off|normal|full|extra)", d.synchronous)
+		}
+		if _, err := db.ExecContext(ctx,
+			"PRAGMA synchronous="+strings.ToLower(d.synchronous)); err != nil {
+			return fmt.Errorf("sqlite synchronous pragma (%s): %w", d.synchronous, err)
+		}
+	}
+	if useFile && d.walAutocheckpoint > 0 {
+		if _, err := db.ExecContext(ctx,
+			fmt.Sprintf("PRAGMA wal_autocheckpoint=%d", d.walAutocheckpoint)); err != nil {
+			return fmt.Errorf("sqlite wal_autocheckpoint pragma (%d): %w", d.walAutocheckpoint, err)
+		}
+	}
+	return nil
+}
+
+// checkpointTruncate 执行 WAL checkpoint(TRUNCATE)，带超时。
+// 失败只告警不阻塞关闭（设计稿 §3.4.4「带超时；失败只告警不阻塞关闭」）。
+func (b *sqliteBackend) checkpointTruncate(ctx context.Context) error {
+	cctx, cancel := context.WithTimeout(ctx, checkpointTimeout)
+	defer cancel()
+	if _, err := b.db.ExecContext(cctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		return err
+	}
+	return nil
+}
+
+// checkpointTimeout 是关闭时 checkpoint 的时限（与 2s 探针预算同口径）。
+const checkpointTimeout = 2 * time.Second
+
+// DurabilityConfig 返回本后端的耐久配置快照（只读；供 /healthz 与启动自检留档，
+// 不暴露任何口令/DSN——与 B 线最小响应口径一致）。
+func (b *sqliteBackend) DurabilityConfig() (synchronous string, busyTimeout time.Duration, walAutocheckpoint int, checkpointOnClose bool) {
+	d := parseSQLiteDurability(b.sqliteCfg)
+	return d.synchronous, d.busyTimeout, d.walAutocheckpoint, d.checkpointOnClose
+}
 
 // DB 暴露底层 *sql.DB，供 R22.3 管理 API 复用同一连接（auth 表与记忆表同库）。
 // 注：sqliteBackend 内部用 mu 串行化写；调用方（AdminStore）只做 auth 表的
@@ -560,9 +685,22 @@ func (b *sqliteBackend) CountByKind(ctx context.Context, kind MemoryKind, tenant
 	return n, nil
 }
 
+// Close 释放资源。
+//
+// R29-E（L-251 / B5）：profile 显式配置 checkpoint_on_close=true 时，关闭前执行
+// PRAGMA wal_checkpoint(TRUNCATE)（带 2s 超时；失败只告警不阻塞关闭）。
+// 未配置（默认）→ 行为与 c203db8 逐位一致（零 PRAGMA、零日志）。
 func (b *sqliteBackend) Close() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if d := parseSQLiteDurability(b.sqliteCfg); d.checkpointOnClose && b.path != "" {
+		// 用 context.Background() 派生：关闭路径不能因 ctx 已取消而跳过 checkpoint，
+		// 超时由 checkpointTimeout 兜底（2s）。
+		if err := b.checkpointTruncate(context.Background()); err != nil {
+			// 告警不阻塞：checkpoint 失败不影响数据安全（WAL 仍在，重启自动恢复）。
+			fmt.Fprintf(os.Stderr, "[sqlite] checkpoint(TRUNCATE) on close failed: %v\n", err)
+		}
+	}
 	return b.db.Close()
 }
 
