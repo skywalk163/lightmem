@@ -2,7 +2,7 @@
 # R23 前台服务端到端验收：起 kernel(admin) + frontend，模拟浏览器走注册→登录→工作台→API→登出。
 import hashlib, json, os, sqlite3, subprocess, sys, time, urllib.request, urllib.error, urllib.parse, http.cookiejar, signal, datetime
 
-HERE = "/home/workbuddy/lightmem"
+HERE = os.environ.get("LIGHTMEM_REPO_DIR", "/home/workbuddy/lightmem")
 KERNEL = "/tmp/lmk"
 FRONT = "/tmp/lmf"
 HTTP = "http://127.0.0.1:18556"     # kernel 业务
