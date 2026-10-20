@@ -2393,3 +2393,65 @@ R14 任务书 §九.3 写"holdout_v2 全 L1 且无 entity / recorded_at"，其�
 | 6 | ~~PG trust 免密~~ → **已全部收紧**（业主指令）：host 规则 `scram-sha-256`、`local` 规则 `peer`，**trust 清零**（PG 在 jail 内，socket 不可从宿主访问，local 实际无人使用）；两角色设强口令；口令经 `LIMS_PG_PASSWORD` 注入（代码零改动）；服务 `/healthz` ok、门禁仍 15/0/0。**残余未知**：jail 内部无法 ssh 进入，若 jail 内有 socket 免密依赖会受影响（风险极低，回退见报告 §4.5.3） |
 | 7 | ~~R28 改动**未 push**（已本地 commit，红线⑧）~~ → **已推三远端**（2026-10-20 业主示意后，`git ls-remote` + tree 复核）：origin = gitcode = `c203db8`；github = `49b7d1a`（inline 内容等价，tree `c6f8f38f…` 逐字节相同）。核验证据：`_R28_收口报告.md` §7 追记 | ✅ 关闭 |
 | 8 | `.env` 的 `GITCODE_TOKEN` 仍 401 | 业主更新 token |
+
+---
+
+### D.16 R29 永续运行（Always-On）落地与缺陷账（L-242~L-261）
+
+> 来源：`_R29_并行任务书_永续运行.md`（设计真源 `docs/永续运行架构设计_v1.1.md`）+ 六线并行执行 + F 线独立验收。
+> 验证环境：0.82（FreeBSD 15.1-STABLE，go1.26.9，solo/sqlite + rc.d 真机）、0.88（15.1-RELEASE-p1，go1.25.14，PG 真机 + 门禁）。
+> 基线 `c203db8`（R28 收口）→ R29 收口（见 `_R29_收口报告.md` §9）。
+> **门禁**：**PASS 15 / FAIL 0 / SKIP 0**（`_r29_088_gate.log`，md5 `d14de2cc87227875686d51dc47d994f4`）——
+> 与 R28 同为 15/0/0，但 `[11] PG 真机往返` / `[12] 夹具残留` 本轮是**真跑 PASS**（R28 为 SKIP，依据不同）。
+> **判据**：R1–R25 **PASS 22 / FAIL 0 / SKIP 3**（R5 reboot / R17 断电 / R20 zfs，均需窗口）；5 组反证实验全部成立。
+> **北极星**：**本轮未复跑**（不标绿）；结构性论据：检索/排序/嵌入/lifecycle 源码零 diff + R12 对 `/search` 与 `c203db8` 逐字节对拍相同。
+
+#### 关闭记录（12 条）
+
+| 编号 | 缺陷 | 关闭依据 |
+|---|---|---|
+| L-242 | rc.d 无重启语义 | `daemon -R 5 -C 24 -H`；R2（kill -9 → 15s 内新 pid + readyz 200）、R23（19 次/95s，间隔恒 5s，有界） |
+| L-244 | 健康无 liveness/readiness 分离 | `/livez`（不碰依赖）+ `/readyz`（Ping + 读探针，TTL 1s 缓存，最小响应）；R6/R7/R9/R24 全绿；反证成立 |
+| L-245 | MCP `/healthz` 恒 200 | MCP `/healthz` 增 `upstream_status`、新增 `/readyz` 探上游；R10 全绿 |
+| L-246 | 关闭不等在途轮次 | D 两阶段排水 + T0 接线（`background`/`maintenance` 两阶段）；R14/R15 全绿；反证成立 |
+| L-247 | access-flush 不受 `bgCtx` 约束 | flush 纳入 `bgCtx` + `bgWG` 记账；未设 env 仍不建 goroutine（R12 可证） |
+| L-248 | 5 引擎无调度器 | `LIMS_LIFECYCLE_INTERVAL` 真起定时器（默认关）；R11：60s×3min 内 3 次运行 + `last_lifecycle_run` 更新；反证成立 |
+| L-250 | 无窗口/预算/退避 | `Window`/`Budget`/单飞/退避（1m→2m→4m…封顶 30m）；C 单测全绿；R13 维护轮 6 次触发无锁冲突 |
+| L-251 | SQLite 耐久隐式 | profile 显式 pragma（Q1 裁定 `synchronous=full`）；R22 只读回读 `2/1000/5000` 留档 |
+| L-252 | 无启动恢复自检 | `bootreport`（表/关键列/条数/恢复点/版本/未完成标记，缺表缺列 fail-fast）；R16（kill -9 后 rows=5 + recovery report）、R18（未迁移库 exit 1）；反证成立 |
+| L-254 | 无重启节流/防抖 | `-R 5 -C 24`；反证（去 `-R` → 20s 内 20 次刷屏）成立 |
+| L-255 | 复验清单缺重启自证 | `integrations/lims-088-rc.d/README.md` 四步（stop 不复活 / kill -9 恢复 / 端口唯一 / 条数不丢）；R21 命中 4/4 |
+| L-256 | 文档漂移 | 能力矩阵 `:15,29` 勘误 + 自引行号修正；rc.d 过时注释更新 |
+
+#### 部分关闭（5 条，均有明确残留）
+
+| 编号 | 残留 | 去向 |
+|---|---|---|
+| L-243 | `deploy/lightmem.service` 已交付，**未在 systemd 主机验证** | V-2 |
+| L-249 | `ScanAllBatched`（keyset）就绪，但 `consolidate.go` **未消费** `LIMS_MAINT_BATCH` → 收益未兑现 | L-249 收尾 / V-3 |
+| L-253 | B1 host 校验 + 两 profile 补 `host` + 文档勘误已落；**主备接线/故障转移按 §0.4 出范围** | V-5 |
+| L-257 | `newsyslog.d` + `daemon -H` 已交付，**真机轮转未验证** | V-1 |
+
+#### 新登记（4 条，F 线独立验收发现，编号续 L-257）
+
+| 编号 | 原编号 | 级别 | 缺陷 | 状态 |
+|---|---|---|---|---|
+| **L-258** | F-1 | **P0** | rc.d 不 chdir → solo 档相对 `sqlite.path` 解析到 `/data`，**服务起不来** | 未修（已规避：绝对路径 profile） |
+| **L-259** | F-2 | **P0** | `lightmem_pg_wait=0` 无法关闭 PG 门（循环不执行仍 `return 1`）→ 无 PG 机器 solo 也起不来 | 未修（已规避：5432 占位 + `pg_wait=3`） |
+| **L-260** | F-3 | P1 | `service stop` 只杀 pidfile supervisor，**孤儿 supervisor 会复活服务** | 未修 |
+| **L-261** | F-4 | P1（口径） | B2（PG 启动自检）对 PG 档**默认开启**，与红线④「默认关」口径冲突；R7 因此只能测「运行期删表」 | 未修（口径待裁） |
+
+#### 附 · R29 未闭环事项
+
+| # | 事项 | 接手方 |
+|---|---|---|
+| 1 | **L-258 / L-259**（P0，部署阻断，各一行级） | R30 首项 |
+| 2 | **L-260**（孤儿 supervisor）、**L-261**（B2 口径裁定） | R30 |
+| 3 | **L-249 收尾**：`consolidate.go` 消费 `LIMS_MAINT_BATCH` + 前后对照压测 | R30 |
+| 4 | **北极星五数复跑**（本轮未跑，不得标绿；同口径产出 `r29_final_holdout_*.json` 与 R28 逐字节比对） | R30 首项 |
+| 5 | R5 reboot / R17 断电 / R20 zfs 回滚演练（需窗口/独立池） | 运维窗口 |
+| 6 | systemd 真机验证、newsyslog 真机轮转、B4 排水超时路径构造、L-246 慢轮次反证 | R30 |
+| 7 | PG 主备接线（拓扑级，出范围） | R31+ |
+| 8 | `.env` 的 `GITCODE_TOKEN` 仍 401（R28 起遗留） | 业主更新 token |
+
+> 逐条可执行存档（现象/复现/证据/修法/验收判据）：`_R29_遗留问题存档.md`。
