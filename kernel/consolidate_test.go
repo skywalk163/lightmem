@@ -3,6 +3,7 @@ package kernel
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -143,5 +144,77 @@ func TestConsolidate_NoLayerScanner(t *testing.T) {
 	}
 	if rep.Scanned < 0 {
 		t.Fatalf("scanned should be >=0, got %d", rep.Scanned)
+	}
+}
+
+// R29-C（§6.1.3）：consolidate 可通过 MaintenanceJob 接入调度器，interval<=0 用默认 5 分钟。
+func TestConsolidate_MaintenanceJob_DefaultsAndReport(t *testing.T) {
+	b, _ := newSQLiteBackend(context.Background(), nil)
+	c := NewConsolidator(b)
+	_ = b.Upsert(context.Background(), &Memory{
+		MemoryID: "cm1", IdempotencyKey: "cm1", TenantID: "t1", UserID: "u1",
+		Visibility: VisTenant, MemoryKind: KindFact, Fact: "维护作业合并用例",
+		Confidence: 0.9, Layer: LayerL1, RecordedAt: time.Now().UTC(),
+		Permission: Permission{Owner: "u1"},
+	})
+
+	j := c.MaintenanceJob(0, nil, Budget{})
+	if j.Name != "consolidate" {
+		t.Fatalf("job name = %q, want consolidate", j.Name)
+	}
+	if j.Interval != DefaultConsolidateInterval {
+		t.Fatalf("job interval = %s, want default %s", j.Interval, DefaultConsolidateInterval)
+	}
+
+	rep, err := j.Run(context.Background())
+	if err != nil {
+		t.Fatalf("job run: %v", err)
+	}
+	if rep.Items < 1 {
+		t.Fatalf("job report items = %d, want >=1", rep.Items)
+	}
+	if rep.Job != "consolidate" {
+		t.Fatalf("job report name = %q, want consolidate", rep.Job)
+	}
+}
+
+// R29-C（§6.1.3）：窗口准入——窗口外不启动本轮（[Start,End)，Start 含、End 不含）。
+func TestConsolidate_WindowGate_SkipOutside(t *testing.T) {
+	b, _ := newSQLiteBackend(context.Background(), nil)
+	c := NewConsolidator(b)
+	var ran atomic.Int32
+	c.SetOnRunOnce(func(ConsolidationReport) { ran.Add(1) })
+
+	// 00:00-00:00 恒为空窗口：cur>=0 && cur<0 永远不成立 → 任何时刻都在窗外。
+	c.SetWindow(&Window{Start: "00:00", End: "00:00"})
+	c.SetInterval(50 * time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go c.Start(ctx)
+	time.Sleep(200 * time.Millisecond)
+
+	if got := ran.Load(); got != 0 {
+		t.Fatalf("expected no run outside window, got %d", got)
+	}
+}
+
+// R29-C（§6.1.3）：窗口准入——窗口内照常启动（nil 窗口 = 全时段）。
+func TestConsolidate_WindowGate_AllowInside(t *testing.T) {
+	b, _ := newSQLiteBackend(context.Background(), nil)
+	c := NewConsolidator(b)
+	var ran atomic.Int32
+	c.SetOnRunOnce(func(ConsolidationReport) { ran.Add(1) })
+
+	c.SetWindow(nil)
+	c.SetInterval(50 * time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go c.Start(ctx)
+	time.Sleep(250 * time.Millisecond)
+
+	if got := ran.Load(); got < 1 {
+		t.Fatalf("expected at least one run inside window, got %d", got)
 	}
 }
