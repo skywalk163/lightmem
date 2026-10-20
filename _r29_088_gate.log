@@ -1,0 +1,23 @@
+[0] go 版本 (要求 >= 1.25)                       PASS  (go1.25.14)
+[1] gofmt -l 本轮新增文件                      PASS  (0 文件待格式化)
+[1b] gofmt -l 全仓 (严格)                        PASS  (0 文件待格式化（阈值 0）)
+[2] go vet ./... (逐 module)                        PASS  (2/2 通过)
+[3] go build ./... (逐 module)                      PASS  (2/2 通过)
+[4] go test -count=1 ./... (逐 module)              PASS  (2/2 通过 (-count=1))
+[5] go test -count=1 -race (kernel)                  PASS  (无竞态)
+[6] 新增文件测试覆盖 (阈值 12)             PASS  (forgetting_drift,flush,edge_persist,edge_persist_pg,poison_detect,drift_pipeline,flush_pipeline,backend_qdrant:4,node_role:4,topology:3,connector_app:4,auth:12,mcp:12,workflow:12,lookup:12,reindex:12,access:12,refstore:12,sqlite_vector:15,visibility_tenant:4,pg_superuser_check:4,visindex:3,vector_cache:5,health_probe:6,scheduler:6,drain:6,scan_batched:8,bootreport:6,healthz_options:9（纯测试：edge_persist_pg,workflow,visibility_tenant）)
+[7] 红线抽查 (只增不改白名单)             PASS  (未设 R15_BASELINE / R14_BASELINE，跳过)
+[7b] 受控修改审计 (kernel/writepolicy.go)      INFO  (无基线，跳过)
+[7b] 受控修改审计 (kernel/metrics.go)          INFO  (无基线，跳过)
+[7b] 受控修改审计 (eval/polaris/polaris_mergence.go) INFO  (无基线，跳过)
+[8] 投毒检测                                     PASS  (poison_detect_test.go 全 PASS)
+[9] 合并度激活                                  PASS  (v3: l2=144 edges=10.125 groups=24)
+[9] 合并度激活 (v2 反向)                      PASS  (v2 上 l2_memories/mean_edges_per_memory/entity_groups 仍为 0)
+[10] 接线默认关                                 PASS  (drift_pipeline / flush_pipeline 测试全 PASS)
+[11] PG 真机往返                                 PASS  (真机往返 13 项全 PASS（SKIP=0）)
+[12] PG 夹具残留检查                           PASS  (测试残留为 0（1 项检查通过）)
+
+========== R15 门禁矩阵 ==========
+PASS: 15    FAIL: 0     SKIP: 0    模块数: 2
+[1b] 全仓 gofmt：硬门禁（默认；阈值 0；GATE_STRICT_FMT=0 可回退观测期）
+===================================
