@@ -213,3 +213,59 @@ func (f *fakePingBackend) CountByKind(context.Context, MemoryKind, string) (int6
 func (f *fakePingBackend) Close() error { return nil }
 
 var errFakeDown = errors.New("fake backend down")
+
+// ------------------------------------------------------------------
+// R29-B：生命周期 / 维护 / 排水 / 探针指标
+// ------------------------------------------------------------------
+
+func TestServerMetrics_R29B_LabeledCounters(t *testing.T) {
+	m := NewServerMetrics()
+	m.IncStateTransition("idle", "running", "tick")
+	m.IncStateTransition("idle", "running", "tick")
+	m.IncMaintenanceRun("consolidate", "ok")
+	m.IncMaintenanceSkipped("consolidate", "single_flight")
+	m.IncReadyzFailure("read")
+	m.IncReadyzFailure("read")
+	m.IncReadyzFailure("ping")
+	m.IncReadyzFailure("") // 空分类归一为 unknown
+	m.IncDrainTimeout()
+	m.ObserveBackendProbe(3.5)
+	m.ObserveBackendProbe(12)
+
+	out := m.PrometheusText()
+	for _, want := range []string{
+		`state_transitions_total{from="idle",to="running",reason="tick"} 2`,
+		`maintenance_runs_total{job="consolidate",result="ok"} 1`,
+		`maintenance_skipped_total{job="consolidate",reason="single_flight"} 1`,
+		`readyz_failures_total{check="ping"} 1`,
+		`readyz_failures_total{check="read"} 2`,
+		`readyz_failures_total{check="unknown"} 1`,
+		`drain_timeouts_total 1`,
+		`# TYPE backend_probe_ms histogram`,
+		`backend_probe_ms_count 2`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("缺少指标行 %q\n输出:\n%s", want, out)
+		}
+	}
+	// 直方图和校验：3.5 + 12 = 15.5。
+	if !strings.Contains(out, "backend_probe_ms_sum 15.5") {
+		t.Fatalf("backend_probe_ms_sum 期望 15.5\n输出:\n%s", out)
+	}
+	// 确定性：标签按字典序、无 map 迭代序 → 两次渲染逐字节一致。
+	if out2 := m.PrometheusText(); out2 != out {
+		t.Fatalf("PrometheusText 非确定性（两次输出不同）")
+	}
+}
+
+// DefaultServerMetrics：同一进程内共享同一实例；NewServerMetrics 后默认实例被更新。
+func TestServerMetrics_DefaultInstance(t *testing.T) {
+	m := NewServerMetrics()
+	if got := DefaultServerMetrics(); got != m {
+		t.Fatalf("DefaultServerMetrics 应返回最近一次 NewServerMetrics 的实例")
+	}
+	m.IncDrainTimeout()
+	if !strings.Contains(DefaultServerMetrics().PrometheusText(), "drain_timeouts_total 1") {
+		t.Fatalf("默认实例未记录方法调用")
+	}
+}

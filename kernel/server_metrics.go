@@ -38,6 +38,10 @@ var httpDurationBucketsMS = []float64{1, 5, 10, 25, 50, 100, 250, 500, 1000, 500
 // recallDurationBucketsMS 是检索延迟直方图桶（毫秒）。
 var recallDurationBucketsMS = []float64{1, 5, 10, 25, 50, 100, 250, 500, 1000, 5000}
 
+// backendProbeBucketsMS 是就绪探针耗时直方图桶（毫秒，R29-B §3.2.5 backend_probe_ms）。
+// 探针预算 ≤2s，因此桶上限到 2000ms 即可；复用 ms 口径，无秒级大桶。
+var backendProbeBucketsMS = []float64{1, 5, 10, 25, 50, 100, 250, 500, 1000, 2000}
+
 // histogram 手写直方图（bucket 计数 + 和 + 样本数）。
 type histogram struct {
 	bounds []float64
@@ -82,15 +86,73 @@ type ServerMetrics struct {
 
 	// 最近一次后台整合时间戳（UTC），0 值表示从未执行
 	lastConsolidateUnix atomic.Int64
+
+	// ── R29-B L2 健康硬化：生命周期 / 维护 / 排水 / 探针指标（§3.2.5）──
+	// 命名沿用本文件无前缀家族，不引入第三套（lims_* 家族在 metrics.go）。
+	// 键格式："from|to|reason"、"job|result"、"job|reason"、"check"。
+	stateTransitionsTotal   map[string]int64 // 状态机迁移（I2 可证条件）
+	maintenanceRunsTotal    map[string]int64 // 每类后台任务成功/失败
+	maintenanceSkippedTotal map[string]int64 // 单飞跳过 / 预算用尽
+	drainTimeoutsTotal      int64            // 排水超时（含硬兜底触发）
+	readyzFailuresTotal     map[string]int64 // 就绪失败分类
+	backendProbeMS          *histogram       // 探针耗时（验证 TTL 缓存是否真的减负）
 }
 
-// NewServerMetrics 创建进程级指标注册表。
-func NewServerMetrics() *ServerMetrics {
+// newServerMetricsValue 构造一个全新的指标注册表（不加锁，供 NewServerMetrics /
+// DefaultServerMetrics 在持锁状态下复用，避免重入死锁）。
+func newServerMetricsValue() *ServerMetrics {
 	return &ServerMetrics{
-		httpRequestsTotal: map[string]int64{},
-		httpDurationMS:    newHistogram(httpDurationBucketsMS),
-		recallLatencyMS:   newHistogram(recallDurationBucketsMS),
+		httpRequestsTotal:       map[string]int64{},
+		httpDurationMS:          newHistogram(httpDurationBucketsMS),
+		recallLatencyMS:         newHistogram(recallDurationBucketsMS),
+		stateTransitionsTotal:   map[string]int64{},
+		maintenanceRunsTotal:    map[string]int64{},
+		maintenanceSkippedTotal: map[string]int64{},
+		readyzFailuresTotal:     map[string]int64{},
+		backendProbeMS:          newHistogram(backendProbeBucketsMS),
 	}
+}
+
+// defaultMetrics 是进程级默认指标注册表（R29-B 新增）。
+//
+// 存在理由（不改变 NewServerMetrics 既有语义）：
+//   - 指标实例目前在 main.go 局部创建（`metrics := kernel.NewServerMetrics()`），
+//     而 health_probe.go 的探针、C/D 线的调度/排水**都没有 main.go 的句柄**，
+//     且 main.go 只有 T0 能改（任务书 §2.2 红线⑥）；
+//   - 因此提供一个包级默认实例作为共享出口：NewServerMetrics() 仍返回全新注册表
+//     （语义不变），同时把最近一次创建的实例登记为默认；未显式创建时按需惰性创建。
+//
+// 默认关自证：未设任何新开关时，本机制不改变任何 HTTP 行为（只是多了一个可写指针）。
+var (
+	defaultMetricsMu sync.RWMutex
+	defaultMetrics   *ServerMetrics
+)
+
+// NewServerMetrics 创建进程级指标注册表（语义不变：每次调用返回全新注册表）。
+// 副作用：把该实例登记为包级默认实例（见 DefaultServerMetrics）。
+func NewServerMetrics() *ServerMetrics {
+	m := newServerMetricsValue()
+	defaultMetricsMu.Lock()
+	defaultMetrics = m
+	defaultMetricsMu.Unlock()
+	return m
+}
+
+// DefaultServerMetrics 返回包级默认指标注册表；未显式创建过则惰性创建一个。
+// 供 health_probe.go 探针与 C/D 线调度/排水复用（它们无 main.go 句柄）。
+func DefaultServerMetrics() *ServerMetrics {
+	defaultMetricsMu.RLock()
+	m := defaultMetrics
+	defaultMetricsMu.RUnlock()
+	if m != nil {
+		return m
+	}
+	defaultMetricsMu.Lock()
+	defer defaultMetricsMu.Unlock()
+	if defaultMetrics == nil {
+		defaultMetrics = newServerMetricsValue()
+	}
+	return defaultMetrics
 }
 
 // isRecallRequest 判定请求是否属于检索类端点（用于 recall 延迟埋点与计数）。
@@ -153,6 +215,55 @@ func (m *ServerMetrics) LastConsolidate() time.Time {
 }
 
 // ------------------------------------------------------------------
+// R29-B：生命周期 / 维护 / 排水 / 探针指标（§10 冻结方法，C/D 只调用）
+// ------------------------------------------------------------------
+
+// IncStateTransition 记录一次状态机迁移（from → to，附 reason）。
+func (m *ServerMetrics) IncStateTransition(from, to, reason string) {
+	m.mu.Lock()
+	m.stateTransitionsTotal[from+"|"+to+"|"+reason]++
+	m.mu.Unlock()
+}
+
+// IncMaintenanceRun 记录一类后台任务的一轮结果（result 建议 ok/fail）。
+func (m *ServerMetrics) IncMaintenanceRun(job, result string) {
+	m.mu.Lock()
+	m.maintenanceRunsTotal[job+"|"+result]++
+	m.mu.Unlock()
+}
+
+// IncMaintenanceSkipped 记录一次后台任务跳过（reason 如 single_flight/budget_exhausted）。
+func (m *ServerMetrics) IncMaintenanceSkipped(job, reason string) {
+	m.mu.Lock()
+	m.maintenanceSkippedTotal[job+"|"+reason]++
+	m.mu.Unlock()
+}
+
+// IncDrainTimeout 记录一次排水超时（含硬兜底触发）。
+func (m *ServerMetrics) IncDrainTimeout() {
+	m.mu.Lock()
+	m.drainTimeoutsTotal++
+	m.mu.Unlock()
+}
+
+// IncReadyzFailure 记录一次就绪失败（check 为失败分类，如 ping/read）。
+func (m *ServerMetrics) IncReadyzFailure(check string) {
+	if check == "" {
+		check = "unknown"
+	}
+	m.mu.Lock()
+	m.readyzFailuresTotal[check]++
+	m.mu.Unlock()
+}
+
+// ObserveBackendProbe 记录一次后端探针耗时（毫秒）。
+func (m *ServerMetrics) ObserveBackendProbe(ms float64) {
+	m.mu.Lock()
+	m.backendProbeMS.observe(ms)
+	m.mu.Unlock()
+}
+
+// ------------------------------------------------------------------
 // Prometheus 文本输出
 // ------------------------------------------------------------------
 
@@ -198,7 +309,69 @@ func (m *ServerMetrics) PrometheusText() string {
 	out += "# TYPE recall_latency_ms histogram\n"
 	out += renderHistogram("recall_latency_ms", m.recallLatencyMS, "ms")
 
+	// ── R29-B：生命周期 / 维护 / 排水 / 探针指标 ──
+	out += renderLabelledCounter("state_transitions_total",
+		"状态机迁移总数（按 from/to/reason 切分）",
+		[]string{"from", "to", "reason"}, m.stateTransitionsTotal)
+	out += renderLabelledCounter("maintenance_runs_total",
+		"后台维护任务运行总数（按 job/result 切分）",
+		[]string{"job", "result"}, m.maintenanceRunsTotal)
+	out += renderLabelledCounter("maintenance_skipped_total",
+		"后台维护任务跳过总数（按 job/reason 切分）",
+		[]string{"job", "reason"}, m.maintenanceSkippedTotal)
+
+	out += "# HELP drain_timeouts_total 排水超时总数（含硬兜底触发）\n"
+	out += "# TYPE drain_timeouts_total counter\n"
+	out += fmt.Sprintf("drain_timeouts_total %d\n", m.drainTimeoutsTotal)
+
+	out += renderLabelledCounter("readyz_failures_total",
+		"就绪探针失败总数（按 check 分类）",
+		[]string{"check"}, m.readyzFailuresTotal)
+
+	out += "# HELP backend_probe_ms 后端就绪探针耗时（毫秒）\n"
+	out += "# TYPE backend_probe_ms histogram\n"
+	out += renderHistogram("backend_probe_ms", m.backendProbeMS, "ms")
+
 	return out
+}
+
+// renderLabelledCounter 渲染一个带固定标签集的计数器家族（标签按 key 字典序，无 map 迭代序）。
+// 键格式为以 '|' 连接的标签值，标签个数与 labels 长度一致。
+func renderLabelledCounter(name, help string, labels []string, counts map[string]int64) string {
+	var out string
+	out += fmt.Sprintf("# HELP %s %s\n", name, help)
+	out += fmt.Sprintf("# TYPE %s counter\n", name)
+	keys := make([]string, 0, len(counts))
+	for k := range counts {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		vals := splitLabels(k, len(labels))
+		var b strings.Builder
+		b.WriteString(name)
+		b.WriteString("{")
+		for i, ln := range labels {
+			if i > 0 {
+				b.WriteString(",")
+			}
+			b.WriteString(ln)
+			b.WriteString("=")
+			b.WriteString(labelVal(vals[i]))
+		}
+		b.WriteString("}")
+		out += fmt.Sprintf("%s %d\n", b.String(), counts[k])
+	}
+	return out
+}
+
+// splitLabels 把以 '|' 连接的键切成 n 段；段数不足时补空串（防止脏键导致越界 panic）。
+func splitLabels(k string, n int) []string {
+	parts := strings.SplitN(k, "|", n)
+	for len(parts) < n {
+		parts = append(parts, "")
+	}
+	return parts
 }
 
 // renderHistogram 渲染单一直方图为 Prometheus 文本（bucket / sum / count）。
