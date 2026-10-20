@@ -32,6 +32,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -93,9 +94,13 @@ func main() {
 	}
 
 	embedderName := "hash"
+	// R29-T0 接线（PE-C1）：把 embed 函数保留为变量，供维护调度器的生命周期
+	// 引擎集（L-248）复用——与 APIServer 用的是**同一个** embedder，不另造。
+	var embedFn func(string) ([]float32, error)
 	switch strings.ToLower(*embedderMode) {
 	case "hash":
-		srv.SetEmbedder(kernel.HashEmbedder(dim))
+		embedFn = kernel.HashEmbedder(dim)
+		srv.SetEmbedder(embedFn)
 	case "vector":
 		ve, verr := kernel.NewVectorEmbedder(kernel.VectorEmbedderConfig{
 			MatrixPath: *vectorMatrix,
@@ -106,6 +111,7 @@ func main() {
 			_ = backend.Close()
 			log.Fatalf("[boot] -embedder vector failed (%v); retry with -embedder hash", verr)
 		}
+		embedFn = ve.Embed
 		srv.SetEmbedder(ve.Embed)
 		embedderName = ve.Name()
 		log.Printf("[boot] vector embedder loaded: %s dim=%d count=%d",
@@ -161,6 +167,15 @@ func main() {
 		metrics.RecordConsolidate(rep.RanAt)
 	})
 
+	// R29-D（PB-1，修 L-247）：后台上下文**提前**创建——access-flush、整合、
+	// 维护调度器共用同一个 bgCtx，关闭时统一取消；此前 flush 用
+	// context.Background()，进程关闭时它仍可能在写库（use-after-close 风险）。
+	bgCtx, bgCancel := context.WithCancel(context.Background())
+	defer bgCancel()
+	// bgWG 记账「后台常驻循环」（整合 worker / access-flush 定时器），
+	// 供排水阶段等待其返回（PB-4）。
+	var bgWG sync.WaitGroup
+
 	// 5b) R24-C：访问追踪器（L-223）+ 生命周期引擎（L-224）接线。
 	//     **默认全关**：两个开关皆未设时不注入、不注册路由、不起定时器，
 	//     逐位保持 c908091 行为（红线：新能力默认关）。
@@ -174,16 +189,26 @@ func main() {
 		log.Printf("[boot] R24-C access tracker enabled (capacity=%d, tau=7d)", accessTrackerCapacity())
 	}
 	// 5c) 访问计数落库定时器（默认关；空/非法值=不启用）
+	//     R29-D（PB-1）：纳入 bgCtx（关闭时随上下文退出），并由 bgWG 记账；
+	//     **未设 env 仍不创建 goroutine**（红线④：默认关逐位一致）。
 	if v := os.Getenv("LIMS_ACCESS_FLUSH_INTERVAL"); v != "" {
 		if d, derr := time.ParseDuration(v); derr == nil && d > 0 {
+			bgWG.Add(1)
 			go func() {
+				defer bgWG.Done()
 				ticker := time.NewTicker(d)
 				defer ticker.Stop()
-				for range ticker.C {
-					if n, err := accessTracker.Flush(context.Background(), backend, ""); err != nil {
-						log.Printf("[access] flush failed: %v", err)
-					} else if n > 0 {
-						log.Printf("[access] flushed %d memories", n)
+				for {
+					select {
+					case <-bgCtx.Done():
+						log.Printf("[access] flush timer stopped: %v", bgCtx.Err())
+						return
+					case <-ticker.C:
+						if n, err := accessTracker.Flush(bgCtx, backend, ""); err != nil {
+							log.Printf("[access] flush failed: %v", err)
+						} else if n > 0 {
+							log.Printf("[access] flushed %d memories", n)
+						}
 					}
 				}
 			}()
@@ -277,28 +302,55 @@ func main() {
 		kernel.RequireIdentity,
 	)
 
-	// 7) 后台整合 goroutine
-	bgCtx, bgCancel := context.WithCancel(context.Background())
-	defer bgCancel()
-	go cons.Start(bgCtx)
+	// 7) 后台整合 goroutine（R29-D PB-4：由 bgWG 记账，排水阶段等它返回）
+	bgWG.Add(1)
+	go func() { defer bgWG.Done(); cons.Start(bgCtx) }()
 
-	// R29-T0 S0 接缝：维护调度器（C 线硬化；默认关）。
-	// 仅当 LIMS_MAINTENANCE_INTERVAL 显式设置才启动；否则不创建任何维护 goroutine，
-	// 行为与 c203db8 逐位一致。DefaultMaintenanceJobs 默认返回空 job 列表。
+	// R29-T0 接线（PE-C2，修 L-248）：维护调度器。
+	// **默认关**：不设 LIMS_LIFECYCLE_INTERVAL / LIMS_MAINTENANCE_INTERVAL 时
+	// DefaultMaintenanceJobs 返回空 → 不启动调度器、不创建任何 goroutine，
+	// 行为与 c203db8 逐位一致（红线④）。
+	// 设了 LIMS_LIFECYCLE_INTERVAL → 生命周期引擎集真起定时器（L-248 关闭）。
 	var maint *kernel.Maintenance
-	if v := os.Getenv("LIMS_MAINTENANCE_INTERVAL"); v != "" {
-		if d, derr := time.ParseDuration(v); derr == nil && d > 0 {
-			maint = kernel.StartMaintenance(bgCtx,
-				kernel.DefaultMaintenanceJobs(kernel.MaintenanceConfig{Logf: log.Printf}),
-				log.Printf)
-			log.Printf("[boot] maintenance scheduler started interval=%s", d)
+	{
+		deps := kernel.MaintenanceDeps{
+			Backend:      backend,
+			Embedder:     embedFn,
+			Consolidator: cons,
+			Logf:         log.Printf,
+		}
+		cfg := kernel.MaintenanceConfigFromEnv(os.Getenv, deps)
+		if len(kernel.DefaultMaintenanceJobs(cfg)) > 0 {
+			maint = kernel.StartMaintenanceAuto(bgCtx, deps)
+			if maint != nil {
+				// §10：指标接收器由 T0 注入一次，C/D 只调用不自建注册表。
+				kernel.SetMaintenanceMetrics(metrics)
+				log.Printf("[boot] maintenance scheduler started lifecycle=%s engines=%v window=%s",
+					cfg.LifecycleInterval, cfg.LifecycleEngines, cfg.LifecycleWindow)
+			}
 		}
 	}
 
-	// R29-T0 S0 接缝：优雅排水器（D 线硬化；默认不注册任何阶段）。
-	// Run 默认立即返回 true，不会触发 os.Exit(1)；B4 行为变更仅当 D 线注册了
-	// 会超时的排水阶段且真的超时才生效。
+	// R29-T0 接线（PE-D1，§7.1 两阶段排水）：排水器 + 阶段注册。
+	// 默认关：未注册任何阶段时 Run 立即返回 true，不会触发 os.Exit(1)（B4 不生效）。
 	drainer := kernel.NewDrainer(*shutdownTimeout, log.Printf)
+	drainer.SetTimeoutCounter(metrics) // PB-3b：drain_timeouts_total
+	drainer.Add("background", func(ctx context.Context) error {
+		// 等整合 worker 与 access-flush 定时器返回（bgWG 记账）。
+		done := make(chan struct{})
+		go func() { bgWG.Wait(); close(done) }()
+		select {
+		case <-done:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	if maint != nil {
+		drainer.Add("maintenance", func(ctx context.Context) error {
+			return maint.Wait(ctx) // 等当前维护轮次结束（不启新轮由 Stop 保证）
+		})
+	}
 
 	// 8) HTTP server
 	server := &http.Server{
@@ -344,6 +396,13 @@ func main() {
 		}
 	case sig := <-sigCh:
 		log.Printf("[shutdown] received signal %s, graceful draining (timeout=%s)", sig, *shutdownTimeout)
+		// R29-D（PB-3a）：关闭开始即落「未完成排水」标记（正常关闭会清理；
+		// 超时/崩溃路径保留，供 E 线启动自检读取并告警）。
+		if *dataDir != "" {
+			if merr := kernel.MarkUnfinished(*dataDir, "shutdown"); merr != nil {
+				log.Printf("[shutdown] MarkUnfinished: %v", merr)
+			}
+		}
 	}
 
 	// 9) graceful shutdown：停止接收新请求，等待在途请求完成
@@ -354,20 +413,25 @@ func main() {
 		_ = adminServer.Shutdown(shCtx)
 	}
 
-	// 10) drain 后台 consolidate
-	log.Printf("[shutdown] cancel consolidate worker")
-	bgCancel()
-
-	// R29-T0 S0 接缝：优雅排水（D 线硬化；默认无注册阶段 → Run 立即返回 true）。
-	// 若 D 线注册了会超时的排水阶段且真的超时，Run 返回 false → os.Exit(1)（B4 行为变更）。
-	if !drainer.Run(shCtx) {
-		log.Printf("[shutdown] drain timeout, forcing exit (B4)")
-		os.Exit(1)
-	}
-
-	// R29-T0 S0 接缝：停止维护调度器（幂等、不阻塞）。
+	// 10) 两阶段排水（§7.1 / R29-D）：
+	//     ② maint.Stop() —— 不再启新轮（幂等、不阻塞）
+	//     ③ cancel(bgCtx) + drainer.Run —— 等整合/生命周期/落库 goroutine 返回
+	//        ├─ 正常 → 清标记 → backend.Close()
+	//        └─ 超时 → 保留标记 + drain_timeouts_total + os.Exit(1)（B4，由 supervisor 拉起）
+	//     **禁止**超时后先 Close() 仍让 goroutine 跑（Go 杀不掉 goroutine → use-after-close）。
 	if maint != nil {
 		maint.Stop()
+	}
+	log.Printf("[shutdown] cancel background workers (consolidate/access-flush)")
+	bgCancel()
+	if !drainer.Run(shCtx) {
+		log.Printf("[shutdown] drain timeout, forcing exit (B4); unfinished marker KEPT")
+		os.Exit(1)
+	}
+	if *dataDir != "" {
+		if cerr := kernel.ClearUnfinished(*dataDir); cerr != nil {
+			log.Printf("[shutdown] ClearUnfinished: %v", cerr)
+		}
 	}
 
 	// 11) 关闭后端连接池
