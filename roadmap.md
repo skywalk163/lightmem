@@ -353,3 +353,40 @@
 4. **（复测）** `/search` P95 44.97ms（关掉本轮优化仍 48.92ms，与 R28 无关）逼近红线 50.12ms，需复测确认是否回落。
 5. ~~**（业主拍板）** PG 走 **trust 免密**：`lightmem_app` 已设口令但认证不强制，能连 5432 者可冒充该角色；收紧 pg_hba 属部署变更。~~ → **已收紧（R28 收尾，2026-10-20）**：host 规则全量 `scram-sha-256`、`local` 规则 `peer`，**trust 清零**；口令经 `LIMS_PG_PASSWORD` 注入（代码零改动），门禁仍 15/0/0、服务 `/healthz` ok。残余未知：jail 内 socket 免密依赖（风险极低，回退见 `_R28_收口报告.md` §4.5.3）。
 6. **（流程）** ~~R28 改动**已本地 commit，未 push**（红线⑧，等业主示意）~~ → **已推三远端**（2026-10-20 业主示意后）：origin = gitcode = `c203db8`；github = `49b7d1a`（inline 内容等价，tree 逐字节相同）；`.env` 的 `GITCODE_TOKEN` 仍 401，待业主更新 token。
+
+## 三·十一、R29 收口留痕（2026-10-20 晚）
+
+**主题**：永续运行（Always-On）——守护自愈 + 健康三端点 + 睡眠调度 + 耐久自检。
+**地基**：设计真源 `docs/永续运行架构设计_v1.1.md` + `_R29_并行任务书_永续运行.md`（六线并行）。
+**结论**：门禁 **PASS 15 / FAIL 0 / SKIP 0**（`[11]` PG 真机往返**真跑**，R28 时是 SKIP）；
+R1–R25 **PASS 22 / FAIL 0 / SKIP 3**；5 组反证实验全部成立；
+**北极星五数未复跑（不标绿）** → 登记为**「有条件收口」**。
+
+| 线 | 动作 | 实测 |
+|---|---|---|
+| **T0** | S0 接缝（接口冻结 + `main.go` 预埋 + auth 豁免 + profile B1）+ P0-A 三件套（watchdog / newsyslog / systemd）+ PE-1/2/3 + **PE-C1/C2/D1 补接线** | `/healthz` 增 `schema_*/rows/restore_point/version/started_at`；Q1 `synchronous=full`；R16/R18 闭环 |
+| **A** | rc.d 守护改造：`daemon -R 5 -C 24 -H` + stop 顺序修正（先 TERM supervisor）+ 重启自证四步 | R2（kill -9 → 15s 内新 pid + `/readyz` 200）、R3（端口唯一）、R23（19 次/95s，间隔恒 5s） |
+| **B** | `/livez` + `/readyz`（TTL 1s 缓存 + 最小响应）+ 指标 6 族 + MCP 探上游 | R6/R7/R9/R10/R24/R25 全绿；`backend_probe_ms_count=63`（TTL 理论 60） |
+| **C** | 调度器（窗口/预算/单飞/退避）+ `LIMS_LIFECYCLE_INTERVAL` 真起定时器 | R11：60s×3min 内 3 次运行；R12 默认关与 `c203db8` 逐字节相同 |
+| **D** | 两阶段排水 + 未完成标记（原子写）+ keyset 批量扫描 | R14：`[drain] waiting` × 2 阶段、`all 2 stages completed`、无 `database is closed`；R15 标记清理 |
+| **E** | SQLite pragma 显式化 + 启动自检（表/列/条数/恢复点/标记，缺则 fail-fast） | R22 只读回读 `synchronous=2(FULL)/1000/5000`；R16 kill -9 后 rows=5 |
+| **F** | R1–R25 脚本化 + 5 组反证 + 门禁复核 + 环境故障定位 | `scripts/accept_r29_alwayson.py`、`scripts/perf_probe.py`、`_R29_F线验收报告.md` |
+
+### R29 实测锚点
+
+- 门禁：`_r29_088_gate.log`（15/0/0，md5 `d14de2cc87227875686d51dc47d994f4`；`[11]` 真机 13 项、`[12]` 残留 0）。
+- 判据：`_R29_F线验收报告.md` §2（逐条含原始输出）；分模式 PASS 15/7/4/2、FAIL 0。
+- 反证：L-242（去 `-R` → 20s 内 20 次刷屏）、L-244（去读探针 → R7 红）、L-246（去排水 → R14 红）、
+  L-248（去定时器 → R11 红）、L-252（去列断言 → 缺列能起来）。
+- 环境：**0.88 jail 网络故障根因 = bridge0 epair 成员陈旧**（`deletem`+`addm` 重挂即恢复），
+  PG 真机 `10.0.10.10:5432` 直连可用；验收另起隔离 PG 实例 `127.0.0.1:15432`（非 superuser 角色）。
+
+### 对后续轮次的输入
+
+1. **（R30 首项·P0）** **L-258**（rc.d 不 chdir → solo 档相对 sqlite 路径打不开库）、**L-259**（`pg_wait=0` 无法关闭 PG 门）——均为部署阻断，一行级改动。
+2. **（R30·P1）** **L-260** 孤儿 supervisor 让 stop 失效；**L-261** B2（PG 启动自检）默认开启与红线④口径冲突，需裁定并写入文档。
+3. **（R30·P1）** **北极星五数复跑**：本轮未跑，不得标绿；同口径产出 `r29_final_holdout_*.json` 与 R28（md5 `e98c7839…`）逐字节比对。
+4. **（R30）** **L-249 收尾**：`consolidate.go` 消费 `LIMS_MAINT_BATCH` + 前后对照压测（收益兑现）。
+5. **（运维窗口）** R5 reboot 自启、R17 断电实测、R20 zfs 回滚演练（需独立测试池）。
+6. **（R30）** systemd 真机验证、newsyslog 真机轮转、B4 排水超时路径构造、L-246 慢轮次反证补强。
+7. **（流程）** 本轮按业主 2026-10-20 21:37 指令**解除红线⑤**并推三远端；`.env` 的 `GITCODE_TOKEN` 仍 401（R28 遗留）。
