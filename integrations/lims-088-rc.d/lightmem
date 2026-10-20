@@ -25,13 +25,23 @@
 #   lightmem_log="/var/log/lightmem.log"
 #   lightmem_pidfile="/var/run/lightmem/lightmem.pid"
 #   lightmem_pg_wait="60"            # 启动前等待 PG 就绪的秒数
+#   lightmem_restart_delay="5"       # R29-A：崩溃后重启延迟秒数（daemon -R）
+#   lightmem_restart_count="24"      # R29-A：最多重启次数（daemon -C；用尽后
+#                                    # daemon 自行退出 → 服务真下线，防无限刷屏）
 #
 # 设计说明：
-#   1. 默认走 **pgvector 档**（持久化）。Solo/SQLite 档当前是内存骨架，
-#      进程重启即丢数据，不可用于真实记忆（详见 _R160 问题记录 I-15）。
+#   1. 默认走 **pgvector 档**（持久化）。Solo/SQLite 档自 R19-B 起为**真实磁盘
+#      持久化**（modernc.org/sqlite 纯 Go 驱动：写入→关闭→重开数据仍在，见
+#      backend_sqlite_persist_test.go）；旧注释「内存骨架、重启即丢数据」已过时
+#      （_R160 问题记录 I-15 已闭环）。
 #   2. 端口 18443 刻意避开机器上既有的 :8443 旧实例，互不影响。
 #   3. 停止时按「本服务的二进制 + profile」精确匹配，绝不误杀 :8443 旧实例。
 #   4. 启动前等待 lims-pg jail 的 5432 就绪，避免开机竞态导致后端连接失败。
+#   5. R29-A（永续运行 L1）：daemon(8) 以 **-R/-C** 监督重启（0.88 实测支持），
+#      崩溃自愈 + 有界防抖；stop 顺序为「先 TERM 监督者 → 等待 → 兜底 pkill」。
+#      依据 daemon(8) 手册：SIGTERM 发给监督者会转发给子进程，子进程退出、
+#      移除 pidfile、监督者随后终止；若先杀子进程，监督者会立刻拉起新子进程，
+#      与随后的 TERM 竞态，可能留下新实例占用端口（下次 start 报 EADDRINUSE）。
 
 . /etc/rc.subr
 
@@ -58,6 +68,16 @@ load_rc_config $name
 : ${lightmem_pidfile:="/var/run/lightmem/lightmem.pid"}
 : ${lightmem_pg_wait:="60"}
 : ${lightmem_start_wait:="20"}
+# R29-A：daemon(8) 监督重启参数（0.88 `man daemon` 实测支持 -R/-C/-H）。
+#   -R <秒>：子进程终止后延迟 N 秒重启（1–31536000）——把崩溃风暴压成
+#            「每 N 秒最多一次」的有界节奏；
+#   -C <N>：最多重启 N 次，用尽后 daemon 自身退出 → 服务真下线（看日志喊人），
+#           而非无限刷屏；此时由 watchdog（deploy/ 三件套，T0 P0-A 交付）
+#           作为最后一道兜底重新拉起并告警；
+#   -H    ：收到 SIGHUP 时重开 -o 日志文件，配合 deploy/newsyslog.d/lightmem.conf
+#           （T0 P0-A 交付）做日志轮转，避免长期运行撑满盘（L-257）。
+: ${lightmem_restart_delay:="5"}
+: ${lightmem_restart_count:="24"}
 # R21 T3：agent token 表（供 AuthMiddleware 鉴权）。文件不存在 → 不注入 → 透传态。
 : ${lightmem_tokens_file:="${lightmem_chdir}/agent-tokens.json"}
 
@@ -125,31 +145,42 @@ lightmem_precmd() {
     return 1
 }
 
-# 停止 daemon 及其 lightmem-kernel 子进程。
-# daemon -P 只记录被监管的 pid；只 kill 它会把子进程留成孤儿并继续占用端口，
-# 导致下次 start 报 EADDRINUSE。
+# 停止 daemon(8) 监督者及其 lightmem-kernel 子进程。
+# R29-A 顺序修正（v1.0 设计稿「现有顺序天然兼容」结论已作废）：
+#   旧顺序先 pkill 子进程 → 在 -R/-C 监督语义下，监督者会**立刻**拉起新子进程，
+#   随后 TERM 才到 → 竞态留下新实例占用端口 → 下次 start 报 EADDRINUSE。
+#   新顺序依据 daemon(8) 手册（0.88 实测语义）：SIGTERM 发给**监督者**时它转发给
+#   子进程，子进程退出、移除 pidfile、监督者随后终止 —— 一步到位、无竞态。
+#     ① kill -TERM "$(cat ${pidfile})"      # 先 supervisor（-P 记录的就是它）
+#     ② 轮询等待 supervisor 与子进程都消失（带超时）
+#     ③ pkill -f "${lightmem_pkill_pattern}"  # 兜底：清孤儿（不再是首选）
+#     ④ rm -f "${pidfile}"
 lightmem_stop() {
-    # 1) 先结束被监管的子进程（精确匹配本服务的二进制 + profile）
-    pkill -f "${lightmem_pkill_pattern}" 2>/dev/null
-    # 2) 再结束 daemon(8) 监管进程本身
+    # 1) 先 TERM 监督者：它转发 TERM 给子进程、清 pidfile、自行退出。
+    #    （-P 写的是 supervisor pid；若误用 -p 的子进程 pid，手册明确警告
+    #     「signal the child → daemon restarts it」——正是要避免的竞态。）
     if [ -f "${pidfile}" ]; then
         kill -TERM "$(cat "${pidfile}")" 2>/dev/null
     fi
+    # 2) 轮询等待 supervisor 与子进程都消失（最多 20s）。
     _i=0
     while [ "${_i}" -lt 20 ]; do
-        if pgrep -f "${lightmem_pkill_pattern}" >/dev/null 2>&1; then
-            sleep 1
-        else
-            break
-        fi
+        _sup=""
+        [ -f "${pidfile}" ] && _sup=$(cat "${pidfile}" 2>/dev/null)
+        _alive=""
+        [ -n "${_sup}" ] && kill -0 "${_sup}" 2>/dev/null && _alive="sup"
+        pgrep -f "${lightmem_pkill_pattern}" >/dev/null 2>&1 && _alive="${_alive}child"
+        [ -z "${_alive}" ] && break
+        sleep 1
         _i=$((_i + 1))
     done
+    # 3) 兜底：仍有残留（孤儿子进程/失联 pidfile）才强制清。
     if pgrep -f "${lightmem_pkill_pattern}" >/dev/null 2>&1; then
         echo "lightmem: 优雅退出超时，强制结束" >&2
         pkill -9 -f "${lightmem_pkill_pattern}" 2>/dev/null
         sleep 1
     fi
-    # 3) pidfile 必须清掉：否则 daemon -P 会认为「process already running」而拒绝启动。
+    # 4) pidfile 必须清掉：否则 daemon -P 会认为「process already running」而拒绝启动。
     rm -f "${pidfile}"
     return 0
 }
@@ -181,6 +212,8 @@ lightmem_status() {
 # 启动：显式后台化 daemon(8)，再等健康检查通过才返回。
 # -f 让 daemon 先把 stdin/stdout/stderr 指向 /dev/null，再按 -o 写日志：
 # 这样它不会继承调用方的任何 fd（否则非交互 SSH 会因管道被持有而一直不返回）。
+# -H -R -C：R29-A 监督重启（崩溃自愈 + 有界防抖 + SIGHUP 重开日志），
+# 详见上方 lightmem_restart_delay/lightmem_restart_count 注释。
 lightmem_start() {
     rm -f "${pidfile}"
     # R21 T3：token 表由 install 脚本落到 ${lightmem_tokens_file}（0600）。
@@ -194,7 +227,8 @@ lightmem_start() {
     # -u 必须显式给：自定义 start_cmd 走的是 rc.subr 的 *_cmd 分支，
     # 不会套用 ${name}_user 的 su 包装，否则服务会以 root 身份运行。
     if [ -n "${_tokens}" ]; then
-        /usr/sbin/daemon -f -u "${lightmem_user}" -P "${pidfile}" -o "${lightmem_log}" \
+        /usr/sbin/daemon -f -H -R "${lightmem_restart_delay}" -C "${lightmem_restart_count}" \
+            -u "${lightmem_user}" -P "${pidfile}" -o "${lightmem_log}" \
             env "HOME=${lightmem_home}" \
                 "LIMS_AGENT_TOKENS=${_tokens}" \
             "${lightmem_binary}" \
@@ -202,7 +236,8 @@ lightmem_start() {
             -listen "${lightmem_listen}" \
             -embedder "${lightmem_embedder}" &
     else
-        /usr/sbin/daemon -f -u "${lightmem_user}" -P "${pidfile}" -o "${lightmem_log}" \
+        /usr/sbin/daemon -f -H -R "${lightmem_restart_delay}" -C "${lightmem_restart_count}" \
+            -u "${lightmem_user}" -P "${pidfile}" -o "${lightmem_log}" \
             env "HOME=${lightmem_home}" \
             "${lightmem_binary}" \
             -profile "${lightmem_profile}" \
