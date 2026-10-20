@@ -682,14 +682,15 @@ func TestAuthMiddleware_Concurrent(t *testing.T) {
 // R21 T3：运维端点鉴权豁免（G10 回归守护）
 // ------------------------------------------------------------------
 
-// TestAuthMiddleware_OperationalEndpointsExempt 运维端点（/healthz、/health、/metrics）
-// 必须**免鉴权**：否则 rc.d supervisor 的 `fetch /healthz` 会 401，服务永远无法启动（T3 实测）。
+// TestAuthMiddleware_OperationalEndpointsExempt 运维端点（/healthz、/health、/metrics、
+// /livez、/readyz）必须**免鉴权**：否则 rc.d supervisor 的 `fetch /healthz` 会 401，
+// 服务永远无法启动（T3 实测）；R29-B 同步扩到 /livez、/readyz（探针同样不得 401）。
 func TestAuthMiddleware_OperationalEndpointsExempt(t *testing.T) {
 	resetAuthState(t)
 	InitAgentTokens(map[string]AgentIdentity{
 		"t-trae-000001": {AgentID: "trae", UserID: "skywalk", TenantID: "dshteam"},
 	})
-	for _, path := range []string{"/healthz", "/health", "/metrics"} {
+	for _, path := range []string{"/healthz", "/health", "/metrics", "/livez", "/readyz"} {
 		reached := false
 		h := AuthMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 			reached = true
@@ -727,12 +728,12 @@ func TestAuthMiddleware_BusinessEndpointsStillGuarded(t *testing.T) {
 	}
 }
 
-// TestRequireIdentity_OperationalEndpointsExempt RequireIdentity 同口径豁免，
+// TestRequireIdentity_OperationalEndpointsExempt RequireIdentity 同口径豁免（5 个端点），
 // 否则 LIMS_REQUIRE_AUTH=1 时健康检查同样会被挡住（服务起不来）。
 func TestRequireIdentity_OperationalEndpointsExempt(t *testing.T) {
 	resetAuthState(t)
 	t.Setenv(EnvRequireAuth, "1")
-	for _, path := range []string{"/healthz", "/metrics"} {
+	for _, path := range []string{"/healthz", "/health", "/metrics", "/livez", "/readyz"} {
 		reached := false
 		h := RequireIdentity(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 			reached = true

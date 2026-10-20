@@ -16,6 +16,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -97,22 +98,81 @@ func (s *HTTPServer) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/mcp", s.handleMCP)
 	mux.HandleFunc("/healthz", s.handleHealthz)
+	// R29-B（§3.2.4）：新增 /readyz 探上游内核就绪，失败 503——这才是给 LB/编排层用的。
+	mux.HandleFunc("/readyz", s.handleReadyz)
 	return mux
 }
 
+// mcpUpstreamProbeTimeout 是 MCP 探上游的超时（设计稿 §3.2.4 要求 ≤1s）。
+const mcpUpstreamProbeTimeout = 1 * time.Second
+
 // handleHealthz 返回 MCP 服务自身存活状态与上游 REST 地址（不含记忆数据）。
+//
+// R29-B（§3.2.4，修 L-245，兼容优先）：保持 HTTP 200 的 liveness 语义，新增
+// upstream_status=ok|unreachable（探上游 /livez 判定可达性）。**不**因上游不可达而 503，
+// 以免破坏既有客户端与「liveness 不依赖上游」原则。
 func (s *HTTPServer) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	upstream := ""
 	if s != nil && s.MCP != nil {
 		upstream = s.MCP.baseURL
 	}
+	upstreamStatus := "unreachable"
+	if s.probeUpstream(r.Context(), "/livez") == nil {
+		upstreamStatus = "ok"
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":   "ok",
-		"service":  "lightmem-mcp",
-		"version":  "0.2.0",
-		"upstream": upstream,
+		"status":          "ok",
+		"service":         "lightmem-mcp",
+		"version":         "0.2.0",
+		"upstream":        upstream,
+		"upstream_status": upstreamStatus,
 	})
 }
+
+// handleReadyz 新增就绪端点（R29-B §3.2.4）：探上游内核 /readyz，失败 → 503。
+func (s *HTTPServer) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	if err := s.probeUpstream(r.Context(), "/readyz"); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"status":  "degraded",
+			"service": "lightmem-mcp",
+			"check":   "upstream: " + err.Error(),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "ok",
+		"service": "lightmem-mcp",
+	})
+}
+
+// probeUpstream 用 ≤1s 超时 GET 上游 REST 的指定路径；非 2xx / 网络错误返回 err。
+// 未配置上游（baseURL 为空）或未装配 MCPServer 时返回错误（视为不可达，不谎报 ok）。
+func (s *HTTPServer) probeUpstream(parent context.Context, path string) error {
+	if s == nil || s.MCP == nil || s.MCP.baseURL == "" {
+		return errNoUpstream
+	}
+	ctx, cancel := context.WithTimeout(parent, mcpUpstreamProbeTimeout)
+	defer cancel()
+
+	url := strings.TrimRight(s.MCP.baseURL, "/") + path
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4*1024))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("upstream %s: status %d", path, resp.StatusCode)
+	}
+	return nil
+}
+
+// errNoUpstream 表示 MCP 未配置上游地址。
+var errNoUpstream = errors.New("mcp: no upstream configured")
 
 func (s *HTTPServer) handleMCP(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
