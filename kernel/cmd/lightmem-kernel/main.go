@@ -45,6 +45,8 @@ const (
 )
 
 func main() {
+	// R29-T0 PE-1：进程启动时刻（/healthz.started_at；一眼看出「刚重启过」）。
+	procStart := time.Now()
 	profilePath := flag.String("profile", "../profiles/lims-family.profile.yaml", "path to lims-*.profile.yaml")
 	listen := flag.String("listen", ":8080", "listen address")
 	backendOverride := flag.String("backend-override", "", "override storage backend for skeleton run (sqlite)")
@@ -200,10 +202,46 @@ func main() {
 		log.Printf("[boot] R24-C lifecycle admin endpoint enabled")
 	}
 
+	// R29-T0 S0 接缝：启动自检（E 线硬化；默认关，需 -data-dir 才执行）。
+	// R29-T0 PE-1：结果**保留到 main 局部**并接入 /healthz（设计稿 §3.2.3）。
+	// 位置：必须在 mux 装配**之前**（/healthz 注册要用它）。
+	// 默认关：*dataDir 为空 → bootRep 保持 nil → /healthz 不增任何字段
+	// （与 c203db8 逐字节一致，红线④）。
+	var bootRep *kernel.BootReport
+	if *dataDir != "" {
+		br, berr := kernel.RunBootReport(context.Background(), backend, *dataDir)
+		if berr != nil {
+			// B2：缺表/缺列 → 启动自检失败，必须阻断（不得带病上线）。
+			_ = backend.Close()
+			log.Fatalf("[boot] boot report: %v", berr)
+		}
+		bootRep = br
+		if br.Unfinished != "" {
+			log.Printf("[boot] WARN: unfinished drain tasks from prior run: %s", br.Unfinished)
+		}
+		// 设计稿 §3.4.4 目标形态：一行结构化 recovery report。
+		log.Printf("[boot] recovery report: backend=%s table=%s columns=%s rows=%d "+
+			"version_match=%v restore_point=%q unfinished=%q durability=%s",
+			br.Backend, br.Table, br.Columns, br.Rows, br.VersionMatch,
+			br.RestorePoint, br.Unfinished, br.Durability)
+	}
+
 	// 6) 装配 HTTP mux：外层 mux 承载 /healthz、/metrics、pprof；
 	//    业务路由整体挂载到 "/"（逐位保留 router.go 全部端点）。
+	//
+	// R29-T0 PE-1：/healthz 增量字段（设计稿 §3.2.3）。
+	// 装饰器只在 bootRep != nil（= 显式配了 -data-dir）时注入 schema_*/rows/
+	// restore_point/version；**未配 → 返回原 handler，输出逐字节不变**（红线④）。
+	// started_at / last_lifecycle_run 恒可提供（进程启动时刻；生命周期默认关 → 零值不输出）。
+	healthzOpts := &kernel.HealthzOptions{StartedAt: procStart}
+	if bootRep != nil {
+		healthzOpts.BootReport = bootRep
+	}
+	// last_lifecycle_run：请求时实时读取（调度器在 mux 之后启动；默认关 → 零值不输出）。
+	healthzOpts.LifecycleRunFn = kernel.LastLifecycleRun
 	mux := http.NewServeMux()
-	mux.Handle("/healthz", kernel.HealthzHandler(srv, backend, embedderName, metrics))
+	mux.Handle("/healthz", kernel.HealthzWithOptions(
+		kernel.HealthzHandler(srv, backend, embedderName, metrics), healthzOpts))
 	if *metricsOn {
 		mux.Handle("/metrics", metricsHandler(metrics))
 	}
@@ -261,19 +299,6 @@ func main() {
 	// Run 默认立即返回 true，不会触发 os.Exit(1)；B4 行为变更仅当 D 线注册了
 	// 会超时的排水阶段且真的超时才生效。
 	drainer := kernel.NewDrainer(*shutdownTimeout, log.Printf)
-
-	// R29-T0 S0 接缝：启动自检（E 线硬化；默认关，需 -data-dir 才执行）。
-	// 结果存 main 局部并打日志；/healthz 字段扩展交 E 线（预埋请求）。
-	if *dataDir != "" {
-		if br, berr := kernel.RunBootReport(context.Background(), backend, *dataDir); berr != nil {
-			log.Printf("[boot] boot report error: %v", berr)
-		} else {
-			if br.Unfinished != "" {
-				log.Printf("[boot] WARN: unfinished drain tasks from prior run: %s", br.Unfinished)
-			}
-			log.Printf("[boot] boot report backend=%s unfinished=%q", br.Backend, br.Unfinished)
-		}
-	}
 
 	// 8) HTTP server
 	server := &http.Server{

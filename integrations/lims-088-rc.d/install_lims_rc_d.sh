@@ -82,7 +82,10 @@ else
     cat >&2 <<EOF
 找不到已编译的内核二进制。请先以 $SVC_USER 身份编译（不要用 sudo）：
 
-    su -m $SVC_USER -c 'cd $SRC/kernel && go build -o lightmem-kernel ./cmd/lightmem-kernel'
+    su -m $SVC_USER -c 'cd $SRC/kernel && go build -ldflags "-X github.com/lightmem/kernel.BuildVersion=\$(cd $SRC && git rev-parse HEAD)" -o lightmem-kernel ./cmd/lightmem-kernel'
+
+（R29-T0 PE-2：-ldflags 注入 BuildVersion，使启动自检能比对「二进制 vs 库」版本；
+ 不注入也能跑，只是 VERSION 一致性检查退化为不判定。）
 
 或用 --binary /path/to/lightmem-kernel 指定。
 （原因：sudo 会重置环境丢掉 Go module cache，而本机无外网，root 下编译必然超时。）

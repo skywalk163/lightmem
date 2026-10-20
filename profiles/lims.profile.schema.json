@@ -66,6 +66,31 @@
             "fk_enabled": {
               "type": "boolean",
               "default": true
+            },
+            "synchronous": {
+              "type": "string",
+              "enum": [
+                "off",
+                "normal",
+                "full",
+                "extra"
+              ],
+              "description": "R29-E（L-251 / Q1）：PRAGMA synchronous 显式档位。缺省 = 不执行 PRAGMA（与 c203db8 逐位一致）。Solo 建议 full（提交即落盘，断电不丢已确认写）。"
+            },
+            "busy_timeout_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "R29-E：PRAGMA busy_timeout（毫秒）。0/缺省 = 不执行。"
+            },
+            "wal_autocheckpoint": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "R29-E：PRAGMA wal_autocheckpoint（页）。0/缺省 = 不改阈值（SQLite 默认 1000）。"
+            },
+            "checkpoint_on_close": {
+              "type": "boolean",
+              "default": false,
+              "description": "R29-E：关闭时执行 PRAGMA wal_checkpoint(TRUNCATE)，把 WAL 归零。false/缺省 = 不执行（与 c203db8 逐位一致）。"
             }
           },
           "required": [

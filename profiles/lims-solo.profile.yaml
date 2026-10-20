@@ -26,6 +26,20 @@ storage:
     wal_mode: true
     # 外键与 schema 校验
     fk_enabled: true
+    # ---- R29-E 耐久显式化（L-251 / 设计稿 §3.4.4 + Q1 裁定）----
+    # Q1 裁定（设计稿 §3.4.4 L431）：Solo 默认 synchronous=full ——
+    # 「记忆写入的产品承诺是确认即不丢」；FULL=提交即落盘（应用崩溃与断电都不丢
+    # 已确认写）。若实测写延迟不可接受再降 normal，且必须在文档写明断电丢失窗口，
+    # **禁止「悄悄用 normal 却宣称不丢」**。
+    # 字段空/缺省 = 不执行 PRAGMA = 与 c203db8 逐位一致（红线④）。
+    synchronous: full
+    # 等锁上限（毫秒）：单连接 + 全局 mu 下极少触发，但 checkpoint/外部工具
+    # 同时打开库时避免立即 "database is locked"。0/缺省 = 不执行。
+    busy_timeout_ms: 5000
+    # WAL 自动检查点阈值（页）：默认 1000 页（约 4MB @4k 页）。显式写出便于审计。
+    wal_autocheckpoint: 1000
+    # 关闭时执行 wal_checkpoint(TRUNCATE)，把 WAL 归零（断电后恢复窗口最小化）。
+    checkpoint_on_close: true
   # L3 归档：个人场景用本地目录即可
   archive:
     path: ./data/archive/
