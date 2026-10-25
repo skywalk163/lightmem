@@ -52,8 +52,8 @@ LightMem 采用**租户隔离 + 用户可见性**双层权限模型，不依赖�
 | `tenant_id` | string | 租户 ID，硬隔离边界。不同租户的记忆完全不可见。 |
 | `user_id` | string | 用户 ID，用于归属与 GDPR 操作。 |
 | `viewer` | string | 可见性过滤的观察者 ID。仅返回该 viewer 有权限看到的记忆。 |
-| `visibility` | string | 可见性级别：`private`（仅 owner）/ `shared`（同租户可见）/ `public`（全租户可见）。 |
-| `permission` | object | 细粒度权限对象，如 `{"owner": "u1", "readers": ["u2"]}`。 |
+| `visibility` | string | 可见性级别（合法值见 `kernel/model.go`）：`private`（仅 owner，且须同租户）/ `shared_user`（owner + `readers`）/ `tenant`（同租户任意 viewer）/ `cross_tenant`（`shared_with_tenants` 内）/ `public`（任意带身份 viewer）。**零值不匹配任何一级 ⇒ 不可见**。 |
+| `permission` | object | 细粒度权限对象，如 `{"owner": "u1", "readers": ["u2"]}`；**`owner` 必填**（缺失 422）。 |
 
 ### 权限规则
 
@@ -180,9 +180,9 @@ LightMem 采用**租户隔离 + 用户可见性**双层权限模型，不依赖�
 | `memory_id` | string | ❌ | 记忆 ID（不填则自动生成） |
 | `memory_kind` | string | ❌ | 类型：`event` / `fact` / `preference` / `procedure` / `goal`，默认 `fact` |
 | `fact` | string | ✅ | 事实文本 |
-| `visibility` | string | ❌ | 可见性：`private` / `shared` / `public`，默认 `private` |
+| `visibility` | string | ❌ | 可见性，合法值：`private`（仅 owner 且同租户）/ `shared_user`（owner + `permission.readers`）/ `tenant`（同租户）/ `cross_tenant`（`shared_with_tenants` 内）/ `public`。**缺省 = 不可见**（`Memory.canView` 对零值没有匹配分支，直接 `return false`），生产调用必须显式给值；R27+ 起不再有隐式默认 |
 | `confidence` | float | ❌ | 置信度 [0, 1]，默认 0.0 |
-| `permission` | object | ❌ | 细粒度权限 |
+| `permission` | object | ❌ | 细粒度权限；其中 **`owner` 必填**（缺失返回 `422` `permission.owner required`），`readers` / `writers` 可选 |
 | `layer` | string | ❌ | 目标层：`L0` / `L1` / `L2` / `L3`，默认自动 |
 | `tags` | string[] | ❌ | 标签列表 |
 | `metadata` | object | ❌ | 扩展元数据 |
