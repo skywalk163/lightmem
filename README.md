@@ -30,6 +30,7 @@ sh integrations/quickstart/install.sh      # 一条命令：起服务 + 签 toke
 > - ❌ 无 jail / MAC / IPsec / KMS：Solo 档安全组件为极简形态。
 > - ❌ 无多租户 / 跨 Agent 共享：Solo 档为单用户形态。
 > - 完整档位能力矩阵见 [`docs/档位能力矩阵.md`](docs/档位能力矩阵.md)。
+> - **哪些由本套件负责、哪些由部署方负责**（守护、备份、主备、负载均衡）见 [`docs/核心与外围边界_v1.0.md`](docs/核心与外围边界_v1.0.md)。
 
 ---
 
@@ -69,14 +70,24 @@ go run ./run_kpi.go
 # 健康检查
 curl http://localhost:8080/health
 
-# 写入记忆
+# 写入记忆（visibility 与 permission.owner 都**必填**，见下方「写入必填字段」）
 curl -X POST http://localhost:8080/memories \
   -H "Content-Type: application/json" \
-  -d '{"memory_id": "m001", "fact": "客户A偏好周一开会", "tenant_id": "t1", "user_id": "u1"}'
+  -d '{"memory_id": "m001", "fact": "客户A偏好周一开会", "tenant_id": "t1", "user_id": "u1", "visibility": "private", "permission": {"owner": "u1"}}'
 
 # 检索记忆（文本参数用 q；text 为历史别名，q 优先）
 curl "http://localhost:8080/search?q=客户A偏好&tenant_id=t1&viewer=u1"
 ```
+
+#### 写入必填字段（R27+ 写入策略，2026-10-26 订正）
+
+| 字段 | 缺失后果 |
+|---|---|
+| `permission.owner` | **HTTP 422** `{"error":"writepolicy permission: permission.owner required"}`（`kernel/writepolicy.go` 的 `PermissionPolicy`） |
+| `visibility` | **201 但检索不到**：`Memory.canView` 对零值 `Visibility` **没有任何匹配分支**，直接 `return false` ⇒ 记忆写进去了、`/search` 永远返回 `[]`。必须显式给 `private` / `tenant` / `public` 之一 |
+
+> 这两条都是「写错不报错、只是不生效」类坑：`permission.owner` 至少会 422 拦你，
+> `visibility` 是静默不可见。R165-T5 真机验收就踩过（201 成功 + search 恒空）。
 
 #### `/search` 参数口径（R19-A 统一）
 
