@@ -103,6 +103,7 @@ sh integrations/quickstart/install.sh
 | **跨租户访问会被 404/401** | 身份由 token 定；你只能访问自己租户的记忆 |
 | **`visibility=private` 他人不可见** | 这是硬过滤，也是设计意图 |
 | **solo 档无向量检索** | 自动降级为文本检索，不影响使用；需要语义向量请上 family 档 |
+| **别盲抄 `agent-prompt.md` 的端口与 token** | 那份 `clients/` 产物可能是**历史部署**留下的（实测：里面写的 `7450/7451` 端口已停用，其 token 全部 `401`）。当前权威部署是 `/usr/local/lightmem`：REST `:18443`、MCP `:18444`，身份 `deepseek-harness / dsh-agent / dshteam`，生效 token 见 `~/.dsh/profiles/web/cordis.patch.yml`。**先探活再动手**：`curl -s http://127.0.0.1:18443/healthz` 应返回 200，再带 `Bearer` 打 `POST /tools/memory/save` 看是否 401 |
 
 ---
 
