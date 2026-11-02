@@ -43,25 +43,37 @@ sh integrations/quickstart/install.sh      # 一条命令：起服务 + 签 toke
 
 ### 安装
 
+> **注意**：`go install ...@latest` 暂不可用。kernel 模块尚未独立发布到可解析的模块路径，
+> 根 go.mod 不含 replace 指令后，请按以下方式从源码构建。
+
 ```bash
-git clone http://192.168.1.5:3000/skywalk/lightmem.git
+git clone https://github.com/skywalk163/lightmem.git
 cd lightmem
 ```
+
+### 从源码构建
+
+```bash
+# 构建 lightmem-kernel 二进制（在 kernel/ 子模块目录下执行，使用 kernel/go.mod）
+cd kernel
+go build -o lightmem-kernel ./cmd/lightmem-kernel
+
+# 构建其他工具
+go build -o lightmem-frontend ./cmd/lightmem-frontend
+go build -o lightmem-mcp ./cmd/lightmem-mcp
+```
+
+> 预编译二进制发布计划见后续版本；当前请从源码构建。
 
 ### 运行测试
 
 ```bash
-# 编译内核
-go build github.com/lightmem/kernel
+# 编译内核（在 kernel/ 目录下）
+cd kernel
+go build ./...
 
-# 运行测试
-go test github.com/lightmem/kernel/... -v
-
-# 生成评测集
-cd eval && go run ./eval_generate.go
-
-# 运行 KPI 评测
-go run ./run_kpi.go
+# 运行内核测试
+go test ./... -v
 ```
 
 ### API 端点
