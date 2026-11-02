@@ -1,0 +1,66 @@
+# ============================================================================
+# lightmem 最小 CI
+# ----------------------------------------------------------------------------
+# 目标：push main / 提 PR 时自动跑 构建 + 静态检查 + 单测 + 依赖漏洞体检。
+#
+# 关键约束：kernel/ 是独立 Go module（github.com/lightmem/kernel，自带
+# go.mod / go.sum）。顶层 lightmem module 只 require 了 kernel v0.0.0、
+# 没有 replace 到本地 kernel/，因此在仓库根直接 `go build ./...` 会去网络
+# 拉一个并不存在的版本而失败。所以所有 go 命令统一在 working-directory: kernel
+# 下执行（与 .github/workflows/release.yml 的做法一致）。
+#
+# 依赖体检对象：pgx v5 / modernc.org/sqlite / golang.org/x/crypto。
+# ============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # 允许在 Actions 页手动触发复跑（最小 CI 也留一个人工入口）
+  workflow_dispatch:
+
+# 最小权限：只读代码即可
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: '1.25'
+
+jobs:
+  ci:
+    name: build / vet / test / vulncheck
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        # kernel/ 是独立 module，go 命令一律在这里跑
+        working-directory: kernel
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Go ${{ env.GO_VERSION }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: kernel/go.sum
+
+      - name: go build ./...
+        run: go build ./...
+
+      - name: go vet ./...
+        run: go vet ./...
+
+      - name: go test ./...
+        run: go test ./...
+
+      # 依赖漏洞体检：day-1 先观测、不硬阻断（continue-on-error）。
+      # 已有 CVE 不会挡住「编译错误必须变红」这条主红线；
+      # 跑稳一个周期后再去掉 continue-on-error，把它升级为硬门禁。
+      - name: govulncheck ./...
+        continue-on-error: true
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
