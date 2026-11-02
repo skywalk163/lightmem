@@ -19,6 +19,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # 允许在 Actions 页手动触发复跑（最小 CI 也留一个人工入口）
+  workflow_dispatch:
 
 # 最小权限：只读代码即可
 permissions:
