@@ -25,6 +25,9 @@ func main() {
 	listen := flag.String("listen", ":18444", "HTTP listen address (transport=http)")
 	restBase := flag.String("rest-base", "", "REST loopback base URL (default http://127.0.0.1:18443)")
 	timeout := flag.Duration("timeout", 15*time.Second, "REST call timeout")
+	// 安全护栏逃生阀（2026-11-02）：非回环 + 无 token 默认拒绝启动。
+	allowInsecureOpen := flag.Bool("allow-insecure-open", false,
+		"允许在非回环地址且无 token 的情况下启动（危险：MCP 入口将对本机以外完全开放）")
 	flag.Parse()
 
 	if *restBase == "" {
@@ -38,6 +41,19 @@ func main() {
 		log.Printf("[mcp] token 未配置，AuthMiddleware 透传（R21-B 默认关）")
 	} else {
 		log.Printf("[mcp] token 表已装配：%d 个", len(tokens))
+	}
+
+	// 安全护栏（fail-closed）：http 传输 = 对外监听，此时「非回环 + 无 token」必须拦下。
+	// 与 lightmem-kernel 同一口径；stdio 不监听端口，不适用。
+	if *transport == "http" && !kernel.IsLoopbackAddr(*listen) && len(tokens) == 0 && !*allowInsecureOpen {
+		log.Fatalf("[mcp] 拒绝启动：监听 %q（非回环）但未配置任何 agent token。\n"+
+			"        任何能访问该端口的人都可读写全部记忆。二选一：\n"+
+			"          1) 只在本机用：  -listen 127.0.0.1:18444\n"+
+			"          2) 配置 token：   LIMS_AGENT_TOKENS=<agent-tokens.json>\n"+
+			"        已确认风险、确实要在内网无鉴权开放：追加 -allow-insecure-open", *listen)
+	}
+	if *transport == "http" && !kernel.IsLoopbackAddr(*listen) && len(tokens) == 0 {
+		log.Printf("[mcp][WARN] 已按 -allow-insecure-open 在 %q 上无鉴权启动", *listen)
 	}
 
 	mcpSrv := kernel.NewMCPServer(*restBase)

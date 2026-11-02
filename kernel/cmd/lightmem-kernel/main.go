@@ -63,6 +63,10 @@ func main() {
 	// R29-T0 S0 接缝：排水未完成标记 / 启动自检的数据目录（与记忆同卷，非 /tmp）。
 	// 空 = 不执行启动自检（默认关，逐位保持 c203db8 行为）；E 线硬化读取标记。
 	dataDir := flag.String("data-dir", "", "data directory for drain markers / boot self-check (empty = disabled)")
+	// 安全护栏逃生阀（2026-11-02）：非回环 + 无 token 默认拒绝启动；
+	// 内网隔离环境确有需要时显式加此参数，把「裸奔」变成一个必须写出名字的动作。
+	allowInsecureOpen := flag.Bool("allow-insecure-open", false,
+		"允许在非回环地址且无 token 的情况下启动（危险：记忆库将对本机以外完全开放）")
 	flag.Parse()
 
 	// 1) 装配 profile
@@ -350,6 +354,25 @@ func main() {
 		drainer.Add("maintenance", func(ctx context.Context) error {
 			return maint.Wait(ctx) // 等当前维护轮次结束（不启新轮由 Stop 保证）
 		})
+	}
+
+	// 7.5) 安全护栏（fail-closed）：非回环监听 + token 表为空 = 拒绝启动。
+	//
+	// 两个默认值单独看都合理，叠起来就是一个开放的记忆库：
+	//   -listen 默认 ":8080"（= 0.0.0.0），而 auth 的「未配置 LIMS_AGENT_TOKENS 时透传」
+	//   会让所有请求无需凭据即可读写记忆。记忆里是架构决策与客户背景，不能这样对外。
+	// 逃生阀 -allow-insecure-open 保证高级用法不被剥夺，但必须显式声明。
+	if !kernel.IsLoopbackAddr(*listen) && kernel.AgentTokenCount() == 0 && !*allowInsecureOpen {
+		log.Fatalf("[boot] 拒绝启动：监听 %q（非回环）但未配置任何 agent token。\n"+
+			"        记忆服务不能裸奔。二选一：\n"+
+			"          1) 只在本机用：  -listen 127.0.0.1:8080\n"+
+			"          2) 配置 token：   LIMS_AGENT_TOKENS=<agent-tokens.json>\n"+
+			"                            （签发：python3 integrations/agent-onboarding/issue_token.py）\n"+
+			"        已确认风险、确实要在内网无鉴权开放：追加 -allow-insecure-open", *listen)
+	}
+	if !kernel.IsLoopbackAddr(*listen) && kernel.AgentTokenCount() == 0 {
+		log.Printf("[boot][WARN] 已按 -allow-insecure-open 在 %q 上无鉴权启动，"+
+			"任何能访问该端口的人都可以读写全部记忆", *listen)
 	}
 
 	// 8) HTTP server

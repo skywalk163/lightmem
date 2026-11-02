@@ -551,3 +551,47 @@ func parseAgentTokensSource(raw string) (map[string]AgentIdentity, error) {
 	}
 	return out, nil
 }
+
+// ---------------------------------------------------------------- 启动期安全护栏
+//
+// 背景（2026-11-02 安全审计）：两个默认值单独看都合理，叠在一起就是一个开放的记忆库——
+//   A. lightmem-kernel / lightmem-mcp 的 -listen 默认是 ":8080" / ":18444"，Go 里
+//      这等价于 0.0.0.0，即监听所有网卡；
+//   B. 本文件顶部的「默认透传」：未配置 LIMS_AGENT_TOKENS 时 AuthMiddleware 直接放行。
+//
+// 于是「下载二进制 → 直接跑 → 忘了配 token」会得到一个监听全网卡、无任何认证、
+// 可读写全部记忆的服务。记忆里是架构决策与客户背景，这个默认值不能留。
+//
+// 处置：不改「默认透传」的既有语义（那是红线④，会让既有部署行为漂移），
+// 而是在 main 启动期加一道 fail-closed 护栏：非回环监听 + token 表为空 = 拒绝启动。
+// quickstart（install.sh 默认 BIND=127.0.0.1 且签发 token）不受影响。
+
+// IsLoopbackAddr 判断监听地址是否仅绑定回环。
+//
+// 注意 ":8080" / "0.0.0.0:8080" / "[::]:8080" 都返回 false——这三种写法都是全网卡，
+// 而它们恰好是最容易被顺手写下的形式。
+func IsLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		// 没有端口（如 "127.0.0.1"）时按整体当主机名处理；
+		// 空串或非法值一律判为非回环，护栏宁可误拦也不放行。
+		host = addr
+	}
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return false // ":8080" → 全省略接口
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// AgentTokenCount 返回当前已装配的 agent token 条数。
+// 0 表示处于「未配置态」，即 AuthMiddleware 透传、任何人可读写。
+func AgentTokenCount() int {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	return len(registry.tokens)
+}
