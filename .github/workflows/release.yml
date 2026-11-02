@@ -1,0 +1,387 @@
+# ============================================================================
+# lightmem 四平台预编译二进制发布
+# ----------------------------------------------------------------------------
+# 目标：不装 Go 也能用。矩阵 linux/darwin/windows × amd64/arm64。
+# 产物：lightmem-kernel 与 lightmem-mcp。
+# 每个 release 附：sha256 校验和、一行安装脚本、健康检查说明。
+# 注意：release notes 必须写清默认端口 7443/7444（quickstart 口径），
+#       别与 rc.d 的 18443/18444 混。
+# ============================================================================
+
+name: Release Binaries
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-rc*'
+  workflow_dispatch:
+    inputs:
+      build_all:
+        description: 'Build all platforms (otherwise build current platform only)'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  GO_VERSION: '1.25'
+  KERNEL_DIR: kernel
+  BINARY_KERNEL: lightmem-kernel
+  BINARY_MCP: lightmem-mcp
+
+jobs:
+  # ------------------------------------------------------------------------
+  # 构建矩阵：3 OS × 2 arch = 6 组合
+  # ------------------------------------------------------------------------
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [linux, darwin, windows]
+        arch: [amd64, arm64]
+        exclude:
+          # darwin/arm64 是 Apple Silicon，合法；darwin/amd64 是 Intel Mac，合法
+          # 不排除任何组合，全部构建
+
+    runs-on: |
+      ${{ matrix.os == 'windows' && 'windows-latest' ||
+         matrix.os == 'linux' && 'ubuntu-latest' ||
+         'macos-latest' }}
+
+    steps:
+      # ------------------------------------------------------------
+      # 1) 检出代码
+      # ------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ------------------------------------------------------------
+      # 2) 设置 Go 环境
+      # ------------------------------------------------------------
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: kernel/go.sum
+
+      # ------------------------------------------------------------
+      # 3) 构建 lightmem-kernel
+      # ------------------------------------------------------------
+      - name: Build lightmem-kernel
+        id: build-kernel
+        shell: bash
+        run: |
+          set -e
+
+          # 确定输出文件名
+          OUTPUT_NAME="${{ env.BINARY_KERNEL }}"
+          if [[ "${{ matrix.os }}" == "windows" ]]; then
+            OUTPUT_NAME="${OUTPUT_NAME}.exe"
+          fi
+
+          # 获取 git commit hash 用于注入 BuildVersion
+          COMMIT_HASH="$(git rev-parse HEAD)"
+
+          # 构建
+          echo ">>> Building ${{ env.BINARY_KERNEL }} for ${{ matrix.os }}/${{ matrix.arch }}"
+          cd "${{ env.KERNEL_DIR }}"
+          GOOS="${{ matrix.os }}" GOARCH="${{ matrix.arch }}" \
+            go build -ldflags "-X github.com/lightmem/kernel.BuildVersion=${COMMIT_HASH}" \
+              -o "../dist/${OUTPUT_NAME}" \
+              ./cmd/lightmem-kernel
+
+          echo "OUTPUT_NAME=${OUTPUT_NAME}" >> "$GITHUB_OUTPUT"
+          echo "COMMIT_HASH=${COMMIT_HASH}" >> "$GITHUB_OUTPUT"
+
+      # ------------------------------------------------------------
+      # 4) 构建 lightmem-mcp
+      # ------------------------------------------------------------
+      - name: Build lightmem-mcp
+        id: build-mcp
+        shell: bash
+        run: |
+          set -e
+
+          # 确定输出文件名
+          OUTPUT_NAME="${{ env.BINARY_MCP }}"
+          if [[ "${{ matrix.os }}" == "windows" ]]; then
+            OUTPUT_NAME="${OUTPUT_NAME}.exe"
+          fi
+
+          # 构建
+          echo ">>> Building ${{ env.BINARY_MCP }} for ${{ matrix.os }}/${{ matrix.arch }}"
+          cd "${{ env.KERNEL_DIR }}"
+          GOOS="${{ matrix.os }}" GOARCH="${{ matrix.arch }}" \
+            go build -o "../dist/${OUTPUT_NAME}" \
+              ./cmd/lightmem-mcp
+
+          echo "OUTPUT_NAME=${OUTPUT_NAME}" >> "$GITHUB_OUTPUT"
+
+      # ------------------------------------------------------------
+      # 5) 生成 sha256 校验和
+      # ------------------------------------------------------------
+      - name: Generate checksums
+        id: checksums
+        shell: bash
+        run: |
+          set -e
+
+          cd dist
+
+          # 为每个二进制文件生成 sha256
+          sha256sum "${{ steps.build-kernel.outputs.output_name }}" > checksums.txt
+          sha256sum "${{ steps.build-mcp.outputs.output_name }}" >> checksums.txt
+
+          # 也生成一个带平台标识的校验和文件
+          PLATFORM="${{ matrix.os }}-${{ matrix.arch }}"
+          cp checksums.txt "checksums-${PLATFORM}.txt"
+
+          echo "PLATFORM=${PLATFORM}" >> "$GITHUB_OUTPUT"
+
+      # ------------------------------------------------------------
+      # 6) 上传构建产物
+      # ------------------------------------------------------------
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lightmem-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            dist/${{ steps.build-kernel.outputs.output_name }}
+            dist/${{ steps.build-mcp.outputs.output_name }}
+            dist/checksums*.txt
+          retention-days: 7
+
+  # ------------------------------------------------------------------------
+  # 合并产物并创建 Release
+  # ------------------------------------------------------------------------
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    permissions:
+      contents: write
+
+    steps:
+      # ------------------------------------------------------------
+      # 1) 检出代码（用于创建 release notes）
+      # ------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ------------------------------------------------------------
+      # 2) 下载所有构建产物
+      # ------------------------------------------------------------
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: lightmem-*
+          merge-multiple: false
+
+      # ------------------------------------------------------------
+      # 3) 整理产物目录结构
+      # ------------------------------------------------------------
+      - name: Organize artifacts
+        shell: bash
+        run: |
+          set -e
+
+          echo "=== Artifact structure ==="
+          find dist -type f | sort
+
+          # 创建统一的 release 目录
+          mkdir -p release
+
+          # 复制所有二进制文件到 release 根目录，带平台后缀
+          find dist -type f \( -name "lightmem-kernel" -o -name "lightmem-kernel.exe" -o -name "lightmem-mcp" -o -name "lightmem-mcp.exe" \) | while read -r file; do
+            # 从路径中提取平台信息
+            # 路径格式: dist/lightmem-{os}-{arch}/{filename}
+            platform=$(dirname "$file" | xargs basename)
+            filename=$(basename "$file")
+            cp "$file" "release/${filename}-${platform}"
+          done
+
+          # 合并校验和文件
+          find dist -name "checksums.txt" -exec cat {} \; | sort -u > release/checksums.txt
+
+          # 生成安装脚本
+          cat > release/install.sh << 'INSTALL_EOF'
+#!/bin/sh
+# ============================================================================
+# lightmem 一键安装脚本（单行）
+# ----------------------------------------------------------------------------
+# 用法：curl -sL https://github.com/skywalk163/lightmem/releases/latest/download/install.sh | sh
+# 或：  curl -sL https://github.com/skywalk163/lightmem/releases/download/v2.4.1/install.sh | sh
+#
+# 功能：自动检测平台，下载对应二进制，解压，启动服务。
+# 默认端口：7443 (REST API), 7444 (gRPC/MCP)
+# ============================================================================
+set -e
+
+# 检测平台
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m)
+
+# 架构映射
+case "$ARCH" in
+  arm64|aarch64) ARCH="arm64" ;;
+  x86_64|amd64)  ARCH="amd64" ;;
+  *) echo "不支持的架构: $ARCH"; exit 1 ;;
+esac
+
+# 平台标识
+PLATFORM="${OS}-${ARCH}"
+
+# 二进制文件名
+KERNEL_BIN="lightmem-kernel-${PLATFORM}"
+MCP_BIN="lightmem-mcp-${PLATFORM}"
+
+if [ "$OS" = "windows" ]; then
+  KERNEL_BIN="${KERNEL_BIN}.exe"
+  MCP_BIN="${MCP_BIN}.exe"
+fi
+
+# 下载地址（替换为实际仓库）
+REPO="skywalk163/lightmem"
+VERSION="${1:-latest}"
+BASE_URL="https://github.com/${REPO}/releases/download/${VERSION}"
+
+echo ">>> 检测平台: $PLATFORM"
+echo ">>> 下载 lightmem-kernel ..."
+curl -fsSL "${BASE_URL}/${KERNEL_BIN}" -o "${KERNEL_BIN}" && chmod +x "${KERNEL_BIN}"
+
+echo ">>> 下载 lightmem-mcp ..."
+curl -fsSL "${BASE_URL}/${MCP_BIN}" -o "${MCP_BIN}" && chmod +x "${MCP_BIN}"
+
+# 验证校验和（如果存在）
+if [ -f "checksums.txt" ]; then
+  sha256sum -c checksums.txt 2>/dev/null || echo "!!! 校验和验证失败，请检查文件完整性"
+fi
+
+echo ""
+echo "============================================================"
+echo "  lightmem 已就绪"
+echo "============================================================"
+echo ""
+echo "  启动服务："
+echo "    ./lightmem-kernel-${PLATFORM}"
+echo ""
+echo "  健康检查："
+echo "    curl http://localhost:7443/healthz"
+echo ""
+echo "  默认端口（quickstart 口径）："
+echo "    7443 - REST API"
+echo "    7444 - gRPC / MCP"
+echo ""
+echo "  ⚠️  注意：不要与 rc.d 端口 18443/18444 混淆"
+echo ""
+echo "  更多文档：https://github.com/skywalk163/lightmem"
+echo ""
+INSTALL_EOF
+
+          chmod +x release/install.sh
+
+          # 生成 release notes
+          cat > release/RELEASE_NOTES.md << 'NOTES_EOF'
+# lightmem Pre-compiled Binaries
+
+## 平台支持
+
+| OS | Architecture | 文件 |
+|---|---|---|
+| Linux | amd64 | `lightmem-kernel-linux-amd64` |
+| Linux | arm64 | `lightmem-kernel-linux-arm64` |
+| macOS (Darwin) | amd64 | `lightmem-kernel-darwin-amd64` |
+| macOS (Darwin) | arm64 | `lightmem-kernel-darwin-arm64` |
+| Windows | amd64 | `lightmem-kernel-windows-amd64.exe` |
+| Windows | arm64 | `lightmem-kernel-windows-arm64.exe` |
+
+## 产物说明
+
+- **`lightmem-kernel`** - 核心记忆服务（REST API + gRPC）
+- **`lightmem-mcp`** - MCP 服务（AI Agent 接入）
+
+## 快速开始
+
+### 方式一：一键安装脚本
+
+```bash
+curl -sL https://github.com/skywalk163/lightmem/releases/latest/download/install.sh | sh
+```
+
+### 方式二：手动下载
+
+1. 下载对应平台的二进制文件
+2. 赋予执行权限（Linux/macOS）：
+   ```bash
+   chmod +x lightmem-kernel-<platform>
+   chmod +x lightmem-mcp-<platform>
+   ```
+3. 启动服务：
+   ```bash
+   ./lightmem-kernel-<platform>
+   ```
+4. 验证服务是否运行：
+   ```bash
+   curl http://localhost:7443/healthz
+   ```
+
+## 默认端口（Quickstart 口径）
+
+| 端口 | 协议 | 用途 |
+|------|------|------|
+| **7443** | HTTP | REST API |
+| **7444** | HTTP/gRPC | MCP 服务 |
+
+> ⚠️ **重要**：以上是 quickstart 默认端口。不要与 rc.d 部署的端口 **18443/18444** 混淆。
+
+## 健康检查
+
+服务启动后，执行以下命令验证：
+
+```bash
+curl http://localhost:7443/healthz
+```
+
+预期返回：
+```json
+{"status":"ok","version":"<commit-hash>"}
+```
+
+## 校验和
+
+所有二进制文件的 SHA256 校验和见 `checksums.txt`。
+
+验证方法：
+```bash
+sha256sum -c checksums.txt
+```
+
+## 构建信息
+
+- Go 版本：1.25
+- 构建时间：${{ github.timestamp }}
+- Commit：`${{ github.sha }}`
+NOTES_EOF
+
+          echo "=== Release contents ==="
+          ls -la release/
+
+      # ------------------------------------------------------------
+      # 4) 创建 GitHub Release
+      # ------------------------------------------------------------
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          body_path: release/RELEASE_NOTES.md
+          draft: false
+          prerelease: ${{ contains(github.ref, '-rc') }}
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
