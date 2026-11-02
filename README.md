@@ -1,7 +1,7 @@
 # 光明记忆（LIMS）v2.4.1（R16 收口）
 
 [![Go Version](https://img.shields.io/badge/Go-1.25-blue)](https://golang.org/)
-[![License](https://img.shields.io/badge/License-Apache%202.0-green)](LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
 > **让 AI Agent 像人一样拥有长期记忆**
 > 多租户 · 多用户 · 多Agent · 可插拔后端 · 四层温度分层
@@ -402,7 +402,7 @@ storage_backend: sqlite
 
 ## 📄 许可证
 
-Apache License 2.0 - 详见 [LICENSE](LICENSE) 文件
+MIT License - 详见 [LICENSE](LICENSE) 文件
 
 ---
 
