@@ -35,3 +35,6 @@ eval/vectors/vectors_meta.json
 eval/vectors/corpus*.txt
 # 会话临时 scratch
 .tmp/
+
+# 内部交付日志（含内网拓扑，不入库）
+.dumate/
