@@ -6,6 +6,10 @@
 > **让 AI Agent 像人一样拥有长期记忆**
 > 多租户 · 多用户 · 多Agent · 可插拔后端 · 四层温度分层
 
+> **接七个 AI 客户端时，配置写法各不相同——写错不报错，只是工具不出现。** 要接入你自己的工具链，
+> 或迁移到 family 档（PostgreSQL + pgvector），可以让我们代跑一次（付费）：
+> [quye.com/solutions.html](https://quye.com/solutions.html) · hello@quye.com ｜ 开源部分永久免费。
+
 ---
 
 ## ⭐ 新用户从这开始：5 分钟让所有 AI 共用一个大脑
