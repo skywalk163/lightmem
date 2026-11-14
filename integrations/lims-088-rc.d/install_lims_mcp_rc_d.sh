@@ -145,11 +145,25 @@ for k in lightmem_mcp_enable lightmem_mcp_chdir lightmem_mcp_user lightmem_mcp_l
 done
 
 # ---------------------------------------------------------------------------
-# 5) 停掉占用同端口的开发式实例（只针对本端口，不碰 18443）
+# 5) 停掉占用同端口的旧实例（只针对本端口，不碰 18443）
+#    关键修复（L-231 续 · 根治重启竞态）：同 install_lims_rc_d.sh ——
+#    服务由 daemon(8) -R 监督运行，直接 kill 子进程会被监督者立即拉起，
+#    端口永不释放。故优先 `service lightmem_mcp stop`（先 TERM 监督者），
+#    兜底再按父进程判定：父是 `daemon:` 监督者则 TERM 监督者，否则杀子进程。
 # ---------------------------------------------------------------------------
+if service lightmem_mcp status >/dev/null 2>&1; then
+    say "通过 rc.d 停掉受监督的 lightmem_mcp（先 SIGTERM 监督者）"
+    service lightmem_mcp stop >/dev/null 2>&1 || true
+fi
 for _pid in $(pgrep -f "lightmem-mcp -transport http -listen :$PORT" 2>/dev/null || true); do
-    say "停掉占用 :$PORT 的旧实例 pid=$_pid"
-    kill "$_pid" 2>/dev/null || true
+    _pp=$(ps -o ppid= -p "$_pid" 2>/dev/null | tr -d ' ')
+    if [ -n "$_pp" ] && ps -o args= -p "$_pp" 2>/dev/null | grep -q 'daemon:'; then
+        say "pid=$_pid 由 daemon 监督者($_pp)管理，TERM 监督者而非子进程"
+        kill -TERM "$_pp" 2>/dev/null || true
+    else
+        say "停掉占用 :$PORT 的旧实例 pid=$_pid"
+        kill "$_pid" 2>/dev/null || true
+    fi
 done
 # R25-T0 · L-231（同族）：kill 是异步的，SIGTERM 后进程还要 graceful drain，
 # 端口不是立刻消失。原实现固定 `sleep 1` 就启动，R24 实测撞过

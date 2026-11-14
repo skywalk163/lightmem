@@ -181,11 +181,31 @@ for k in lightmem_enable lightmem_chdir lightmem_user lightmem_listen \
 done
 
 # ---------------------------------------------------------------------------
-# 6) 迁移期清理：停掉占用同一端口的开发式实例（只针对该端口，不碰 :8443）
+# 6) 迁移期清理：停掉占用同一端口的旧实例（只针对该端口，不碰 :8443）
+#    关键修复（L-231 续 · 根治重启竞态）：
+#    服务由 daemon(8) -R 监督运行，直接 kill 子进程会被监督者**立即拉起** →
+#    端口永远不释放 → 下面轮询白等 30s 仍 bind: address already in use。
+#    正确顺序（与 rc.d lightmem_stop 一致）：
+#      a) 优先 `service lightmem stop` —— rc stop_cmd 先 SIGTERM **监督者**
+#         （-P 记录的 pid），监督者转发 TERM 给子进程并清 pidfile；
+#      b) 兜底：仍占用端口的实例，按其父进程判定——
+#         父是 `daemon:` 监督者 → TERM 监督者（不杀子，避免被拉起）；
+#         无监督者（开发式 nohup 起）→ 直接 kill 子进程。
+#    最后用 sockstat 轮询端口真正释放（最多 30s，超时告警仍尝试启动）。
 # ---------------------------------------------------------------------------
+if service lightmem status >/dev/null 2>&1; then
+    say "通过 rc.d 停掉受监督的 lightmem（先 SIGTERM 监督者）"
+    service lightmem stop >/dev/null 2>&1 || true
+fi
 for _pid in $(pgrep -f "lightmem-kernel .*-listen :$PORT" 2>/dev/null || true); do
-    say "停掉占用 :$PORT 的旧实例 pid=$_pid"
-    kill "$_pid" 2>/dev/null || true
+    _pp=$(ps -o ppid= -p "$_pid" 2>/dev/null | tr -d ' ')
+    if [ -n "$_pp" ] && ps -o args= -p "$_pp" 2>/dev/null | grep -q 'daemon:'; then
+        say "pid=$_pid 由 daemon 监督者($_pp)管理，TERM 监督者而非子进程"
+        kill -TERM "$_pp" 2>/dev/null || true
+    else
+        say "停掉占用 :$PORT 的旧实例 pid=$_pid"
+        kill "$_pid" 2>/dev/null || true
+    fi
 done
 # R25-T0 · L-231：kill 是异步的，SIGTERM 后进程还要 graceful drain，端口不是
 # 立刻消失。原实现这里固定 `sleep 1` 就往下启动，R24 实测因此撞过
