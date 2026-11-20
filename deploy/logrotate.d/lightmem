@@ -1,0 +1,26 @@
+# R29 L-257 / T-0413：lightmem 日志轮转（Linux 侧）
+#
+# 与 deploy/newsyslog.d/lightmem.conf 口径对齐（FreeBSD 走 newsyslog，Linux 走 logrotate）：
+#   - 按日轮转、保留 7 份（≈ 一周），旧档 gzip；
+#   - 空文件跳过、文件不存在不报错（Linux 上日志可能由 journald / 重定向产生，
+#     不一定存在，故 missingok 是必须的，否则 logrotate 每晚刷 "stat ... No such file"）；
+#   - copytruncate：不依赖服务支持 reopen（lightmem / lightmem-mcp 未实现 SIGHUP 重开），
+#     轮转后原地截断，进程继续写同一 inode，代价是极短窗口内可能丢几行；
+#   - delaycompress：与 copytruncate 搭配使用，轮转当拍不压、下一拍再压，
+#     避免「进程还在写上一份、这边就压」的竞态。
+#
+# 日志路径口径由服务端决定（/var/log/lightmem.log、/var/log/lightmem-mcp.log），
+# 本文件只负责轮转，不改路径。
+#
+# 安装：sudo install -m 644 deploy/logrotate.d/lightmem /etc/logrotate.d/lightmem
+#      （等价：. deploy/platform.sh && lm_logrotate_install deploy/logrotate.d/lightmem）
+# 自检：sudo logrotate -d /etc/logrotate.d/lightmem
+/var/log/lightmem.log /var/log/lightmem-mcp.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
