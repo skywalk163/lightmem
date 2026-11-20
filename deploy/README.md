@@ -188,6 +188,77 @@ install -m 644 deploy/newsyslog.d/lightmem.conf /etc/newsyslog.d/lightmem.conf
 
 ---
 
+## platform.sh 接口契约（T-0410，已冻结）
+
+> 目的：lightmem 现有部署件里 OS 判断散在各处（看门狗用 `service`/`fetch`、quickstart 的
+> `install.sh` 按 `ss`/`sockstat` 写提示、rc.d 硬编码 `/usr/local`）。Linux 适配若每条线
+> 各写一套 `uname`/路径/服务管理判断必然漂移，故把这类判断收敛到 `deploy/platform.sh`。
+>
+> **接口名与语义已冻结**：后续线（systemd 单元、systemd timer 看门狗、logrotate、CI 冒烟）
+> 只复用，不得改签名或语义；确需扩展时新增函数，不动既有六个。
+
+### 定位与硬约束
+
+- **POSIX sh 片段**，可被 `.` 引入；`sh -n deploy/platform.sh` 必须通过，不得引入 bash 专属语法。
+- 被引入时**无副作用**：只定义函数与默认值，不执行任何系统命令。
+- 只做平台判断，不承载业务逻辑；不改 rc.d 既有脚本行为，不动 kernel 代码。
+- 端口口径不在本文件里编码：`integrations/quickstart` / systemd 用 **7443/7444**，
+  FreeBSD rc.d 用 **18443/18444**，两者不得混改（`lm_probe_port` 只接收调用方给的端口）。
+
+### 环境变量
+
+| 变量 | 默认 | 作用 |
+|---|---|---|
+| `LM_DRY_RUN` | `0` | 置 `1`（或 `true/yes/on`）时只打印将要执行的命令，不改动系统 |
+| `LM_FAKE_OS` | 空 | 测试钩子：强制走 `freebsd` / `linux` / `darwin` 分支；非法值返回 2 |
+| `LM_DEPLOY_DIR` | `deploy` | `deploy/` 目录位置；FreeBSD 装 newsyslog 规则时按它取源文件 |
+
+### 六个接口（冻结）
+
+| 接口 | 语义 | 返回值 |
+|---|---|---|
+| `lm_detect_os` | 打印 `freebsd` / `linux` / `darwin`（基于 `uname -s`） | 0 成功；1 未知系统；2 `LM_FAKE_OS` 非法 |
+| `lm_prefix` | 打印安装前缀：linux `/opt/lightmem`；freebsd（及 darwin）`/usr/local/lightmem` | 0；OS 判断失败时透传 |
+| `lm_service_restart <name>` | linux `systemctl restart <name>`；freebsd `service <name> restart` | 命令退出码；缺参 2；darwin 未支持 3 |
+| `lm_service_install <src> <name>` | linux 装 `/etc/systemd/system/<name>.service`（644）并 `daemon-reload`；freebsd 装 `/usr/local/etc/rc.d/<name>`（555） | 0；缺参 2；非 root/源文件缺失 1；darwin 3 |
+| `lm_probe_port <port>` | 端口是否在监听：优先 `ss -ltn`，回退 `sockstat -4l`，再回退 `lsof` | 0 在监听（打印命中行）；1 未监听；2 参数错误/无可用工具 |
+| `lm_logrotate_install [src]` | linux 装 `/etc/logrotate.d/lightmem`（无 `src` 时写内置 `daily/rotate 7/compress` 规则）；freebsd 装 `/usr/local/etc/newsyslog.conf.d/lightmem.conf`（无 `src` 时取 `${LM_DEPLOY_DIR}/newsyslog.d/lightmem.conf`） | 0；非 root/源文件缺失 1；darwin 3 |
+
+**DRY_RUN 约定**：`lm_service_restart` / `lm_service_install` / `lm_probe_port` /
+`lm_logrotate_install` 在 `LM_DRY_RUN=1` 时只打印 `[dry-run] ...` 计划行并返回 0，
+不执行 `systemctl`/`service`/`install`/写文件；`lm_probe_port` 的 dry-run 不判定「是否在监听」，
+仅用于形状断言。`lm_detect_os` / `lm_prefix` 是纯函数，dry-run 不影响结果。
+
+### 用法
+
+```sh
+. "$(dirname "$0")/platform.sh"
+
+os=$(lm_detect_os) || exit 1
+prefix=$(lm_prefix)
+lm_probe_port 7443 || echo "端口 7443 未监听"
+lm_service_install deploy/lightmem.service lightmem   # Linux；FreeBSD 传 rc.d 脚本
+lm_logrotate_install
+```
+
+### 自测
+
+```sh
+sh -n deploy/platform.sh      # POSIX 语法门禁
+sh deploy/platform_test.sh    # 逐接口形状断言（无需 root，不写系统）
+```
+
+`platform_test.sh` 用 `LM_FAKE_OS` 在单机上把 freebsd/linux 两个分支都跑一遍：
+Linux 真机可验 FreeBSD 语义，FreeBSD 真机也可验 Linux 语义，避免「只在本机 OS 上绿灯」的假覆盖。
+唯一真实动作是 `lm_probe_port` 的只读探测（探一个必然没人监听的端口）。
+
+在 Linux（dash）与 FreeBSD 15.1（`/bin/sh`）上均为 **35 passed, 0 failed**。
+在 Windows 的 Git Bash（`MINGW64_NT-*`）下，「真实系统识别」一条会标 `skip`——契约只认
+FreeBSD/Linux/Darwin，MINGW 本来就该返回 1；其余 34 条照测，用于在没有 POSIX 真机的提交机上
+做形状回归（`bash deploy/platform_test.sh` 同样 exit 0）。
+
+---
+
 ## 已知部署坑（R29-F 真机验收登记，**装之前先看**）
 
 > 来源：`_R29_F线验收报告.md` §5、`_R29_遗留问题存档.md` §2。三条都是**部署侧**问题，与 R29 代码逻辑无关，
