@@ -19,7 +19,7 @@
   ├── DeepSeek Harness ─┐
   ├── Trae ─────────────┤
   ├── CodeArts ─────────┼──▶ lightmem（记忆大脑）
-  ├── WorkBuddy ────────┤     18444 端口，原生 MCP
+  ├── WorkBuddy ────────┤     原生 MCP：Linux/quickstart 7444 或 FreeBSD rc.d 18444
   ├── 小浣熊 ───────────┤
   └── OpenCode / Roo ───┘
 ```
@@ -73,6 +73,19 @@ sh integrations/quickstart/install.sh
 > 想改端口/租户？`install.sh --port 8443 --tenant myteam --user alice`
 > 想先看看它要做什么？`install.sh --dry-run`
 > 更多档位与 systemd：`install.sh -h`
+>
+> **Linux 快速路径（主流发行版，一等平台）**：在 Ubuntu 24.04 / Debian 12 / Rocky 9 上，
+> 除上面的一条命令外，加 `--systemd` 即可装成两个 systemd 服务（kernel `:7443` + MCP `:7444`）：
+>
+> ```bash
+> sudo sh integrations/quickstart/install.sh --profile solo --systemd --service-user lightmem
+> # 等价的发行版前置（Go 1.25 / PG+pgvector / 用户与目录 / 防火墙 / 排障）见：
+> # manuals/linux-setup.md  ← TODO：该文件随 D 线 T-0414 合入；未合入前 Linux profile 以 rc.d/quickstart 默认档为准
+> ```
+>
+> **FreeBSD 路径保持原样**：走 rc.d / jail / ZFS（端口 `:18443/:18444`），
+> `install.sh` 在 FreeBSD 上会跳过 systemd、不碰任何 rc.d 文件。
+> 两套端口口径（`7443/7444` ↔ `18443/18444`）不得混改。
 
 ---
 
@@ -177,43 +190,56 @@ python3 integrations/agent-onboarding/gen_configs.py \
 表现为新 token 报 `401 unauthorized`。
 
 ```bash
-# 按你的启动方式重启 MCP 服务；rc.d 方式：
+# 按你的启动方式重启 MCP 服务：
+# Linux（systemd；install.sh --systemd 装的双 unit）：
+sudo systemctl restart lightmem-mcp lightmem
+
+# FreeBSD（rc.d，原有口径不变）：
 sudo service lightmem_mcp restart
 
-# 手工方式：
+# 手工方式（两平台通用）：
 kill $(cat ./_lightmem_run/lightmem-mcp.pid)
 # 然后重跑 install.sh，或按它末尾给的命令重启
 ```
 
 ---
 
-## 六·五、守护与自愈（FreeBSD 真机）
+## 六·五、守护与自愈（FreeBSD 与 Linux 各自口径）
 
-> 这一节讲服务「挂了怎么自己起来」，面向部署在 `192.168.1.5`（FreeBSD 0.88）的 family 档。
+> 这一节讲服务「挂了怎么自己起来」。FreeBSD 面向部署在 `192.168.1.5`（FreeBSD 0.88）的 family 档；
+> Linux 面向主流发行版（Ubuntu 24.04 / Debian 12 / Rocky 9）的 systemd 部署，两者均为一等平台，机制按平台分列，不互相替换。
 
 ### 两层自愈
 
-| 层 | 机制 | 管什么 |
+| 层 | FreeBSD（rc.d，原义保留） | Linux（systemd） |
 |---|---|---|
-| 进程级 | rc.d `daemon -R 5 -C 24 -H` | 内核崩溃/退出 → 5s 拉起；24 次用尽后 daemon 退出，看门狗兜底 |
-| 应用级 | `deploy/lightmem-watchdog.sh`（cron 每 2 分钟） | 进程在但 `/readyz` 503（后端不可达）→ `service lightmem restart`，120s 冷却防抖 |
+| 进程级 | rc.d `daemon -R 5 -C 24 -H`：内核崩溃/退出 → 5s 拉起；24 次用尽后 daemon 退出，看门狗兜底 | `deploy/lightmem.service` / `lightmem-mcp.service`（T-0411 已落地）：`Restart=on-failure`、`RestartSec=2`、`StartLimitBurst=5`/60s 防重启风暴，`systemctl` 托管 |
+| 应用级 | `deploy/lightmem-watchdog.sh`（cron 每 2 分钟）：进程在但 `/readyz` 503 → `service lightmem restart`，120s 冷却防抖 | 同一看门狗脚本经 `deploy/lightmem-watchdog.timer`（systemd timer）周期触发；TODO：timer 随 B 线 T-0412 合入，未合入前 Linux 侧沿用 cron 形态 |
 
-两者**互补不替代**：daemon 只管进程退出，看门狗补「进程在但后端连不上」的盲区。
+两者**互补不替代**：进程级只管进程退出，看门狗补「进程在但后端连不上」的盲区。
+重启命令按平台分：FreeBSD `sudo service lightmem restart`；Linux `sudo systemctl restart lightmem lightmem-mcp`。
 
 ### 探针端点（免鉴权）
 
 - `/livez`：存活探针，立即 200，不碰任何依赖。
 - `/readyz`：就绪探针，`Ping` 后端，200=ready / 503=not_ready。
 
-> 这两个端点已加入 `kernel/auth.go` 的运维豁免清单，否则 rc.d 健康检查与监控探针会吃到 401、服务永远起不来。
+> 这两个端点已加入 `kernel/auth.go` 的运维豁免清单，否则 FreeBSD rc.d 健康检查与 Linux systemd/监控探针会吃到 401、服务永远起不来。
 
 ### 安装看门狗 + 日志轮转
+
+FreeBSD（rc.d / cron / newsyslog，原义保留）：
 
 ```sh
 install -m 555 deploy/lightmem-watchdog.sh /usr/local/bin/lightmem-watchdog.sh
 install -m 644 deploy/cron.d/lightmem-watchdog /etc/cron.d/lightmem-watchdog
 install -m 644 deploy/newsyslog.d/lightmem.conf /etc/newsyslog.d/lightmem.conf
 ```
+
+Linux（systemd / logrotate）：日志轮转配置路径 `/etc/logrotate.d/lightmem`（由 `deploy/platform.sh` 的
+`lm_logrotate_install` 口径安装；`deploy/logrotate.d/lightmem` 配置文件随 C 线 T-0413 合入，
+未合入前 TODO 先手工配 logrotate）。看门狗 timer 随 B 线 T-0412 合入，未合入前用上面的 cron 形态。
+安装前缀：Linux `/opt/lightmem`、FreeBSD `/usr/local/lightmem`（`lm_prefix()` 口径，勿混用）。
 
 ### 重启自证四步（验证自愈真的生效）
 
@@ -263,9 +289,22 @@ sh integrations/quickstart/install.sh --profile family   # 切到 family
 | `go: command not found` | 装 Go 1.25+：<https://go.dev/dl/> |
 | 工具不出现 | 查 §五 的类型标记；再看该 AI 的 MCP 日志 |
 | `401 unauthorized` | token 不对，或换发后**没重启服务**（§六） |
-| `bind: address already in use` | 端口被占：换 `--port`，或先停旧进程 |
+| `bind: address already in use` | 端口被占：换 `--port`，或先停旧进程。查占用：Linux `ss -ltnp \| grep 7444`（rc.d 档查 `18444`）；FreeBSD `sockstat -4l \| grep 18444` |
 | `400 tenant_id required` | 老版本症状（身份没注入）；升级到本版 |
-| 服务起了但 `healthz` 不通 | 看 `_lightmem_run/lightmem.log` 尾部 |
+| 服务起了但 `healthz` 不通 | 看 `_lightmem_run/lightmem.log` 尾部；systemd 装法另看 `journalctl -u lightmem -u lightmem-mcp -n 100 --no-pager` |
+| Linux 服务起不来/反复重启 | `systemctl status lightmem lightmem-mcp`、`journalctl -u lightmem-mcp -f`；确认日志轮转 `logrotate -d /etc/logrotate.d/lightmem`（FreeBSD 用 `newsyslog` 口径，见上） |
+| FreeBSD 服务起不来 | `sudo service lightmem status`、`sockstat -4l \| grep 18443`；排障口径与 rc.d 保持一致，不套用 Linux 命令 |
+
+> 命令对照（各平台用各自口径，不互换）：
+>
+> | 用途 | Linux | FreeBSD |
+> |---|---|---|
+> | 查端口占用 | `ss -ltnp` | `sockstat -4l` |
+> | 查服务日志 | `journalctl -u lightmem*` | `cat /var/log/lightmem*.log`（newsyslog 轮转） |
+> | 日志轮转 | `logrotate`（`/etc/logrotate.d/lightmem`） | `newsyslog`（`/etc/newsyslog.d/lightmem.conf`） |
+> | 服务管理 | `systemctl restart/status lightmem*` | `service lightmem* restart/status` |
+> | 安装前缀 | `/opt/lightmem` | `/usr/local/lightmem` |
+> | 端口口径 | 7443/7444 | 18443/18444 |
 
 ---
 
@@ -273,7 +312,10 @@ sh integrations/quickstart/install.sh --profile family   # 切到 family
 
 | 路径 | 用途 |
 |---|---|
-| `integrations/quickstart/install.sh` | **一键部署**（这条开始） |
+| `integrations/quickstart/install.sh` | **一键部署**（这条开始）；Linux 加 `--systemd`（双 unit），FreeBSD 自动跳过 |
+| `deploy/platform.sh` | 平台抽象接口（`lm_detect_os` / `lm_prefix` / `lm_probe_port` / `lm_logrotate_install` 等，Linux 与 FreeBSD 各自口径） |
+| `manuals/linux-setup.md` | Linux 部署手册（Ubuntu/Debian/Rocky）｜ TODO：随 D 线 T-0414 合入 |
+| `manuals/p1-freebsd-zfs-setup.md` | FreeBSD + ZFS + jail 部署手册（原义保留） |
 | `integrations/agent-onboarding/issue_token.py` | 签发 agent token |
 | `integrations/agent-onboarding/gen_configs.py` | 生成各家 MCP 配置片段 |
 | `integrations/agent-onboarding/README.md` | 接入原理与逐家细节 |
