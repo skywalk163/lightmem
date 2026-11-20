@@ -1,0 +1,62 @@
+# LightMem (LIMS) MCP 服务 —— systemd unit（Linux 用；FreeBSD 真机走 integrations/lims-088-rc.d/*）
+#
+# 双服务之二，与 deploy/lightmem.service 配套：
+#   lightmem.service      kernel/REST   :7443
+#   lightmem-mcp.service  MCP/HTTP      :7444  （本文件；After/Wants kernel，保证依赖有序）
+#
+# 为什么必须独立成 unit：MCP 是**给 AI 客户端用的原生入口**，与 REST 生命周期不同
+#   （可单独 reload/重启而不动 kernel；kernel 未就绪时它自己会 on-failure 重试）。
+#
+# 端口口径（**不得混用**）：
+#   systemd / quickstart = 7443 / 7444
+#   FreeBSD rc.d         = 18443 / 18444
+#
+# 凭据只走 EnvironmentFile（与 kernel 共用一个 env 文件即可）：
+#   /opt/lightmem/lightmem.env 内 LIMS_AGENT_TOKENS=<token-json>
+#
+# 安装（推荐直接跑 integrations/quickstart/install.sh --systemd）：
+#   install -m 644 deploy/lightmem.service deploy/lightmem-mcp.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now lightmem.service lightmem-mcp.service
+#
+# 探针：/healthz（本进程存活；下游 REST 由 -rest-base 指向 kernel :7443）
+#
+# 注意：unit 文件里**不能**在指令行尾写注释（systemd 只认整行 #/; 注释）。
+[Unit]
+Description=LightMem (LIMS) MCP server (HTTP transport)
+After=network-online.target lightmem.service
+Wants=network-online.target lightmem.service
+# 重启风暴保护属于 [Unit]（systemd >= 230；放 [Service] 会被忽略）
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=lightmem
+Group=lightmem
+WorkingDirectory=/opt/lightmem
+EnvironmentFile=-/opt/lightmem/lightmem.env
+ExecStart=/opt/lightmem/lightmem-mcp -transport http -listen 127.0.0.1:7444 -rest-base http://127.0.0.1:7443
+Restart=on-failure
+RestartSec=2
+TimeoutStartSec=60
+TimeoutStopSec=30
+
+# ---------------------------------------------------------------- 加固
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+# MCP 自身不写业务数据，只落日志（若 kernel 与 mcp 分用户部署，按需再放开 data）
+ReadWritePaths=/opt/lightmem/logs
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target
