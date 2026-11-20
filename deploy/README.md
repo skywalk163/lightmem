@@ -153,25 +153,64 @@ secrets 文件缺失 → 空口令 → scram 下**连接失败并显式报错**�
 > 两者分工：rc.d 负责 **进程级自愈**（`daemon -R 5 -C 24 -H`），P0-A 负责
 > **应用级探活兜底**（看门狗）+ **日志轮转** + **systemd 模板**。
 
-### 三件套清单
+### 交付件清单
 
 | 件 | 路径 | 职责 |
 |---|---|---|
-| 看门狗脚本 | `deploy/lightmem-watchdog.sh` | 每 2 分钟探 `/readyz`，失败 `service lightmem restart`，冷却 120s 防抖，`logger` 记事件 |
-| 定时条目 | `deploy/cron.d/lightmem-watchdog` | 把看门狗挂进 cron（`*/2 * * * * root ...`） |
+| 看门狗脚本 | `deploy/lightmem-watchdog.sh` | 每 2 分钟探 `/readyz`，未就绪则 `lm_service_restart`（linux `systemctl` / freebsd `service`）重启**本服务**；探活回退链 `curl`→`wget`→`fetch`（仅 freebsd）；冷却 120s 防抖，`logger` 记事件 |
+| 定时条目（cron） | `deploy/cron.d/lightmem-watchdog` | FreeBSD 默认；Linux 无 systemd 时的备选（`*/2 * * * * root ...`） |
+| systemd 看门狗单元 | `deploy/lightmem-watchdog.service` | Linux oneshot：`ExecStart=/usr/local/bin/lightmem-watchdog.sh`，`RuntimeDirectory=lightmem` |
+| systemd 看门狗计时器 | `deploy/lightmem-watchdog.timer` | Linux 每 2 分钟触发（`OnCalendar=*:0/2`、`Persistent=true`、`RandomizedDelaySec=10`） |
 | 日志轮转 | `deploy/newsyslog.d/lightmem.conf` | `lightmem.log` / `lightmem-mcp.log` 按日切、保留 7 份（对应 L-257） |
 | systemd 模板 | `deploy/lightmem.service` | 非 FreeBSD/容器部署用（FreeBSD 真机走 rc.d）；`Restart=always` 等 + 探针注释 |
+
+> 看门狗 + 定时器是 T0 的**补充件**，不替代 rc.d。FreeBSD 真机用 cron，Linux 默认 systemd timer；
+> 每种系统**只装一种**定时方式（timer 与 cron 同时装会双份触发）。
+> 冷却文件目录按平台选：Linux `/run/lightmem`（不可写则 `/var/lib/lightmem`），FreeBSD `/var/run/lightmem`。
 
 ### 安装（FreeBSD 真机）
 
 ```sh
-# 1) 看门狗脚本
+# 1) 看门狗脚本 + 平台抽象层（脚本按 脚本同目录 → /usr/local/libexec/lightmem 的顺序找 platform.sh）
 install -m 555 deploy/lightmem-watchdog.sh /usr/local/bin/lightmem-watchdog.sh
+install -m 644 deploy/platform.sh /usr/local/libexec/lightmem/platform.sh
 # 2) cron 条目（系统 crontab 或 /etc/cron.d/）
 install -m 644 deploy/cron.d/lightmem-watchdog /etc/cron.d/lightmem-watchdog
 #   或：echo '*/2 * * * * root /usr/local/bin/lightmem-watchdog.sh' >> /etc/crontab
 # 3) newsyslog 轮转
 install -m 644 deploy/newsyslog.d/lightmem.conf /etc/newsyslog.d/lightmem.conf
+```
+
+### 安装（Linux：systemd timer 或 cron 二选一）
+
+```sh
+# 0) 脚本 + 平台抽象层
+install -m 555 deploy/lightmem-watchdog.sh /usr/local/bin/lightmem-watchdog.sh
+install -m 644 deploy/platform.sh /usr/local/libexec/lightmem/platform.sh
+
+# A) systemd timer（推荐）
+install -m 644 deploy/lightmem-watchdog.service deploy/lightmem-watchdog.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now lightmem-watchdog.timer
+systemctl list-timers lightmem-watchdog.timer
+
+# B) 无 systemd（容器/老旧发行版）改用 cron，与 A 二选一
+install -m 644 deploy/cron.d/lightmem-watchdog /etc/cron.d/lightmem-watchdog
+```
+
+> **端口口径不混用**：脚本默认探针 URL 按平台选——Linux `http://127.0.0.1:7443/readyz`
+> （systemd/quickstart 口径），FreeBSD `http://127.0.0.1:18443/readyz`（rc.d 口径）；
+> 只有改成非默认端口时才需要覆盖：systemd 写 `/etc/lightmem-watchdog.env`
+> （单元已 `EnvironmentFile=-` 引入），cron 方式则在定时行前加 `LIGHTMEM_READYZ_URL=...`。
+
+### 自测（dry-run：不重启、不写冷却/日志）
+
+```sh
+sh -n deploy/lightmem-watchdog.sh
+LIGHTMEM_READYZ_URL=http://127.0.0.1:1/readyz LM_DRY_RUN=1 sh deploy/lightmem-watchdog.sh
+# 想看 Linux/FreeBSD 分支的实际计划命令（单机上也能验证另一侧语义）：
+LM_FAKE_OS=linux   LIGHTMEM_READYZ_URL=http://127.0.0.1:1/readyz LM_DRY_RUN=1 sh deploy/lightmem-watchdog.sh
+LM_FAKE_OS=freebsd LIGHTMEM_READYZ_URL=http://127.0.0.1:1/readyz LM_DRY_RUN=1 sh deploy/lightmem-watchdog.sh
 ```
 
 ### 与 rc.d 自愈的关系（重要）
