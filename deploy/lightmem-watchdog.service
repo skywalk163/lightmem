@@ -1,0 +1,35 @@
+# LightMem /readyz 看门狗 —— systemd oneshot 单元（Linux 用；FreeBSD 真机走 cron）
+#
+# 由 lightmem-watchdog.timer 每 2 分钟触发；也可手动：
+#   systemctl start lightmem-watchdog.service
+#
+# 与 rc.d 的 daemon -R/-C 自愈互补：daemon 管「进程崩溃/退出」，
+# 本看门狗管「进程在但 /readyz 非 200」。看门狗是补充，不替代 rc.d。
+#
+# 安装（Linux，与 cron 二选一，推荐本路径）：
+#   install -m 555 deploy/lightmem-watchdog.sh /usr/local/bin/lightmem-watchdog.sh
+#   install -m 644 deploy/platform.sh /usr/local/libexec/lightmem/platform.sh
+#   install -m 644 deploy/lightmem-watchdog.service deploy/lightmem-watchdog.timer /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now lightmem-watchdog.timer
+#
+# 可选覆盖（服务名/探针 URL/冷却秒数），默认见 deploy/lightmem-watchdog.sh 头部：
+#   install -m 600 /dev/null /etc/lightmem-watchdog.env
+#   printf 'LIGHTMEM_READYZ_URL=http://127.0.0.1:7443/readyz\n' >> /etc/lightmem-watchdog.env
+#
+# 注意：systemd unit 不能在指令行尾写注释，说明一律单独成行。
+[Unit]
+Description=LightMem /readyz watchdog (oneshot, triggered by lightmem-watchdog.timer)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=-/etc/lightmem-watchdog.env
+ExecStart=/usr/local/bin/lightmem-watchdog.sh
+RuntimeDirectory=lightmem
+RuntimeDirectoryMode=0755
+Nice=10
+TimeoutStartSec=30

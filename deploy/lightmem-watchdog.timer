@@ -1,0 +1,25 @@
+# LightMem 看门狗计时器 —— 每 2 分钟触发 lightmem-watchdog.service（Linux 用；FreeBSD 真机走 cron）
+#
+# 与 deploy/cron.d/lightmem-watchdog 二选一，别同时装（双份定时会重复触发）。
+#
+# 安装：
+#   install -m 644 deploy/lightmem-watchdog.service deploy/lightmem-watchdog.timer /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now lightmem-watchdog.timer
+#
+# 检查：
+#   systemctl list-timers lightmem-watchdog.timer
+#   systemctl status lightmem-watchdog.service
+#
+# Persistent=true：机器关机错过触发点，开机后补跑一次（重启后立即体检）；
+# RandomizedDelaySec=10：多机同时开机时错开触发，避免同一秒集中打 /readyz。
+[Unit]
+Description=Trigger LightMem /readyz watchdog every 2 minutes
+
+[Timer]
+OnCalendar=*:0/2
+Persistent=true
+RandomizedDelaySec=10
+Unit=lightmem-watchdog.service
+
+[Install]
+WantedBy=timers.target
