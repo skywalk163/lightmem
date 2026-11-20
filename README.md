@@ -404,7 +404,9 @@ storage_backend: sqlite
 - 不调 LLM 生成评测集（模板 + 固定 seed）
 - 权重不写死为"调优好"（以 `eval/weights/` 校准文件为准，不再内联写死在文档）
 - 只增不改 Schema 语义（R14/R15/R16 已建立"只增不改白名单"与统一门禁 `scripts/gate.sh`）
-- 运行平台优先级：**FreeBSD > Linux > Windows**（用户拍板）；Windows 仅文档编辑与传输，不装 Go
+- 运行平台优先级（2026-11-20 更新）：**Linux 与 FreeBSD 并列一等**——Linux 主流发行版（Ubuntu 24.04 / Debian 12 / Rocky 9，走 systemd/quickstart，`install.sh --systemd` 或按 `manuals/linux-setup.md`）与 FreeBSD 0.88（走 rc.d / jail / ZFS）均为 production 验证平台，不再分主次；Windows 仅文档编辑与传输，不装 Go。
+  - 历史口径（2026-11-20 前，用户拍板）：「运行平台优先级 FreeBSD > Linux > Windows」。此记录保留作为决策沿革；因 Linux 需求量更大，2026-11-20 起按上条并列一等口径执行。
+  - 两套端口口径不得混改：systemd/quickstart 用 7443/7444，FreeBSD rc.d 用 18443/18444（详见 `integrations/quickstart/install.sh`、`deploy/lightmem*.service`）。
 - 门禁 [11] PG 真机往返：未配置 → 显式 SKIP（绝不静默当 PASS，R15 口径）
 - R16 门禁 [6] 新增文件覆盖清单含 `backend_qdrant:4` / `node_role:4` / `topology:3` / `connector_app:4`（骨架契约单测阈值，向后兼容默认 12）
 
