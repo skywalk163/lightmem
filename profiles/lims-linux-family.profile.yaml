@@ -1,0 +1,174 @@
+# ============================================================
+# 光明记忆（LIMS）规模档位配置 —— Linux 版
+# 档位：Family（家庭实验室）/ 平台：Linux
+# 对应主文档版本：lightmem.md v2.0（§2.6 可缩放模式）
+# 目标用户：家庭实验室 / 小团队的单台 Linux 主机
+# 用户量级：1–5 人 | 记忆量级：十万级 | 部署形态：单机 Linux，PG 与内核同机
+# 适用发行版：Ubuntu 24.04 / Debian 12 / Rocky 9（x86_64 / arm64）
+# 配套手册：manuals/linux-setup.md
+# 配套清单：checklists/linux-security-checklist.md
+# ============================================================
+#
+# 【与 FreeBSD Family 档位的差异（只讲差异）】
+#   1) 无 jail：security 段的 jail 开关置假；进程隔离改由 systemd 沙箱承担
+#      （deploy/lightmem.service：NoNewPrivileges / ProtectSystem=strict /
+#        PrivateTmp / RestrictAddressFamilies / UMask=0027 …）。
+#   2) 无 ZFS：storage.zfs.enabled: false。PG 数据目录、归档、日志都放普通
+#      ext4/xfs 路径（默认 /var/lib/postgresql/18/main 与 /opt/lightmem/data），
+#      静态加密用 LUKS / fscrypt（安全清单第 4 节），不用 ZFS encryption。
+#      因此 security.zfs_encryption: false、key_management: local_keyring（非 _with_jail）。
+#   3) 单机不分 jail，PG 不再需要 vnet 内网 IP：storage.pg.host 走 127.0.0.1，
+#      network.components / vnet_subnet 一并省略（无组件 jail 可言）。
+#   4) cache / mq 取 none：§2.6 能力矩阵里 Family 的 Redis 标注为「可选」，
+#      Linux 单机版按「零额外中间件」交付，少两个要加固、要排障的守护进程；
+#      需要缓存/异步队列时按主文档 §2.6 显式改 redis/rabbitmq 并同步补装与加固。
+#   5) 端口：systemd 口径 7443（API）/ 7444（MCP），与 FreeBSD rc.d 的
+#      18443 / 18444 **不得混用**（口径真源：deploy/lightmem.service 注释）。
+#
+# 【关于 platform 字段】
+#   profiles/lims.profile.schema.json 顶层 additionalProperties: false 且没有
+#   platform 属性；kernel/profile.go 的 yaml.Unmarshal 也不消费它。故**不新增**
+#   platform 字段，平台信息仅由本注释块与 security 段的 jail 开关表达（详见交付 summary）。
+# ============================================================
+
+# 档位标识（schema enum 只认 solo/family/smb/enterprise）
+profile: family
+
+# ---------- 存储后端 ----------
+# 可选：sqlite | pgvector | qdrant | pgvector+shard
+storage_backend: pgvector
+
+storage:
+  pg:
+    # PostgreSQL 18 + pgvector（Linux 侧安装路径与包名见手册第 5 节；
+    # PGDG apt 提供 postgresql-18-pgvector，PGDG yum 提供 pgvector_18）
+    version: "18"
+    # 与内核同机部署：只监听回环，不出物理网卡
+    host: 127.0.0.1
+    port: 5432
+    # ⚠️ 必须用**非超级用户**：deploy/init-roles.sql 建 lightmem_app；
+    # kernel/pg_superuser_check.go 在连上后校验 rolsuper，超级用户默认 fail-fast。
+    # 口令不写在这里，走 env LIMS_PG_PASSWORD（见手册第 8 节）。
+    user: lightmem_app
+    database: lims
+    # 元数据 + 向量同库（§4.2 一致性骨架）
+    # 连接池
+    pool_size: 10
+    # pgvector HNSW 索引参数
+    vector:
+      index_type: hnsw
+      m: 16
+      ef_construction: 128
+      # 搜索时 ef_search
+      ef_search: 64
+  # ZFS dataset 规划（§5.6）—— Linux 版**不用** ZFS，此段显式关闭。
+  # 保留该键是为了让同一份 schema 下的 FreeBSD/Linux 档位可以直接 diff：
+  # 一眼看出「这里少的就是 ZFS」。数据落盘位置见下方 archive.path 与手册第 6 节。
+  zfs:
+    enabled: false
+  # 归档：本地目录（ext4/xfs），不用 MinIO/S3，减少一个要加固的服务
+  archive:
+    backend: local
+    path: /opt/lightmem/data/archive/
+  # 向量维度
+  embedding:
+    model: BGE-large-zh
+    dimensions: 1024
+    device: cpu
+
+# ---------- 缓存 ----------
+# 单机 Linux 版不引入 Redis（能力矩阵：Family 的 Redis 为可选）。
+# 需要时改 redis 并补装 redis-server / 配 requirepass 与 bind 127.0.0.1。
+cache: none
+
+# ---------- 消息队列 ----------
+# 同上：单机不引入 RabbitMQ，生命周期异步任务降级为进程内执行。
+mq: none
+
+# ---------- 网络 ----------
+network:
+  # 单机部署，内核只监听回环；对外由 nginx/caddy 反代（手册第 11 节）
+  bind: 127.0.0.1
+  # systemd 口径：7443（kernel/REST）。MCP 用 7444。
+  api_port: 7443
+  # 无 jail 即无 vnet 内网段，故不写 vnet_subnet / components。
+  # pf 是 FreeBSD 的包过滤器；Linux 用 ufw/firewalld（手册第 10 节）。
+  # 保留 enabled: false 仅为 schema 字段对齐，不代表 Linux 上装了 pf。
+  pf:
+    enabled: false
+
+# ---------- 安全组件 ----------
+security:
+  # 进程隔离：Linux 无 jail；systemd 沙箱 + 专用 lightmem 用户即为本档的隔离边界
+  jail: false
+  # ZFS 加密：无 ZFS；机密数据用 LUKS/fscrypt
+  zfs_encryption: false
+  # 强制访问控制：Linux 侧用发行版默认的 AppArmor(Ubuntu/Debian) 或
+  # SELinux(Rocky)，不额外加载 FreeBSD MAC 策略
+  mac: false
+  # 文件系统 ACL：POSIX ACL（setfacl/getfacl），用于 /opt/lightmem/data 细粒度授权
+  acl: true
+  # 网络 IPsec：单机形态无需
+  ipsec: false
+  # 漏洞审计：必开（apt/dnf 安全更新 + unattended-upgrades / dnf-automatic）
+  pkg_audit: true
+  # 系统审计：必开（auditd + journald 持久化）
+  process_accounting: true
+  # 最小权限：保持（lightmem 系统用户、目录 0750、文件 0640）
+  minimal_privilege: true
+  # TLS 终结：家庭实验室内网用自签，或反代挂 Let's Encrypt
+  tls: self_signed
+  # 密钥管理：本地 keyring + EnvironmentFile(0600)；无 jail，故不用 _with_jail
+  key_management: local_keyring
+
+# ---------- 功能开关 ----------
+# 注意：poison_guard / audit / delete_rights 在所有档位必须为 true
+features:
+  # 投毒防护（§7.5）—— 不可裁剪
+  poison_guard: true
+  # 审计（§7.2）—— 不可裁剪
+  audit: true
+  # 删除权级联（§7.3）—— 不可裁剪
+  delete_rights: true
+  # 核心记忆块（§3.7）：家庭多人场景价值高
+  core_memory: true
+  # 后台整合（§3.13）：家庭场景开启（多 Agent 共享经验沉淀）
+  consolidation: true
+  # 多信号检索（§3.4）：PG+pgvector 支持语义+关键词+实体
+  multi_signal_retrieval: true
+  # 反馈闭环（§3.11）：开启
+  feedback_loop: true
+  # 目标记忆（§3.8）：开启
+  goal_memory: true
+  # 外部连接器（§3.12）：家庭实验室可开数据库/文档连接器
+  external_connectors: true
+  # 跨 Agent 共享（§7.1 visibility）
+  shared_visibility: true
+
+# ---------- 扩容参数 ----------
+scaling:
+  mode: standalone
+  # 单机全栈（PG 与内核同机，无 jail 拆分）
+  nodes: 1
+  # 预留：后续可升 SMB 主备
+  upgrade_path: smb
+# ---------- Agent 鉴权（R21-B 新增，与 FreeBSD 档位同口径） ----------
+# 共享记忆大脑的可信边界：每个 Agent 一份 token，服务端按 token 定身份
+# （agent_id / user_id / tenant_id），杜绝 body 冒充（G4 修法）。
+#
+# 默认态：agent_tokens 为空 → AuthMiddleware 透传，行为与 R20 逐位一致（红线④）。
+# 启用方式（二选一，env 优先）：
+#   1) env LIMS_AGENT_TOKENS='{"t-xxx":{"agent_id":"…","user_id":"…","tenant_id":"…"}}'
+#      （也可是指向 JSON 文件的路径）
+#   2) 在下方 agent_tokens 填入 token → 身份绑定（生产建议放文件权限 0600 的 profile）
+# require_auth: true（或 env LIMS_REQUIRE_AUTH=1）→ 未认证请求一律 401。
+#
+# ⚠️ token 是凭证：勿提交真实 token 到 git；示例一律注释。
+#    Linux 落盘位置：/opt/lightmem/lightmem.env（install -m 600 root:lightmem）。
+auth:
+  # require_auth: false
+  agent_tokens: {}
+  # agent_tokens:
+  #   "t-dsh-8f3a...":   {agent_id: deepseek-harness, user_id: dsh-agent, tenant_id: dshteam}
+  #   "t-trae-...":      {agent_id: trae,            user_id: skywalk,   tenant_id: dshteam}
+  #   "t-workbuddy-...": {agent_id: workbuddy,       user_id: skywalk,   tenant_id: dshteam}
