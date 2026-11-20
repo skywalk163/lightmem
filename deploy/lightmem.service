@@ -1,33 +1,72 @@
-# R29-T0 P0-A：systemd unit（非 FreeBSD / 容器化部署用；FreeBSD 真机走 integrations/lims-088-rc.d/*）
+# LightMem (LIMS) kernel/REST —— systemd unit（Linux 用；FreeBSD 真机走 integrations/lims-088-rc.d/*）
 #
-# 安装：
-#   cp deploy/lightmem.service /etc/systemd/system/lightmem.service
-#   systemctl daemon-reload && systemctl enable --now lightmem
+# 双服务之一，与 deploy/lightmem-mcp.service 配套：
+#   lightmem.service      kernel/REST   :7443  （本文件）
+#   lightmem-mcp.service  MCP/HTTP      :7444  （After/Wants 本单元，见同目录文件）
 #
-# 探针（待 B 线交付后由运维在 probe 配置里启用）：
-#   LivenessProbe:  HTTP GET /livez   → 立即 200（不碰依赖）
-#   ReadinessProbe: HTTP GET /readyz  → 200 ready / 503 not_ready
-# 当前 service 文件只声明策略，探针由部署平台（k8s/systemd 外部）按需接入。
+# 端口口径（**不得混用**）：
+#   systemd / quickstart = 7443 / 7444
+#   FreeBSD rc.d         = 18443 / 18444
+#
+# 凭据（LIMS_AGENT_TOKENS 等）**只走 EnvironmentFile**，不写进 unit 本体：
+#   install -m 600 /dev/null /opt/lightmem/lightmem.env
+#   printf 'LIMS_AGENT_TOKENS=<token-json>\n' >> /opt/lightmem/lightmem.env
+#
+# 安装（推荐直接跑 integrations/quickstart/install.sh --systemd，它会渲染本模板并装两个 unit）：
+#   install -m 644 deploy/lightmem.service deploy/lightmem-mcp.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now lightmem.service lightmem-mcp.service
+#
+# 探针（免鉴权，见 kernel/auth.go 的 isOperationalEndpoint）：
+#   /livez  → 立即 200（不碰依赖）
+#   /readyz → 200 ready / 503 not_ready
+#
+# 注意：unit 文件里**不能**在指令行尾写注释（systemd 只认整行 #/; 注释），
+#       下面所有说明都单独成行。
 [Unit]
-Description=LightMem (LIMS) memory service
+Description=LightMem (LIMS) memory kernel (REST)
 After=network-online.target
 Wants=network-online.target
+# 重启风暴保护属于 [Unit]（systemd >= 230；放 [Service] 会被忽略）
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
 User=lightmem
+Group=lightmem
 WorkingDirectory=/opt/lightmem
-ExecStart=/opt/lightmem/lightmem-kernel \
-    -profile /opt/lightmem/profiles/lims-family.profile.yaml \
-    -listen :18443
-Restart=always
+EnvironmentFile=-/opt/lightmem/lightmem.env
+ExecStart=/opt/lightmem/lightmem-kernel -profile /opt/lightmem/profiles/lims-family.profile.yaml -listen 127.0.0.1:7443
+Restart=on-failure
 RestartSec=2
-StartLimitIntervalSec=60
-StartLimitBurst=5
+TimeoutStartSec=90
 TimeoutStopSec=30
-# 存活/就绪探针路径（待 B 线交付后启用 liveness=/livez readiness=/readyz）
-# LivenessProbe:  HTTP GET /livez
-# ReadinessProbe: HTTP GET /readyz
+
+# ---------------------------------------------------------------- 加固
+# 禁止 exec 提权（setuid/setgid 一律失效）
+NoNewPrivileges=true
+# /tmp、/var/tmp 独立命名空间，防与宿主互投毒
+PrivateTmp=true
+# 隐藏真实设备节点
+PrivateDevices=true
+# /usr /boot /etc 全只读；可写面由 ReadWritePaths 显式白名单
+ProtectSystem=strict
+ReadWritePaths=/opt/lightmem/data /opt/lightmem/logs
+# 家目录不可见（数据/日志都在 /opt，不依赖家目录）
+ProtectHome=true
+# /proc/sys、/sys 只读
+ProtectKernelTunables=true
+# 禁止加载/卸载内核模块
+ProtectKernelModules=true
+# cgroup 结构只读
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+# 锁死 personality（防 exec-shield 绕过）
+LockPersonality=true
+SystemCallArchitectures=native
+# 新建文件 640 / 目录 750
+UMask=0027
 
 [Install]
 WantedBy=multi-user.target

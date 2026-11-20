@@ -14,7 +14,9 @@
 #     sh install.sh --port 7443 --bind 127.0.0.1
 #     sh install.sh --tenant myteam --user alice
 #     sh install.sh --no-mcp                  # 只起 REST，不起原生 MCP
-#     sh install.sh --systemd                 # 额外安装 systemd 服务（Linux）
+#     sh install.sh --systemd                 # 额外安装 systemd 服务（Linux；kernel+MCP 双 unit）
+#     sh install.sh --systemd --service-user lightmem   # 指定 unit 的 User/Group
+#     sh install.sh --uninstall-systemd       # 卸载双 unit（停服务 + 删 unit + daemon-reload）
 #     sh install.sh --dry-run                 # 只打印计划，不动任何东西
 #
 # 它会做：
@@ -43,6 +45,8 @@ TENANT=myteam
 USER_ID=alice
 RUN_MCP=1
 DO_SYSTEMD=0
+UNINSTALL_SYSTEMD=0
+SERVICE_USER=""
 DRY=0
 AGENTS=""
 
@@ -57,6 +61,8 @@ while [ $# -gt 0 ]; do
         --agents)   AGENTS="$2"; shift 2 ;;
         --no-mcp)   RUN_MCP=0; shift ;;
         --systemd)  DO_SYSTEMD=1; shift ;;
+        --uninstall-systemd) UNINSTALL_SYSTEMD=1; shift ;;
+        --service-user) SERVICE_USER="$2"; shift 2 ;;
         --dry-run)  DRY=1; shift ;;
         -h|--help)  sed -n '2,40p' "$0"; exit 0 ;;
         *) echo "未知参数：$1（-h 看用法）" >&2; exit 2 ;;
@@ -85,6 +91,25 @@ PID_REST="$RUN_DIR/lightmem.pid"
 PID_MCP="$RUN_DIR/lightmem-mcp.pid"
 REST_URL="http://$BIND:$PORT"
 
+# ---------------------------------------------------------------- 仅卸载（--uninstall-systemd）
+# 单独成段并提前退出：卸载不该顺带编译/起裸进程。端口口径见文末 systemd 段。
+if [ "$UNINSTALL_SYSTEMD" -eq 1 ]; then
+    say "卸载 systemd 服务（lightmem-mcp + lightmem）"
+    if [ "$DRY" -eq 0 ] && [ "$(id -u)" -ne 0 ]; then
+        warn "卸载 unit 需要 root：sudo sh $0 --uninstall-systemd"
+        die "未做任何改动（权限不足）"
+    fi
+    # 先停 MCP 再停 kernel：反序会让 MCP 在 kernel 消失后反复 on-failure 重试
+    run "systemctl disable --now lightmem-mcp.service 2>/dev/null || true"
+    run "systemctl disable --now lightmem.service 2>/dev/null || true"
+    run "rm -f /etc/systemd/system/lightmem-mcp.service /etc/systemd/system/lightmem.service"
+    run "systemctl daemon-reload"
+    run "systemctl reset-failed lightmem-mcp.service lightmem.service 2>/dev/null || true"
+    ok "已卸载双 unit（幂等：未安装时同样不报错）"
+    say "卸载完成；要重装请去掉 --uninstall-systemd 再跑一次"
+    exit 0
+fi
+
 say "lightmem 一键部署"
 cat <<EOF
     仓库      : $ROOT
@@ -99,9 +124,15 @@ EOF
 
 # ---------------------------------------------------------------- 1) 检查依赖
 say "1/6 检查依赖"
-command -v go >/dev/null 2>&1 || die "缺少 Go。请先安装 Go 1.25+：https://go.dev/dl/ （macOS: brew install go；Debian/Ubuntu: apt install golang）"
-GO_VER=$(go version | awk '{print $3}')
-ok "Go: $GO_VER"
+if command -v go >/dev/null 2>&1; then
+    GO_VER=$(go version | awk '{print $3}')
+    ok "Go: $GO_VER"
+elif [ "$DRY" -eq 1 ]; then
+    # dry-run 只出计划、不编译：缺 Go 不该让"看计划"这一步失败（CI 容器常见）
+    warn "未找到 Go（dry-run 不编译，仅提示）；真跑前请装 Go 1.25+：https://go.dev/dl/"
+else
+    die "缺少 Go。请先安装 Go 1.25+：https://go.dev/dl/ （macOS: brew install go；Debian/Ubuntu: apt install golang）"
+fi
 
 HAVE_PY=0
 for py in python3 python; do
@@ -314,35 +345,166 @@ else
 fi
 
 # ---------------------------------------------------------------- systemd（可选）
-if [ "$DO_SYSTEMD" -eq 1 ]; then
-    say "附加：安装 systemd 服务"
-    if [ "$(id -u)" -ne 0 ]; then
-        warn "--systemd 需要 root；请用 sudo 重跑，或手工参考下方生成的文件"
-    fi
-    SD="$RUN_DIR/lightmem.service"
-    if [ "$DRY" -eq 0 ]; then
-        cat > "$SD" <<EOF
-[Unit]
-Description=lightmem memory kernel (REST)
-After=network.target
+# 端口口径（**两套不得混**）：本脚本 + systemd = 7443/7444；FreeBSD rc.d = 18443/18444。
+# LIGHTMEM_UNIT_DIR 可覆盖 unit 落点（仅用于测试/沙箱，默认 /etc/systemd/system）。
+UNIT_DIR="${LIGHTMEM_UNIT_DIR:-/etc/systemd/system}"
 
-[Service]
-Type=simple
-Environment=LIMS_AGENT_TOKENS=$( [ -f "$TOKENS" ] && cat "$TOKENS" || echo '' )
-ExecStart=$KBIN -profile $PROFILE_FILE -listen $BIND:$PORT
-Restart=on-failure
-RestartSec=2
-
-[Install]
-WantedBy=multi-user.target
+systemd_hint() {
+    cat >&2 <<'EOF'
+    [!] systemctl 调用失败。先确认这台机器真的有 systemd（容器里通常没有）：
+          systemctl --version
+        若在 FreeBSD：本节不适用，请走 rc.d（口径 :18443/:18444，与本脚本 :7443/:7444 不同，勿混改）：
+          sudo cp integrations/lims-088-rc.d/lightmem* /usr/local/etc/rc.d/
+          sudo sysrc lightmem_enable=YES lightmem_mcp_enable=YES
+          sudo service lightmem start && sudo service lightmem_mcp start
+        若 unit 已装但起不来：journalctl -u lightmem.service -u lightmem-mcp.service -n 60 --no-pager
 EOF
+}
+
+if [ "$DO_SYSTEMD" -eq 1 ]; then
+    say "附加：安装 systemd 服务（kernel :$PORT / MCP :$MCP_PORT）"
+
+    OS_NAME=$(uname -s 2>/dev/null || echo unknown)
+    SKIP_SYSTEMD=0
+    if [ "$OS_NAME" = FreeBSD ]; then
+        warn "检测到 FreeBSD：systemd 不适用；本脚本不会碰任何 rc.d 文件"
+        SKIP_SYSTEMD=1      # dry-run 仍把计划打出来（供 CI 校验脚本路径），真跑一律不动手
     fi
-    ok "已生成 $SD"
-    if [ "$(id -u)" -eq 0 ]; then
-        run "cp '$SD' /etc/systemd/system/lightmem.service && systemctl daemon-reload && systemctl enable --now lightmem"
-        ok "systemd 服务已启用"
+
+    # 平台抽象：优先复用 T0 的 deploy/platform.sh（接口已冻结：lm_service_install <src> <name>）。
+    # 本分支若尚未合入 T0，则降级为等价的内置 cp —— 行为一致，只是少了 OS 判断那层封装。
+    PLATFORM_SH="$ROOT/deploy/platform.sh"
+    if [ -f "$PLATFORM_SH" ]; then
+        . "$PLATFORM_SH"
+        LM_DRY_RUN="$DRY"; export LM_DRY_RUN
+        ok "已引入 deploy/platform.sh，用 lm_service_install 装 unit"
     else
-        warn "以 root 执行： cp $SD /etc/systemd/system/lightmem.service && systemctl daemon-reload && systemctl enable --now lightmem"
+        warn "未找到 deploy/platform.sh（T0 尚未合入）；降级为内置 cp 安装（等价）"
+    fi
+
+    [ -n "$SERVICE_USER" ] || SERVICE_USER=$( [ "$(id -u)" -eq 0 ] && echo "${SUDO_USER:-root}" || id -un )
+
+    TPL_KERNEL="$ROOT/deploy/lightmem.service"
+    TPL_MCP="$ROOT/deploy/lightmem-mcp.service"
+    UNIT_KERNEL="$RUN_DIR/lightmem.service"
+    UNIT_MCP="$RUN_DIR/lightmem-mcp.service"
+    ENV_FILE="$RUN_DIR/lightmem.env"
+
+    [ -f "$TPL_KERNEL" ] || die "找不到 unit 模板 $TPL_KERNEL"
+    if [ "$RUN_MCP" -eq 1 ] && [ ! -f "$TPL_MCP" ]; then
+        die "找不到 unit 模板 $TPL_MCP"
+    fi
+
+    # 把 /opt 布局的模板渲染成本次 quickstart 的 $RUN_DIR 布局：
+    #   * 二进制 / profile / 数据 / 日志全部指向 $RUN_DIR
+    #   * 端口按本脚本口径（7443 / 7444）
+    #   * User/Group 换成实际运行者（仓库不在 lightmem 账号名下时，写死 lightmem 会 Permission denied）
+    #   * ProtectHome 关闭（quickstart 目录可能落在 /home）
+    render_unit() {
+        _tpl=$1; _out=$2; _usr=$3
+        sed -e "s|/opt/lightmem/profiles/lims-family.profile.yaml|$PROFILE_FILE|g" \
+            -e "s|127.0.0.1:7443|$BIND:$PORT|g" \
+            -e "s|127.0.0.1:7444|$BIND:$MCP_PORT|g" \
+            -e "s|^User=lightmem$|User=$_usr|" \
+            -e "s|^Group=lightmem$|Group=$_usr|" \
+            -e "s|^ReadWritePaths=.*|ReadWritePaths=$RUN_DIR|" \
+            -e "s|^ProtectHome=.*|# ProtectHome 已关闭：quickstart 目录可能位于 /home 下|" \
+            -e "s|/opt/lightmem|$RUN_DIR|g" \
+            "$_tpl" > "$_out"
+    }
+
+    install_unit() {   # $1 = 源 unit 文件, $2 = unit 名（如 lightmem.service）
+        _u_src=$1; _u_name=$2
+        if command -v lm_service_install >/dev/null 2>&1; then
+            lm_service_install "$_u_src" "$_u_name"   # T0 接口：Linux 装 unit / FreeBSD 装 rc 脚本；LM_DRY_RUN 可空跑
+        elif [ "$DRY" -eq 1 ]; then
+            printf '    [dry-run] cp %s %s/%s\n' "$_u_src" "$UNIT_DIR" "$_u_name"
+        else
+            cp "$_u_src" "$UNIT_DIR/$_u_name"
+        fi
+    }
+
+    if [ "$SKIP_SYSTEMD" -eq 1 ] && [ "$DRY" -eq 0 ]; then
+        ok "已跳过 systemd 安装：FreeBSD 请走 rc.d（口径 :18443/:18444，勿与本脚本 :7443/:7444 混改）"
+    elif [ "$(id -u)" -ne 0 ] && [ "$DRY" -eq 0 ]; then
+        warn "--systemd 需要 root；请用 sudo 重跑本脚本。手工等价步骤："
+        cat >&2 <<EOF
+      # 1) 先按本脚本把二进制/profile 装到 $RUN_DIR（不带 --systemd 跑一遍即可）
+      # 2) 渲染两个 unit（把 /opt/lightmem 换成 $RUN_DIR、端口 $PORT/$MCP_PORT、User 换成运行者）
+      sudo sh $0 --profile $PROFILE --port $PORT --mcp-port $MCP_PORT --systemd
+      # 3) 或直接照模板手装：
+      sudo install -m 644 $TPL_KERNEL $UNIT_DIR/lightmem.service
+      sudo install -m 644 $TPL_MCP    $UNIT_DIR/lightmem-mcp.service
+      sudo systemctl daemon-reload && sudo systemctl enable --now lightmem.service lightmem-mcp.service
+EOF
+    else
+        if [ "$DRY" -eq 0 ]; then
+            render_unit "$TPL_KERNEL" "$UNIT_KERNEL" "$SERVICE_USER"
+            if [ "$RUN_MCP" -eq 1 ]; then
+                render_unit "$TPL_MCP" "$UNIT_MCP" "$SERVICE_USER"
+            fi
+            ok "已渲染 unit -> $UNIT_KERNEL $( [ "$RUN_MCP" -eq 1 ] && echo "/ $UNIT_MCP" )"
+            # 凭据只进 EnvironmentFile（600），不进 unit 本体
+            if [ -f "$TOKENS" ]; then
+                ( umask 077; printf 'LIMS_AGENT_TOKENS=%s\n' "$(cat "$TOKENS")" > "$ENV_FILE" )
+                chmod 600 "$ENV_FILE"
+                ok "凭据写入 $ENV_FILE（600）"
+            else
+                warn "没有 $TOKENS：unit 将以透传态运行（无鉴权）"
+            fi
+        fi
+
+        # 撤掉第 5 步用 nohup 起的裸进程：否则 systemd 启动时 bind 冲突 → 服务"看起来起来了"其实 401
+        for pf in "$PID_REST" "$PID_MCP"; do
+            if [ -f "$pf" ]; then
+                run "kill '$(cat "$pf")' 2>/dev/null || true"
+            fi
+            run "rm -f '$pf'"
+        done
+
+        # dry-run 时用模板路径做"计划展示"（渲染产物尚未落盘）
+        if [ "$DRY" -eq 1 ]; then
+            SRC_K="$TPL_KERNEL"; SRC_M="$TPL_MCP"
+        else
+            SRC_K="$UNIT_KERNEL"; SRC_M="$UNIT_MCP"
+        fi
+        install_unit "$SRC_K" lightmem.service
+        if [ "$RUN_MCP" -eq 1 ]; then
+            install_unit "$SRC_M" lightmem-mcp.service
+        fi
+        run "systemctl daemon-reload"
+        if [ "$RUN_MCP" -eq 1 ]; then
+            ENABLE_UNITS="lightmem.service lightmem-mcp.service"
+        else
+            ENABLE_UNITS="lightmem.service"
+        fi
+        run "systemctl enable --now $ENABLE_UNITS" || { systemd_hint; die "systemctl enable --now 失败（见上方提示）"; }
+        if [ "$DRY" -eq 1 ]; then
+            ok "(dry-run) 将启用：$ENABLE_UNITS（开机自启 + 立即启动）"
+        else
+            ok "systemd 已启用：$ENABLE_UNITS（开机自启 + 立即启动）"
+        fi
+
+        if [ "$DRY" -eq 0 ]; then
+            i=0
+            while [ "$i" -lt 15 ]; do
+                if curl -fsS "$REST_URL/healthz" >/dev/null 2>&1; then break; fi
+                i=$((i + 1)); sleep 1
+            done
+            if curl -fsS "$REST_URL/healthz" >/dev/null 2>&1; then
+                ok "systemd: REST 就绪 $(curl -fsS "$REST_URL/healthz")"
+            else
+                warn "REST 未就绪：journalctl -u lightmem.service -n 50 --no-pager"
+            fi
+            if [ "$RUN_MCP" -eq 1 ]; then
+                if curl -fsS "http://$BIND:$MCP_PORT/healthz" >/dev/null 2>&1; then
+                    ok "systemd: MCP 就绪 $(curl -fsS "http://$BIND:$MCP_PORT/healthz")"
+                else
+                    warn "MCP 未就绪：journalctl -u lightmem-mcp.service -n 50 --no-pager"
+                fi
+            fi
+            warn "unit 里是 $RUN_DIR 的绝对路径：移动/删除本仓库会让这两个 unit 失效（先 --uninstall-systemd）"
+        fi
     fi
 fi
 
