@@ -56,6 +56,13 @@ jobs:
       - name: go test ./...
         run: go test ./...
 
+      # 部署冒烟：之前的 CI 只测 Go，install.sh / profile / 双服务 unit
+      # 在 Linux 上从不被验证。这一步只做 dry-run 与静态校验（不 sudo、不写 /etc）。
+      # 脚本自身在仓库根，需覆盖 job 默认的 kernel/ 工作目录。
+      - name: Run Linux deploy smoke
+        working-directory: .
+        run: sh scripts/ci-linux-smoke.sh
+
       # 依赖漏洞体检：day-1 先观测、不硬阻断（continue-on-error）。
       # 已有 CVE 不会挡住「编译错误必须变红」这条主红线；
       # 跑稳一个周期后再去掉 continue-on-error，把它升级为硬门禁。
