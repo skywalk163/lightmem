@@ -257,6 +257,10 @@ Linux 真机可验 FreeBSD 语义，FreeBSD 真机也可验 Linux 语义，避�
 FreeBSD/Linux/Darwin，MINGW 本来就该返回 1；其余 34 条照测，用于在没有 POSIX 真机的提交机上
 做形状回归（`bash deploy/platform_test.sh` 同样 exit 0）。
 
+Windows 提交机若 PATH 里没有 `sh`（Git for Windows 只把 `git.exe` 放进 PATH，`sh.exe` 在
+`Git\bin` 下），可以把 `sh` 指向 `C:\Program Files\Git\bin\sh.exe` 再跑同一套判据；
+判据本身不变，别为过判据去改脚本。
+
 ---
 
 ## 已知部署坑（R29-F 真机验收登记，**装之前先看**）
