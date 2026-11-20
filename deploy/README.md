@@ -173,6 +173,7 @@ secrets 文件缺失 → 空口令 → scram 下**连接失败并显式报错**�
 ```sh
 # 1) 看门狗脚本 + 平台抽象层（脚本按 脚本同目录 → /usr/local/libexec/lightmem 的顺序找 platform.sh）
 install -m 555 deploy/lightmem-watchdog.sh /usr/local/bin/lightmem-watchdog.sh
+mkdir -p /usr/local/libexec/lightmem
 install -m 644 deploy/platform.sh /usr/local/libexec/lightmem/platform.sh
 # 2) cron 条目（系统 crontab 或 /etc/cron.d/）
 install -m 644 deploy/cron.d/lightmem-watchdog /etc/cron.d/lightmem-watchdog
@@ -181,11 +182,17 @@ install -m 644 deploy/cron.d/lightmem-watchdog /etc/cron.d/lightmem-watchdog
 install -m 644 deploy/newsyslog.d/lightmem.conf /etc/newsyslog.d/lightmem.conf
 ```
 
+> `mkdir -p /usr/local/libexec/lightmem` 不可省：FreeBSD 14/15 基座没有这个目录，
+> 直接 `install -m 644 ... /usr/local/libexec/lightmem/platform.sh` 会
+> `install: cannot create regular file ...: No such file or directory`，
+> 看门狗随后退到「内置兜底」分支（不再走 `lm_service_restart`，Linux/FreeBSD 分支语义丢失）。
+
 ### 安装（Linux：systemd timer 或 cron 二选一）
 
 ```sh
 # 0) 脚本 + 平台抽象层
 install -m 555 deploy/lightmem-watchdog.sh /usr/local/bin/lightmem-watchdog.sh
+mkdir -p /usr/local/libexec/lightmem
 install -m 644 deploy/platform.sh /usr/local/libexec/lightmem/platform.sh
 
 # A) systemd timer（推荐）
@@ -345,3 +352,75 @@ sudo sysrc lightmem_profile="/usr/local/lightmem/profiles/lims-solo-abs.profile.
 `storage_backend: pgvector*` 时，启动自检（表/关键列）**不依赖 `-data-dir`**，缺表缺列直接 fail-fast。
 这是 B2 的登记行为，但意味着「未设新开关 = 与 R28 逐位一致」只对 sqlite 档成立。
 **部署 PG 档前必须先应用 `kernel/migrations/001_pgvector.up.sql`**，否则服务起不来（这是修复意图，不是故障）。
+
+---
+
+## Linux 真机验收新增坑（T-0417，2026-11-20，Ubuntu 24.04.4 实测）
+
+> 来源：`_LM_Linux适配_验收报告.md` §5。这四条都是**跨线接缝**：单线 dry-run 全绿，真机拼起来才炸。
+> 前三条已在 T-0417 内小修或给规避件，第四条只登记（不改 unit 语义）。
+
+### 5. unit 装成 `lightmem.service.service`（A ↔ T0 接缝，已修）
+
+`integrations/quickstart/install.sh` 调 `lm_service_install` 时传的 `<name>` **已带 `.service`**
+（如 `lightmem.service`），早期实现又无条件补一次后缀，落点变成
+`/etc/systemd/system/lightmem.service.service` → `systemctl enable --now lightmem.service` 找不到 unit，
+`install.sh --systemd` 以 `exit 1` 收场，而**服务其实没装**（极易误判成"systemd 不可用"）。
+
+- 现状：`deploy/platform.sh` 已按后缀归一（`*.service` 原样、否则补一次），接口签名未变。
+- 回归：`deploy/platform_test.sh` 含「带 `.service` 后缀不再重复拼接 / 不产生 `.service.service`」两条用例。
+- 自查：`ls /etc/systemd/system/ | grep '.service.service'` 必须为空。
+
+### 6. `EnvironmentFile` 里塞了多行 JSON，kernel 启动即崩（A 线待根修，已给规避件）
+
+`scripts` 侧签发的 `agent-tokens.json` 是约 40 行的**美化 JSON**；`install.sh --systemd` 用
+`printf 'LIMS_AGENT_TOKENS=%s\n' "$(cat ...)"` 原样写入 `lightmem.env`。systemd 的 `EnvironmentFile`
+**按行解析**，只保留首行 `{`，于是：
+
+```
+[boot] auth config: LIMS_AGENT_TOKENS: parse agent tokens json: unexpected end of JSON input
+lightmem.service: Main process exited, code=exited, status=1/FAILURE   （重试 5 次后 Start request repeated too quickly）
+```
+
+- 规避（可重复执行，实测 `891 bytes, 1 line`）：
+
+```sh
+sudo sh scripts/lm-env-compact.sh /opt/lightmem/_lightmem_run    # 或你的 RUN_DIR
+sudo systemctl restart lightmem.service lightmem-mcp.service
+```
+
+- 自查：`wc -l "$RUN_DIR/lightmem.env"` 必须是 `1`；`sudo systemctl show lightmem.service -p Environment | head -c 200` 应能看到完整 JSON。
+
+### 7. logrotate 在 Ubuntu/Debian 上被「父目录权限不安全」整条跳过（已修）
+
+Ubuntu 的 `/var/log` 是 `root:syslog 775`（属组可写），logrotate 没有 `su` 指令时**拒绝**操作该目录：
+
+```
+error: skipping "/var/log/lightmem.log" because parent directory has insecure permissions
+       (It's world writable or writable by group which is not "root")  Set "su" directive ...
+```
+
+`sudo logrotate -f /etc/logrotate.d/lightmem` 直接 `rc=1`，旧档根本不生成（日志继续涨，看起来像"轮转没配"）。
+
+- 现状：`deploy/logrotate.d/lightmem` 已在块内加 `su root root`（`-d`/`-f` 均 `rc=0`，`delaycompress` 两拍语义实测成立）。
+- 自查：`sudo logrotate -d /etc/logrotate.d/lightmem` 末尾不应出现 `skipping ... insecure permissions`。
+
+### 8. 装 `platform.sh` 前必须先建 `/usr/local/libexec/lightmem`（文档已修）
+
+`install -m 644 deploy/platform.sh /usr/local/libexec/lightmem/platform.sh` 在目录不存在时直接失败
+（`install: cannot create regular file ...: No such file or directory`）。看门狗脚本随后找不到 `platform.sh`，
+打印 `未找到 platform.sh（可用 LIGHTMEM_PLATFORM_SH 指定），启用内置兜底` ——
+`lm_service_restart` 的 Linux/FreeBSD 分支语义就此丢失（重启动作退化成内置实现，跨平台差异不再生效）。
+
+- 现状：本文档「安装（FreeBSD 真机）」「安装（Linux）」两段步骤均已补 `mkdir -p /usr/local/libexec/lightmem`。
+- 自查：`sh -c '. /usr/local/libexec/lightmem/platform.sh; lm_detect_os'` 应打印 `linux`/`freebsd`（rc 0）。
+
+### 9. 登记（不改）：systemd 部署下服务日志走 journald，logrotate 对真实日志是空转
+
+`deploy/lightmem.service` / `lightmem-mcp.service` 未配 `StandardOutput=`，日志默认进 journald
+（`journalctl -u lightmem.service` 可见 `[access]` 行）；`/var/log/lightmem*.log` 在 systemd 路径下**并不存在**，
+`deploy/logrotate.d/lightmem` 因 `missingok` 每晚静默跳过，真实日志由 journald 自行回收。
+
+- 两条可选口径（**择一，别都做**）：给 unit 加 `StandardOutput=append:/var/log/lightmem.log`
+  （让 logrotate 真正生效），或明确登记"journald 侧用 `SystemMaxUse` / `MaxRetentionSec` 治理"。
+- 本卡不改 unit 语义（红线），仅登记，待 A/C 线定夺。

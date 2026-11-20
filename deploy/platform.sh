@@ -122,6 +122,11 @@ lm_service_restart() {
 # lm_service_install <src> <name> —— 安装服务定义。
 #   linux  : <src> -> /etc/systemd/system/<name>.service（644），随后 daemon-reload
 #   freebsd: <src> -> /usr/local/etc/rc.d/<name>（555）
+#
+# <name> 兼容两种写法：带后缀（lightmem.service）与不带（lightmem）。
+# 调用方 integrations/quickstart/install.sh 传的是带后缀的完整 unit 名，
+# 早期实现无条件补 .service 会生成 lightmem.service.service（T-0417 真机验收实测），
+# 故此处按后缀归一，不改变接口签名与其它分支行为。
 lm_service_install() {
     if [ $# -lt 2 ] || [ -z "$1" ] || [ -z "$2" ]; then
         lm__err "用法: lm_service_install <src-file> <service-name>"
@@ -132,7 +137,10 @@ lm_service_install() {
     lm_si_os=$(lm_detect_os) || return $?
     case "$lm_si_os" in
         linux)
-            lm_si_dest="/etc/systemd/system/${lm_si_name}.service"
+            case "$lm_si_name" in
+                *.service) lm_si_dest="/etc/systemd/system/${lm_si_name}" ;;
+                *)         lm_si_dest="/etc/systemd/system/${lm_si_name}.service" ;;
+            esac
             lm_si_mode=644
             ;;
         freebsd)

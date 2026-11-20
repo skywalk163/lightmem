@@ -12,10 +12,16 @@
 # 日志路径口径由服务端决定（/var/log/lightmem.log、/var/log/lightmem-mcp.log），
 # 本文件只负责轮转，不改路径。
 #
+# su root root（T-0417 真机验收补）：Ubuntu/Debian 的 /var/log 是 root:syslog 775，
+#   属组可写 → logrotate 判定「parent directory has insecure permissions」并**直接跳过**
+#   （实测 `logrotate -f` rc=1，旧档根本不生成）。加 su 后以 root:root 身份执行轮转，
+#   与文件属主无关（root 始终能在 /var/log 里 rename/create）。
+#
 # 安装：sudo install -m 644 deploy/logrotate.d/lightmem /etc/logrotate.d/lightmem
 #      （等价：. deploy/platform.sh && lm_logrotate_install deploy/logrotate.d/lightmem）
 # 自检：sudo logrotate -d /etc/logrotate.d/lightmem
 /var/log/lightmem.log /var/log/lightmem-mcp.log {
+    su root root
     daily
     rotate 7
     compress

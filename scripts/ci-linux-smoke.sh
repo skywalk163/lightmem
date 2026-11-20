@@ -46,13 +46,20 @@ dump() {
 printf 'lightmem Linux 部署冒烟（%s）\n' "$ROOT"
 
 # ---------------------------------------------------------------- 1) sh -n
-section "1/7 部署脚本 POSIX 语法（sh -n）"
+section "1/7 部署脚本 POSIX 语法（sh -n / bash -n）"
+# 按 shebang 选解释器：scripts/ 下混有 bash 脚本（如 p0_verify.sh 用数组），
+# 一律 `sh -n` 会让门禁在真 Linux(dash) 上**误报 FAIL**（T-0417 真机实测）。
 for f in integrations/quickstart/install.sh deploy/*.sh scripts/*.sh; do
     [ -f "$f" ] || continue
-    if out=$(sh -n "$f" 2>&1); then
-        pass "sh -n $f"
+    if head -n 1 "$f" 2>/dev/null | grep -q 'bash'; then
+        syn_cmd="bash -n"
     else
-        fail "sh -n $f"
+        syn_cmd="sh -n"
+    fi
+    if out=$($syn_cmd "$f" 2>&1); then
+        pass "$syn_cmd $f"
+    else
+        fail "$syn_cmd $f"
         dump "$out"
     fi
 done

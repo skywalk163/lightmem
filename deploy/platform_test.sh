@@ -51,6 +51,13 @@ expect_has() {  # <desc> <needle> <haystack>
     esac
 }
 
+expect_not_has() {  # <desc> <needle> <haystack>
+    case "$3" in
+        *"$2"*) bad "$1（输出不应包含 [$2]：[$3]）" ;;
+        *) ok "$1" ;;
+    esac
+}
+
 # 在子 shell 里设环境再调函数：互不污染，也保证 LM_FAKE_OS 只对本次调用生效。
 out_fake() {  # <os> <fn> [args...]
     t_fake_os=$1
@@ -128,6 +135,12 @@ t_out=$(out_dry freebsd lm_service_install /tmp/lm-rc lightmem)
 expect_has "freebsd rc.d 目标 /usr/local/etc/rc.d/lightmem" \
     "/usr/local/etc/rc.d/lightmem" "$t_out"
 expect_has "freebsd rc.d 权限 555" "install -m 555" "$t_out"
+# T-0417：install.sh 传的是带后缀的完整 unit 名，不得再补一次 .service
+t_out=$(out_dry linux lm_service_install /tmp/lm-unit lightmem.service)
+expect_has "带 .service 后缀不再重复拼接" \
+    "/etc/systemd/system/lightmem.service" "$t_out"
+expect_not_has "带 .service 后缀不产生 .service.service" \
+    ".service.service" "$t_out"
 t_out=$(out_dry linux lm_service_install 2>/dev/null)
 t_rc=$?
 expect_rc "缺参数拒绝（rc=2）" 2 "$t_rc"
