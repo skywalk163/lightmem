@@ -357,12 +357,18 @@ $ （修复：按 shebang 分派 bash -n / sh -n）重跑
 - 修法（`deploy/platform.sh`）：按后缀归一（`*.service` 原样、否则补一次），**接口签名不变**；`deploy/platform_test.sh` 增补 2 条回归用例（带后缀 → 目标正确、且不产生 `.service.service`）。
 - 验证：`sh deploy/platform_test.sh` → **37 passed, 0 failed**（exit 0）；重装后双 unit `enabled/active`。
 
-### 5.2 【本卡给规避件，修复归 A 线 install.sh】EnvironmentFile 写了多行 JSON
+### 5.2 【T-0417 给规避件 → T-0424 已根修】EnvironmentFile 写了多行 JSON
 
 - 现象：kernel 启动即 `[boot] auth config: LIMS_AGENT_TOKENS: parse agent tokens json: unexpected end of JSON input` → `status=1/FAILURE`，重试 5 次后 `Start request repeated too quickly`。
 - 根因：`issue_token.py` 产出的 `agent-tokens.json` 是约 42 行**美化 JSON**；`install.sh` 用 `printf 'LIMS_AGENT_TOKENS=%s\n' "$(cat ...)"` 原样写入 `EnvironmentFile`（按行解析，只保留首行 `{`）。
-- 修法：本卡新增 `scripts/lm-env-compact.sh`（`json.dumps(separators=...)` 压成单行 + `chmod 600` + 自检行数），实测 `891 bytes, 1 line`（exit 0）。
-- **建议 A 线根修**：`install.sh` 写 env 前压平 JSON（或让 `issue_token.py` 直接吐单行），并在 `deploy/README.md` 已知坑登记（已登记，见 §6）。
+- 修法（T-0417）：新增 `scripts/lm-env-compact.sh`（`json.dumps(separators=...)` 压成单行 + `chmod 600` + 自检行数），实测 `891 bytes, 1 line`（exit 0）。
+- **根修（T-0424，2026-11-21）**：`install.sh` 写 `$RUN_DIR/lightmem.env` 前先压平，规避件不再是必经步骤：
+  - 仓库完整 → 调用 `scripts/lm-env-compact.sh`（同一份口径，避免两处实现漂移）；只有 `integrations/` 子集 → 内联 `python3 json.dumps(ensure_ascii=False, separators=(',',':'))`；
+  - `python3` 缺失 → 明确 `exit 1`（不再写出一份 systemd 只认首行、kernel 必崩的 env）；
+  - 写完自检：**恰好 1 行** + 前缀 `LIMS_AGENT_TOKENS=` + 解析回来与源 JSON 等价 + 600，任一不满足即失败；
+  - `agent-tokens.json` 一个字节未改（`--systemd` 分支只改「怎么塞进 EnvironmentFile」）。
+  - 回归：`bash integrations/quickstart/envfile_test.sh`（主路径 / 退化路径 / 旧写法反跑变红 / python3 缺失反跑），验证记录见 §5.2.1。
+
 
 ### 5.3 【已在本卡修】logrotate 在 Ubuntu 上被"父目录权限不安全"整条跳过（C 线配置缺口）
 
@@ -412,7 +418,7 @@ $ （修复：按 shebang 分派 bash -n / sh -n）重跑
 ### 6.1 deploy/README.md 已知坑登记（本轮新增）
 
 1. `lm_service_install` 传入带 `.service` 后缀的 name（A 线 install.sh 的写法）→ T0 归一，否则装成 `.service.service`；
-2. `EnvironmentFile` 必须单行 JSON，用 `scripts/lm-env-compact.sh` 压平；
+2. `EnvironmentFile` 必须单行 JSON —— `install.sh` 已在写入前自行压平（T-0424 根修），`scripts/lm-env-compact.sh` 保留作事后修复；
 3. Ubuntu/Debian `logrotate` 需 `su root root`，否则 `/var/log` 属组可写会被整条跳过；
 4. 装 `platform.sh` 前先 `mkdir -p /usr/local/libexec/lightmem`。
 
@@ -422,7 +428,7 @@ $ （修复：按 shebang 分派 bash -n / sh -n）重跑
 
 | # | 事项 | 归属 | 优先级 |
 |---|---|---|---|
-| 1 | `install.sh --systemd` 写 env 前压平 JSON（去掉对 `scripts/lm-env-compact.sh` 的人工依赖） | A（T-0411） | P1 |
+| 1 | ~~`install.sh --systemd` 写 env 前压平 JSON（去掉对 `scripts/lm-env-compact.sh` 的人工依赖）~~ **已根修（T-0424，2026-11-21）** | A（T-0411 → T-0424） | P1 |
 | 2 | quickstart + systemd 混跑时 `RUN_DIR` 由 root 重建，二进制定为 root 属主；建议装完把 `_lightmem_run` chown 给 `--service-user` | A（T-0411） | P2 |
 | 3 | systemd 路径下日志去向（journald vs 文件）与 logrotate 口径二选一 | A/C | P2 |
 | 4 | `.gitattributes` 给 `deploy/logrotate.d/*`、`deploy/*.sh` 加 `eol=lf`，防 Windows 侧 CRLF 回流（本轮自测时本地写入一度带 CRLF，导致 logrotate 解析失败，已本地纠正、未入库） | 仓库级 | P3 |
