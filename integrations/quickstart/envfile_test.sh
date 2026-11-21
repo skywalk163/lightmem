@@ -242,7 +242,11 @@ esac
 STUB
 cat > "$OB/chown" <<'STUB'
 #!/bin/sh
+# 记账 + 顺序断言：chown 之前 data/logs 必须已经存在（否则 chown 后 mkdir 会造出 root:root 目录）
 printf '%s\n' "$*" >> "${LM_CHOWN_LOG:?LM_CHOWN_LOG 未设置}"
+eval "_dir=\${$#}"
+[ -d "$_dir/data" ] || printf '%s\n' "MISSING-data-before-chown" >> "${LM_CHOWN_LOG}"
+[ -d "$_dir/logs" ] || printf '%s\n' "MISSING-logs-before-chown" >> "${LM_CHOWN_LOG}"
 STUB
 chmod 755 "$OB/id" "$OB/chown"
 perm_of() { python3 -c 'import os,stat,sys; print(oct(stat.S_IMODE(os.stat(sys.argv[1]).st_mode))[2:])' "$1"; }
@@ -258,6 +262,9 @@ if PATH="$OB:$PATH" LM_FAKE_UID=0 LM_FAKE_USER=root LM_CHOWN_LOG="$CLOG_A" \
 else
     fail "root 模拟：--own-run-dir 非 0 退出"
     dump_log "$OWNROOT/log-a"
+fi
+if grep -q 'MISSING-' "$CLOG_A"; then
+    fail "chown 之前 data/logs 还没建好（顺序反了会造出 root:root 目录）：$(grep 'MISSING-' "$CLOG_A")"
 fi
 if grep -qF -- "-R tester:tester $RA" "$CLOG_A"; then
     pass "root 模拟：确实调用了 chown -R tester:tester <RUN_DIR>（目标与 --service-user 一致）"
@@ -298,7 +305,7 @@ for _bad in /tmp /; do
             "$SH_BIN" "$INSTALL" --own-run-dir "$_bad" --service-user tester >"$OWNROOT/log-c" 2>&1; then
         fail "反跑 C：目标 $_bad 竟然被接受（红线：允许前缀校验失效）"
     else
-        pass "反跑 C：目标 $_bad 被拒绝（$(sed -n '1p' "$OWNROOT/log-c" | cut -c1-70)）"
+        pass "反跑 C：目标 $_bad 被拒绝（$(grep -m1 '拒绝' "$OWNROOT/log-c" | cut -c1-70)）"
     fi
     if [ -s "$CLOG_C" ]; then
         fail "反跑 C：目标 $_bad 被拒绝前仍发了 chown（$(cat "$CLOG_C" | tr '\n' '|')）"

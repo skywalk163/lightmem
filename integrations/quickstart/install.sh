@@ -183,9 +183,12 @@ lm_own_run_dir() {
     [ -d "$_lm_dir" ] || die "属主归一：$_lm_dir 不是目录"
     id -u "$_lm_user" >/dev/null 2>&1 || die "属主归一：用户 $_lm_user 不存在（--service-user 写错了吗？）"
 
-    chown -R "$_lm_user":"$_lm_user" "$_lm_dir"
+    # 先把目录建齐，再 chown —— 顺序反了会在 chown 之后又造出 root:root 的 data/logs（0.86 真机踩到）
     for _d in data logs; do
         mkdir -p "$_lm_dir/$_d"
+    done
+    chown -R "$_lm_user":"$_lm_user" "$_lm_dir"
+    for _d in data logs; do
         chmod 750 "$_lm_dir/$_d"
     done
     chmod 750 "$_lm_dir"
