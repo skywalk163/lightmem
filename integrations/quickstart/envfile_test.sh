@@ -190,10 +190,10 @@ if [ "$OLD_ENV_LINES" -gt 1 ]; then
 else
     fail "反跑样本没有复现多行（env 只有 $OLD_ENV_LINES 行，判据将失去意义）"
 fi
-if check_env "$OLD/lightmem.env" "$OLD/agent-tokens.json"; then
+if check_env "$OLD/lightmem.env" "$OLD/agent-tokens.json" >"$TMP/old_check.out" 2>"$TMP/old_check.err"; then
     fail "反跑没变红：多行 env 竟然被判合格（判据是空的）"
 else
-    pass "反跑 A 如期变红：同一套判据拒绝多行 env"
+    pass "反跑 A 如期变红：同一套判据拒绝多行 env（$(sed -n '1p' "$TMP/old_check.err")）"
 fi
 
 # ---------------------------------------------------------------- 4) 反跑 B：python3 不可用 → 明确失败、不落盘
