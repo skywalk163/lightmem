@@ -10,6 +10,9 @@
 #   GATE_STRICT_FMT=0 sh scripts/gate.sh  # 应急回退：[1b] 回到观测期 INFO
 #   sh scripts/gate.sh -n           # 跳过 [5] -race（调试期加速，记 SKIP）
 #   sh scripts/gate.sh -q           # 只在 FAIL / SKIP 时打印（调试期）
+#   GOPROXY=https://goproxy.cn,direct sh scripts/gate.sh
+#                                   # 墙内/离线：go 模块拉不下来时的重试方式
+#                                   # （gate.sh 不改默认 GOPROXY，只在失败时提示）
 #
 # 设计要点：
 #   1. 双 module 各跑一遍：本仓库根 module 是 `lightmem`，
@@ -109,6 +112,25 @@ record() {
     DETAILS="${DETAILS}
 ----- ${1} -----
 ${2}"
+}
+
+# ---------------------------------------------------------------------------
+# T-0436：Go 模块下载失败的「假红」提示。
+#
+# 背景：本机连不上 proxy.golang.org 时，go vet / build / test 的输出形如
+#   `... Get "https://proxy.golang.org/...": i/o timeout`
+#   `FAIL github.com/lightmem/kernel [setup failed]`
+# 这与真回归的 FAIL 长得一模一样，容易被误判成「这批改动引入了回归」。
+# 做法：只在 go 步骤失败且输出命中下载失败特征时置位，汇总前多打一条可操作提示；
+# 正常路径一个字都不多打。**不改 go 步骤的判定、不硬编码 GOPROXY**——
+# 否则真回归会变绿、CI 默认行为也会漂移。
+# ---------------------------------------------------------------------------
+GO_NET_HINT=0
+go_net_hint_check() {
+    printf '%s' "$1" | grep -qE \
+        'i/o timeout|proxy\.golang\.org|dial tcp|\[setup failed\]' \
+        && GO_NET_HINT=1
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -235,6 +257,7 @@ VET_NOTE=""
 for m in $MODS; do
     if ! OUT="$(cd "$ROOT/$m" && go vet ./... 2>&1)"; then
         VET_FAIL=$((VET_FAIL + 1))
+        go_net_hint_check "$OUT"
         record "go vet ($m)" "$OUT"
         VET_NOTE="$VET_NOTE $m"
     fi
@@ -255,6 +278,7 @@ BUILD_NOTE=""
 for m in $MODS; do
     if ! OUT="$(cd "$ROOT/$m" && go build ./... 2>&1)"; then
         BUILD_FAIL=$((BUILD_FAIL + 1))
+        go_net_hint_check "$OUT"
         record "go build ($m)" "$OUT"
         BUILD_NOTE="$BUILD_NOTE $m"
     fi
@@ -278,6 +302,7 @@ for m in $MODS; do
     RC=$?
     if [ $RC -ne 0 ]; then
         TEST_FAIL=$((TEST_FAIL + 1))
+        go_net_hint_check "$OUT"
         record "go test -count=1 ($m)" "$OUT"
         TEST_NOTE="$TEST_NOTE $m"
     elif printf '%s' "$OUT" | grep -q '(cached)'; then
@@ -320,6 +345,7 @@ else
         record 'go test -race (kernel) [SKIP]' "$RACE_OUT"
     elif [ $RACE_RC -ne 0 ]; then
         row '[5] go test -count=1 -race (kernel)' FAIL '存在竞态或失败'
+        go_net_hint_check "$RACE_OUT"
         record 'go test -race (kernel)' "$RACE_OUT"
         FAIL=$((FAIL + 1))
     else
@@ -479,6 +505,7 @@ else
     INJ_RC=$?
     if [ $INJ_RC -ne 0 ]; then
         row '[8] 投毒检测' FAIL 'poison_detect_test.go 未全 PASS'
+        go_net_hint_check "$INJ_OUT"
         record 'poison_detect_test' "$INJ_OUT"
         INJ_FAIL=1
         FAIL=$((FAIL + 1))
@@ -569,6 +596,7 @@ else
     PIPE_RC=$?
     if [ $PIPE_RC -ne 0 ]; then
         row '[10] 接线默认关' FAIL 'drift_pipeline / flush_pipeline 测试未全 PASS'
+        go_net_hint_check "$PIPE_OUT"
         record 'pipeline test' "$PIPE_OUT"
         PIPE_FAIL=1
         FAIL=$((FAIL + 1))
@@ -666,6 +694,12 @@ fi
 # ---------------------------------------------------------------------------
 # 汇总
 # ---------------------------------------------------------------------------
+# 只在 go 步骤失败且命中下载失败特征时提示（正常网络下不打印）。
+if [ $GO_NET_HINT -eq 1 ]; then
+    printf '\n！ 检测到 Go 模块下载超时：这是网络/代理问题，不是代码问题。\n'
+    printf '   墙内或离线环境请重试：GOPROXY=https://goproxy.cn,direct sh scripts/gate.sh\n'
+    printf '   （看到 [setup failed] 先怀疑网络，别先怀疑这批改动）\n'
+fi
 printf '\n========== R15 门禁矩阵 ==========\n'
 printf 'PASS: %-4d  FAIL: %-4d  SKIP: %-3d  模块数: %s\n' \
     "$PASS" "$FAIL" "$SKIP" "$MOD_COUNT"

@@ -125,6 +125,10 @@ sh integrations/quickstart/install.sh
 ## 开发约定（如果你要改这个仓库）
 
 - **门禁**：`sh scripts/gate.sh`（版本/gofmt/vet/build/test/race/覆盖/红线白名单/PG 真机）。
+- **墙内/离线要配 `GOPROXY`**：拉不到 `proxy.golang.org` 时 go 步骤会报
+  `i/o timeout` / `FAIL ... [setup failed]`，与真回归同形，**先怀疑网络**。
+  重试：`GOPROXY=https://goproxy.cn,direct sh scripts/gate.sh`
+  （`gate.sh` 不改默认 GOPROXY，只在命中下载失败特征时于汇总前提示）。
 - **两个 module 事实（跑门禁前必读）**：本仓库有**两个** Go module——根 module `lightmem`
   （`eval/` 等）和 `kernel/`（`github.com/lightmem/kernel`）。根 `go.mod` 里的
   `require github.com/lightmem/kernel v0.0.0` 是永远拉不到的占位版本，靠

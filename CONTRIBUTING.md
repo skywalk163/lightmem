@@ -55,6 +55,17 @@ sh scripts/smoke.sh                  # 一键冒烟，比单测轻
 - `sh scripts/gate.sh` 是统一门禁（版本 / gofmt / vet / build / test / race /
   覆盖 / 红线白名单 / PG 真机），判据见 README「R16 门禁矩阵」。
   未配置 PG 时 [11] 必须**显式 SKIP**，绝不静默当 PASS。
+- **墙内/离线：先配 `GOPROXY` 再跑门禁**。连不上 `proxy.golang.org` 时，go 步骤会
+  报 `Get "https://proxy.golang.org/...": i/o timeout` 与 `FAIL ... [setup failed]`，
+  看着和真回归一模一样。重试方式：
+
+  ```bash
+  GOPROXY=https://goproxy.cn,direct sh scripts/gate.sh
+  ```
+
+  看到 `[setup failed]` **先怀疑网络/代理**，别先怀疑这批改动。
+  `gate.sh` 自己不改默认 `GOPROXY`（避免 CI 行为漂移），只在命中下载失败特征时
+  在汇总前多打一条提示。
 
 > 如实说明：上面两条命令的依据是 `.github/workflows/ci.yml`、README「运行测试」
 > 与脚本自身注释，**并未在贡献者本机实跑验证**——本机没有 Go 工具链，
