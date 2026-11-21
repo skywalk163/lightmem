@@ -29,6 +29,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -96,6 +97,27 @@ func RunBootReport(ctx context.Context, backend StorageBackend, dataDir string) 
 	return rep, nil
 }
 
+// 业主裁定（2026-10-21，选项三）：B2 启动自检对 PG 档**默认强制**（安全底线，
+// 不是可选项），同时保留**显式逃生开关** `LIMS_BOOT_SELFCHECK` 供演练/迁移场景
+// 临时绕过。这样既守住「不得带病上线」，又让运维在受控窗口内有退路。
+//
+// 语义（不静默）：
+//   - 未设置 / 空 / 无法识别 → **enabled（强制自检）**，安全默认；
+//   - "0"/"off"/"false"/"disable"/"disabled"/"skip" → 跳过自检，**每次都打日志**；
+//   - 其余任何值 → enabled（宁可严格，不猜意图）。
+//
+// 与红线④的关系：红线④要求「未设新开关时与基线逐字节一致」。本自检自 R29 起
+// 就是 PG 档默认行为（L-261 记录的口径冲突），本开关只**新增**一股绕过能力，
+// 不放宽默认路径，因此默认态行为不变。
+func bootSelfCheckEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("LIMS_BOOT_SELFCHECK"))) {
+	case "0", "off", "false", "disable", "disabled", "skip":
+		return false
+	default:
+		return true
+	}
+}
+
 // runBootSchemaCheck 按后端类型执行表/列/条数/恢复点检查。
 // 返回非 nil error = fail-fast（B2：缺表或缺列不得带病上线）。
 func runBootSchemaCheck(ctx context.Context, backend StorageBackend, rep *BootReport) error {
@@ -107,6 +129,14 @@ func runBootSchemaCheck(ctx context.Context, backend StorageBackend, rep *BootRe
 		return sqliteBootCheck(ctx, b, rep)
 	case *pgBackend:
 		if b == nil || b.db == nil {
+			return nil
+		}
+		// L-261 逃生开关（仅 PG 档；sqlite 档是自建表，无此冲突）。
+		if !bootSelfCheckEnabled() {
+			log.Printf("[boot] WARN: LIMS_BOOT_SELFCHECK 已显式关闭 —— " +
+				"跳过 PG 表/列自检；schema 不匹配时服务会“起来了但全 500”，仅用于演练/迁移窗口")
+			rep.Table = "skipped(env)"
+			rep.Columns = "skipped(env)"
 			return nil
 		}
 		return pgBootCheck(ctx, b, rep)

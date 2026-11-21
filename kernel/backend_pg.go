@@ -14,6 +14,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"time"
@@ -87,11 +88,19 @@ func newPgBackend(ctx context.Context, cfg *StorageConfig) (StorageBackend, erro
 	// 只读 information_schema / to_regclass；缺表或缺列 → fail-fast
 	// （未应用 migrations 的库「起来了但全 500」的根治，G3）。
 	// 该自检同时是 bootreport.go 的 PG 分支复用点（同一实现，两条入口）。
-	if err := pgBootCheck(ctx, &pgBackend{
-		db: db, conf: cfg.PG, dim: dim, table: "memories",
-	}, &BootReport{}); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("pg startup self-check: %w", err)
+	// L-261 裁定（2026-10-21，选项三）：默认强制；`LIMS_BOOT_SELFCHECK` 可显式绕过。
+	// **两条入口必须共用同一判定**，否则「关得掉一条、关不掉另一条」——
+	// 运维会以为关闭了自检，实际启动时仍被阻断。
+	if bootSelfCheckEnabled() {
+		if err := pgBootCheck(ctx, &pgBackend{
+			db: db, conf: cfg.PG, dim: dim, table: "memories",
+		}, &BootReport{}); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("pg startup self-check: %w", err)
+		}
+	} else {
+		log.Printf("[boot] WARN: LIMS_BOOT_SELFCHECK 已显式关闭 —— " +
+			"跳过 pg 启动自检；schema 不匹配时服务会“起来了但全 500”，仅用于演练/迁移窗口")
 	}
 
 	return &pgBackend{db: db, conf: cfg.PG, dim: dim, table: "memories"}, nil
@@ -175,7 +184,7 @@ func (b *pgBackend) Upsert(ctx context.Context, m *Memory) error {
 		-- 导致 UpdateGoalProgress/SetGoalState/Upsert 既有记忆（如 feedback 回写）
 		-- 时 **goal_detail / layer / provenance 等列根本不落库**：
 		-- 0.88 实测 progress=0.5 返回 200 但 DB 里 goal_detail->>'progress' 为空。
-		-- 这些列语义均为「就地更新同一 memory_id」，不违反只增不改（§4.1）。
+		-- 这些列语义均为“就地更新同一 memory_id”，不违反只增不改（§4.1）。
 		goal_detail = EXCLUDED.goal_detail,
 		layer = EXCLUDED.layer,
 		provenance = EXCLUDED.provenance,
