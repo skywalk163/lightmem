@@ -371,9 +371,9 @@ sudo sysrc lightmem_profile="/usr/local/lightmem/profiles/lims-solo-abs.profile.
 - 回归：`deploy/platform_test.sh` 含「带 `.service` 后缀不再重复拼接 / 不产生 `.service.service`」两条用例。
 - 自查：`ls /etc/systemd/system/ | grep '.service.service'` 必须为空。
 
-### 6. `EnvironmentFile` 里塞了多行 JSON，kernel 启动即崩（A 线待根修，已给规避件）
+### 6. `EnvironmentFile` 里塞了多行 JSON，kernel 启动即崩（T-0424 已根修，规避件保留为事后修）
 
-`scripts` 侧签发的 `agent-tokens.json` 是约 40 行的**美化 JSON**；`install.sh --systemd` 用
+`issue_token.py` 签发的 `agent-tokens.json` 是约 40 行的**美化 JSON**；旧版 `install.sh --systemd` 用
 `printf 'LIMS_AGENT_TOKENS=%s\n' "$(cat ...)"` 原样写入 `lightmem.env`。systemd 的 `EnvironmentFile`
 **按行解析**，只保留首行 `{`，于是：
 
@@ -382,14 +382,20 @@ sudo sysrc lightmem_profile="/usr/local/lightmem/profiles/lims-solo-abs.profile.
 lightmem.service: Main process exited, code=exited, status=1/FAILURE   （重试 5 次后 Start request repeated too quickly）
 ```
 
-- 规避（可重复执行，实测 `891 bytes, 1 line`）：
+- 现状（**装之前不用再手工跑规避件**）：`install.sh` 写 `$RUN_DIR/lightmem.env` 前会先压成**单行** JSON
+  （仓库完整时调 `scripts/lm-env-compact.sh`；只有 integrations/ 子集时内联 `python3 json.dumps`），
+  写完自检「恰好 1 行 + 前缀 + 解析回来与源 JSON 等价 + 600」，任何一条不满足即 `exit 1`；
+  `python3` 缺失时明确失败，不会静默写出会崩的 env。`agent-tokens.json` 本身不被改动。
+- 事后修复 / 换 token 后重压（可重复执行，实测 `891 bytes, 1 line`）：
 
 ```sh
 sudo sh scripts/lm-env-compact.sh /opt/lightmem/_lightmem_run    # 或你的 RUN_DIR
 sudo systemctl restart lightmem.service lightmem-mcp.service
 ```
 
-- 自查：`wc -l "$RUN_DIR/lightmem.env"` 必须是 `1`；`sudo systemctl show lightmem.service -p Environment | head -c 200` 应能看到完整 JSON。
+- 自查：`wc -l "$RUN_DIR/lightmem.env"` 必须是 `1`（而不是 40+）；`sudo systemctl show lightmem.service -p Environment | head -c 200` 应能看到完整 JSON。
+- 回归：`bash integrations/quickstart/envfile_test.sh`（含「旧写法必须变红」与「python3 缺失必须失败」两组反跑）。
+
 
 ### 7. logrotate 在 Ubuntu/Debian 上被「父目录权限不安全」整条跳过（已修）
 

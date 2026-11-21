@@ -49,6 +49,7 @@ UNINSTALL_SYSTEMD=0
 SERVICE_USER=""
 DRY=0
 AGENTS=""
+WRITE_ENV_DIR=""   # 内部钩子（见 lm_write_token_env 注释），供 envfile_test.sh 调用
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -64,6 +65,9 @@ while [ $# -gt 0 ]; do
         --uninstall-systemd) UNINSTALL_SYSTEMD=1; shift ;;
         --service-user) SERVICE_USER="$2"; shift 2 ;;
         --dry-run)  DRY=1; shift ;;
+        # 内部钩子：只走「压平 JSON → 写 EnvironmentFile」这一段后退出（不编译/不装服务）。
+        # 现成调用者：integrations/quickstart/envfile_test.sh；不是给用户的手动参数。
+        --write-token-env) WRITE_ENV_DIR="$2"; shift 2 ;;
         -h|--help)  sed -n '2,40p' "$0"; exit 0 ;;
         *) echo "未知参数：$1（-h 看用法）" >&2; exit 2 ;;
     esac
@@ -79,6 +83,84 @@ ok()   { printf '    \033[1;32m✓\033[0m %s\n' "$*"; }
 warn() { printf '    \033[1;33m!\033[0m %s\n' "$*"; }
 die()  { printf '\n\033[1;31m[x] %s\033[0m\n' "$*" >&2; exit 1; }
 run()  { if [ "$DRY" -eq 1 ]; then printf '    [dry-run] %s\n' "$*"; else eval "$@"; fi; }
+
+# ---------------------------------------------------------------- 凭据写入 EnvironmentFile（必须单行）
+# 为什么：systemd 的 EnvironmentFile **按行解析**。agent-tokens.json 是约 42 行美化 JSON，
+# 原样写进去只会保留首行 `{`，kernel 一启动就 Fatal：
+#   [boot] auth config: LIMS_AGENT_TOKENS: parse agent tokens json: unexpected end of JSON input
+#   → status=1/FAILURE → 连着重启 5 次 → Start request repeated too quickly
+# 做法（T-0424 根修 T-0417 TODO#1）：
+#   - 仓库完整 → 直接调用 scripts/lm-env-compact.sh（同一份已发布口径，避免两处实现漂移）；
+#   - 只拿到 integrations/ 子集（scripts/ 不可达）→ 内联 python3 json.dumps 压平；
+#   - python3 缺失 → **明确失败**（绝不静默写出一份会崩的 env）；
+#   - 写完自检：恰好 1 行、前缀对、解析回来与源 JSON 等价、权限 600。
+# 只改「怎么塞进 EnvironmentFile」：agent-tokens.json 一个字节都不动（不增删字段、不改大小写）。
+lm_write_token_env() {
+    _lm_run_dir=$1
+    _lm_tokens="$_lm_run_dir/agent-tokens.json"
+    _lm_envf="$_lm_run_dir/lightmem.env"
+    [ -f "$_lm_tokens" ] || die "env 写入：缺少 token 文件 $_lm_tokens"
+
+    if ! command -v python3 >/dev/null 2>&1; then
+        die "env 写入需要 python3（把多行 JSON 压成单行）：$_lm_envf 未生成。
+      没有 python3 就会写出一份 systemd 只认首行、kernel 启动即 Fatal 的 env，故此处直接失败。
+      装好 python3（Debian/Ubuntu: apt install -y python3；FreeBSD: pkg install -y python3）后重跑本脚本；
+      或事后手工修：sudo sh $ROOT/scripts/lm-env-compact.sh $_lm_run_dir && sudo systemctl restart lightmem.service"
+    fi
+
+    _lm_compact="$ROOT/scripts/lm-env-compact.sh"
+    if [ -f "$_lm_compact" ]; then
+        ( umask 077; sh "$_lm_compact" "$_lm_run_dir" ) >/dev/null \
+            || die "env 写入失败：scripts/lm-env-compact.sh $_lm_run_dir 返回非 0（原因见上方 stderr）"
+    else
+        # 退化：只拿到 integrations/ 子集时 scripts/ 不可达；内联同一口径（ensure_ascii=False + 紧凑分隔符）
+        ( umask 077
+          python3 - "$_lm_tokens" "$_lm_envf" <<'PY'
+import json, os, sys
+
+tokens_path, env_path = sys.argv[1], sys.argv[2]
+with open(tokens_path, encoding='utf-8') as f:
+    data = json.load(f)
+line = 'LIMS_AGENT_TOKENS=' + json.dumps(data, ensure_ascii=False, separators=(',', ':'))
+with open(env_path, 'w', encoding='utf-8') as f:
+    f.write(line + '\n')
+os.chmod(env_path, 0o600)
+PY
+        ) || die "env 写入失败：内联 python3 压平 $_lm_tokens 返回非 0"
+    fi
+
+    chmod 600 "$_lm_envf" 2>/dev/null || true
+    # 自检：行数 / 前缀 / JSON 等价 / 权限。任何一条不满足都算写入失败（不 break 后续步骤）。
+    python3 - "$_lm_tokens" "$_lm_envf" <<'PY' || die "env 自检失败：$_lm_envf 不是「单行且与 agent-tokens.json 等价」的 EnvironmentFile"
+import json, os, stat, sys
+
+tokens_path, env_path = sys.argv[1], sys.argv[2]
+with open(tokens_path, encoding='utf-8') as f:
+    want = json.load(f)
+with open(env_path, encoding='utf-8') as f:
+    raw = f.read()
+prefix = 'LIMS_AGENT_TOKENS='
+if raw.count('\n') != 1 or not raw.endswith('\n'):
+    sys.exit('行数=%d（期望恰好 1 行 + 结尾换行）' % raw.count('\n'))
+line = raw[:-1]
+if not line.startswith(prefix):
+    sys.exit('首行不是 %s 开头：%.40s' % (prefix, line))
+got = json.loads(line[len(prefix):])
+if got != want:
+    sys.exit('env 里的 token 与 %s 不等价（字段/大小写/值不一致）' % tokens_path)
+mode = stat.S_IMODE(os.stat(env_path).st_mode)
+if mode != 0o600:
+    sys.exit('权限=%o（期望 600）' % mode)
+print('OK: %s 单行 %d bytes, json 等价, 600' % (env_path, len(raw)))
+PY
+}
+
+# 内部钩子（调用者 integrations/quickstart/envfile_test.sh）：只跑 env 写入路径，然后退出
+if [ -n "$WRITE_ENV_DIR" ]; then
+    mkdir -p "$WRITE_ENV_DIR"
+    lm_write_token_env "$WRITE_ENV_DIR"
+    exit 0
+fi
 
 RUN_DIR="$ROOT/_lightmem_run"
 KBIN="$RUN_DIR/lightmem-kernel"
@@ -445,14 +527,17 @@ EOF
             fi
             ok "已渲染 unit -> $UNIT_KERNEL $( [ "$RUN_MCP" -eq 1 ] && echo "/ $UNIT_MCP" )"
             # 凭据只进 EnvironmentFile（600），不进 unit 本体
+            # 必须压成**单行** JSON：EnvironmentFile 按行解析，多行只有首行 `{` 进 kernel（T-0424）
             if [ -f "$TOKENS" ]; then
-                ( umask 077; printf 'LIMS_AGENT_TOKENS=%s\n' "$(cat "$TOKENS")" > "$ENV_FILE" )
-                chmod 600 "$ENV_FILE"
-                ok "凭据写入 $ENV_FILE（600）"
+                lm_write_token_env "$RUN_DIR"
+                ok "凭据写入 $ENV_FILE（600，单行 JSON）"
             else
                 warn "没有 $TOKENS：unit 将以透传态运行（无鉴权）"
             fi
+        else
+            printf '    [dry-run] 压平 %s → %s（单行 JSON，600）\n' "$TOKENS" "$ENV_FILE"
         fi
+
 
         # 撤掉第 5 步用 nohup 起的裸进程：否则 systemd 启动时 bind 冲突 → 服务"看起来起来了"其实 401
         for pf in "$PID_REST" "$PID_MCP"; do

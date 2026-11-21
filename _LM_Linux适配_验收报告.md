@@ -357,12 +357,43 @@ $ （修复：按 shebang 分派 bash -n / sh -n）重跑
 - 修法（`deploy/platform.sh`）：按后缀归一（`*.service` 原样、否则补一次），**接口签名不变**；`deploy/platform_test.sh` 增补 2 条回归用例（带后缀 → 目标正确、且不产生 `.service.service`）。
 - 验证：`sh deploy/platform_test.sh` → **37 passed, 0 failed**（exit 0）；重装后双 unit `enabled/active`。
 
-### 5.2 【本卡给规避件，修复归 A 线 install.sh】EnvironmentFile 写了多行 JSON
+### 5.2 【T-0417 给规避件 → T-0424 已根修】EnvironmentFile 写了多行 JSON
 
 - 现象：kernel 启动即 `[boot] auth config: LIMS_AGENT_TOKENS: parse agent tokens json: unexpected end of JSON input` → `status=1/FAILURE`，重试 5 次后 `Start request repeated too quickly`。
 - 根因：`issue_token.py` 产出的 `agent-tokens.json` 是约 42 行**美化 JSON**；`install.sh` 用 `printf 'LIMS_AGENT_TOKENS=%s\n' "$(cat ...)"` 原样写入 `EnvironmentFile`（按行解析，只保留首行 `{`）。
-- 修法：本卡新增 `scripts/lm-env-compact.sh`（`json.dumps(separators=...)` 压成单行 + `chmod 600` + 自检行数），实测 `891 bytes, 1 line`（exit 0）。
-- **建议 A 线根修**：`install.sh` 写 env 前压平 JSON（或让 `issue_token.py` 直接吐单行），并在 `deploy/README.md` 已知坑登记（已登记，见 §6）。
+- 修法（T-0417）：新增 `scripts/lm-env-compact.sh`（`json.dumps(separators=...)` 压成单行 + `chmod 600` + 自检行数），实测 `891 bytes, 1 line`（exit 0）。
+- **根修（T-0424，2026-11-21）**：`install.sh` 写 `$RUN_DIR/lightmem.env` 前先压平，规避件不再是必经步骤：
+  - 仓库完整 → 调用 `scripts/lm-env-compact.sh`（同一份口径，避免两处实现漂移）；只有 `integrations/` 子集 → 内联 `python3 json.dumps(ensure_ascii=False, separators=(',',':'))`；
+  - `python3` 缺失 → 明确 `exit 1`（不再写出一份 systemd 只认首行、kernel 必崩的 env）；
+  - 写完自检：**恰好 1 行** + 前缀 `LIMS_AGENT_TOKENS=` + 解析回来与源 JSON 等价 + 600，任一不满足即失败；
+  - `agent-tokens.json` 一个字节未改（`--systemd` 分支只改「怎么塞进 EnvironmentFile」）。
+  - 回归：`bash integrations/quickstart/envfile_test.sh`（主路径 / 退化路径 / 旧写法反跑变红 / python3 缺失反跑），验证记录见 §5.2.1。
+
+#### 5.2.1 根修验证记录（T-0424，FreeBSD 15.1 真机）
+
+- 环境：`fb98`（FreeBSD 15.1-RELEASE-p1，Python 3.12.13，bash 5.3.15），仓 `task/T-0424` 干净 clone 后跑。
+- 判据（三条全 rc=0）：
+
+```
+bash -n integrations/quickstart/install.sh                                      rc=0
+python3 -c "import sys; s=open('integrations/quickstart/install.sh',encoding='utf-8').read(); sys.exit(0 if 'json.dumps' in s or 'lm-env-compact' in s else 1)"    rc=0
+bash integrations/quickstart/envfile_test.sh                                    rc=0（12 项判据全绿）
+```
+
+- `envfile_test.sh` 实际输出（节选）：输入 34 行美化 JSON → `lightmem.env` `wc -l = 1`；前缀/`json.loads`/与源等价/600 全过；`agent-tokens.json` sha256 前后一致（未改一个字节）；退化路径（删掉 `scripts/` 后只留 `integrations/`）同样 1 行；反跑 A（旧写法 34 行 env）**变红**，报 `env 行数=34（期望恰好 1 行 + 结尾换行）`；反跑 B（PATH 里没有 python3）`install.sh` 非 0 退出且 `lightmem.env` 未落盘、提示里点了 python3。
+- 真机产出（非测试夹具）：`sh install.sh --write-token-env /tmp/t0424_real_run` → `OK: ... 单行 150 bytes, json 等价, 600`，`wc -l = 1`，`-rw-------`。
+- `--dry-run --systemd` 打印新路径：`[dry-run] 压平 .../agent-tokens.json → .../lightmem.env（单行 JSON，600）`。
+
+**Linux systemd 真机复测（Ubuntu 24.04.4 `ub86` / 192.168.0.86，2026-11-21 02:2x UTC）**
+
+- 用 `task/T-0424`（head `b825adb`）的干净 clone 跑 `install.sh --profile solo --systemd --service-user workbuddy`，`install_rc=0`；产出 `lightmem.env` = **891 bytes / `wc -l` = 1**（源 `agent-tokens.json` 仍是 **42 行**美化 JSON），`600 root`；`systemctl show -p EnvironmentFiles` 指向该 env。
+- 先前崩溃点消失：journal 只有 `[auth] token 表已装配（source=env, tokens=8）` + `[auth] agent token 鉴权已启用（tokens=8）`（kernel 与 MCP 各 8 个 token），**没有任何** `parse agent tokens json: unexpected end of JSON input`。
+- 服务真起来：`lightmem.service` `active (running)`，`ExecStart` 指向本次 clone 的 RUN_DIR，`/healthz` 返回 `version=b825adb…`（即本卡新二进制，不是旧部署的 `56df3c5`），MCP `/healthz` 也 `upstream_status=ok`。
+- 同轮暴露的**另一个坑（非本卡范围）**：root 跑 install 会把 RUN_DIR 建成 `root:root 755`，systemd 以 `--service-user` 起 kernel 时 SQLite 报 `attempt to write a readonly database (1544)` → 服务 `status=1/FAILURE` 连重启 5 次（即 §7 TODO#2）。验收时临时 `chown -R workbuddy` 该 RUN_DIR 后服务即正常；**本卡未改这条语义**，仅登记证据。
+- 复测后已收尾：卸本卡 unit、还原 0.86 原部署（`lightmem.service`/`lightmem-mcp.service` + `lightmem-watchdog.timer` 全部 `active`，旧 `/healthz` 恢复 `version=56df3c5`）。
+
+
+
 
 ### 5.3 【已在本卡修】logrotate 在 Ubuntu 上被"父目录权限不安全"整条跳过（C 线配置缺口）
 
@@ -412,7 +443,7 @@ $ （修复：按 shebang 分派 bash -n / sh -n）重跑
 ### 6.1 deploy/README.md 已知坑登记（本轮新增）
 
 1. `lm_service_install` 传入带 `.service` 后缀的 name（A 线 install.sh 的写法）→ T0 归一，否则装成 `.service.service`；
-2. `EnvironmentFile` 必须单行 JSON，用 `scripts/lm-env-compact.sh` 压平；
+2. `EnvironmentFile` 必须单行 JSON —— `install.sh` 已在写入前自行压平（T-0424 根修），`scripts/lm-env-compact.sh` 保留作事后修复；
 3. Ubuntu/Debian `logrotate` 需 `su root root`，否则 `/var/log` 属组可写会被整条跳过；
 4. 装 `platform.sh` 前先 `mkdir -p /usr/local/libexec/lightmem`。
 
@@ -422,8 +453,8 @@ $ （修复：按 shebang 分派 bash -n / sh -n）重跑
 
 | # | 事项 | 归属 | 优先级 |
 |---|---|---|---|
-| 1 | `install.sh --systemd` 写 env 前压平 JSON（去掉对 `scripts/lm-env-compact.sh` 的人工依赖） | A（T-0411） | P1 |
-| 2 | quickstart + systemd 混跑时 `RUN_DIR` 由 root 重建，二进制定为 root 属主；建议装完把 `_lightmem_run` chown 给 `--service-user` | A（T-0411） | P2 |
+| 1 | ~~`install.sh --systemd` 写 env 前压平 JSON（去掉对 `scripts/lm-env-compact.sh` 的人工依赖）~~ **已根修（T-0424，2026-11-21）** | A（T-0411 → T-0424） | P1 |
+| 2 | quickstart + systemd 混跑时 `RUN_DIR` 由 root 重建，二进制定为 root 属主；建议装完把 `_lightmem_run` chown 给 `--service-user`（T-0424 已在 0.86 复现硬证据：root 属主下 kernel 报 `attempt to write a readonly database (1544)`，chown 后正常，见 §5.2.1） | A（T-0411） | P2 |
 | 3 | systemd 路径下日志去向（journald vs 文件）与 logrotate 口径二选一 | A/C | P2 |
 | 4 | `.gitattributes` 给 `deploy/logrotate.d/*`、`deploy/*.sh` 加 `eol=lf`，防 Windows 侧 CRLF 回流（本轮自测时本地写入一度带 CRLF，导致 logrotate 解析失败，已本地纠正、未入库） | 仓库级 | P3 |
 | 5 | `hive doctor` 核对：本轮 T-0410/T-0411/T-0413/T-0415 的新增留言与状态 | 收口人 | P2 |
