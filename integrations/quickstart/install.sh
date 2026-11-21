@@ -50,6 +50,7 @@ SERVICE_USER=""
 DRY=0
 AGENTS=""
 WRITE_ENV_DIR=""   # 内部钩子（见 lm_write_token_env 注释），供 envfile_test.sh 调用
+OWN_RUN_DIR=""     # 内部钩子（见 lm_own_run_dir 注释），供 envfile_test.sh 调用
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -68,6 +69,9 @@ while [ $# -gt 0 ]; do
         # 内部钩子：只走「压平 JSON → 写 EnvironmentFile」这一段后退出（不编译/不装服务）。
         # 现成调用者：integrations/quickstart/envfile_test.sh；不是给用户的手动参数。
         --write-token-env) WRITE_ENV_DIR="$2"; shift 2 ;;
+        # 内部钩子：只走「RUN_DIR 属主归一」判定+动作后退出（不编译/不装服务）。
+        # 现成调用者：integrations/quickstart/envfile_test.sh；不是给用户的手动参数。
+        --own-run-dir) OWN_RUN_DIR="$2"; shift 2 ;;
         -h|--help)  sed -n '2,40p' "$0"; exit 0 ;;
         *) echo "未知参数：$1（-h 看用法）" >&2; exit 2 ;;
     esac
@@ -154,6 +158,54 @@ if mode != 0o600:
 print('OK: %s 单行 %d bytes, json 等价, 600' % (env_path, len(raw)))
 PY
 }
+
+# ---------------------------------------------------------------- RUN_DIR 属主归一（root/非 root 混跑）
+# T-0417 TODO#2：先非 root quickstart、再 `sudo install.sh --systemd` 混跑时，RUN_DIR 被 root 重建，
+# 二进制与 data/ 变 root:root；unit 却是 `User=$SERVICE_USER` → sqlite 写 readonly
+# （`attempt to write a readonly database (1544)`），而 /healthz 仍然正常，只有写记忆才炸。
+# 修法：装 unit 之前把 RUN_DIR 属主/权限归一（目录 750、env/tokens 600）。
+# 安全边界（红线，按此三条硬断言后才允许递归 chown）：
+#   * RUN_DIR 非空、不是 `/`；
+#   * 必须在允许前缀内：`$ROOT`（quickstart 的 _lightmem_run）或 `/opt/lightmem`；
+#   * 必须真实存在且是目录。
+# 只在 root 且 `--service-user` 非 root 时被调用；非 root 场景不进来，语义不变。
+lm_own_run_dir() {
+    _lm_dir=${1:-}
+    _lm_user=${2:-}
+    [ -n "$_lm_dir" ] || die "属主归一：RUN_DIR 为空，拒绝递归 chown"
+    [ -n "$_lm_user" ] || die "属主归一：service-user 为空，拒绝递归 chown"
+    [ "$_lm_dir" != "/" ] || die "属主归一：拒绝对 / 做递归 chown"
+    case "$_lm_dir" in
+        /opt/lightmem|/opt/lightmem/*) : ;;
+        "$ROOT"|"$ROOT"/*) : ;;
+        *) die "属主归一：$_lm_dir 不在允许前缀（$ROOT 或 /opt/lightmem）内，拒绝递归 chown" ;;
+    esac
+    [ -d "$_lm_dir" ] || die "属主归一：$_lm_dir 不是目录"
+    id -u "$_lm_user" >/dev/null 2>&1 || die "属主归一：用户 $_lm_user 不存在（--service-user 写错了吗？）"
+
+    chown -R "$_lm_user":"$_lm_user" "$_lm_dir"
+    for _d in data logs; do
+        mkdir -p "$_lm_dir/$_d"
+        chmod 750 "$_lm_dir/$_d"
+    done
+    chmod 750 "$_lm_dir"
+    for _f in "$_lm_dir/lightmem.env" "$_lm_dir/agent-tokens.json"; do
+        [ -f "$_f" ] && chmod 600 "$_f"
+    done
+    ok "RUN_DIR 属主归一：$_lm_dir -> $_lm_user:$_lm_user（目录 750，env/tokens 600）"
+}
+
+# 内部钩子（调用者 integrations/quickstart/envfile_test.sh）：只跑属主归一判定+动作，然后退出
+if [ -n "$OWN_RUN_DIR" ]; then
+    [ -n "$SERVICE_USER" ] || SERVICE_USER=$(id -un)
+    if [ "$(id -u)" -eq 0 ] && [ "$SERVICE_USER" != root ]; then
+        echo "own: whoami=$(id -un)（uid=0）service_user=$SERVICE_USER -> chown"
+        lm_own_run_dir "$OWN_RUN_DIR" "$SERVICE_USER"
+    else
+        echo "own: whoami=$(id -un) service_user=$SERVICE_USER -> 跳过 chown（非 root 或 service-user=root）"
+    fi
+    exit 0
+fi
 
 # 内部钩子（调用者 integrations/quickstart/envfile_test.sh）：只跑 env 写入路径，然后退出
 if [ -n "$WRITE_ENV_DIR" ]; then
@@ -509,7 +561,7 @@ if [ "$DO_SYSTEMD" -eq 1 ]; then
     if [ "$SKIP_SYSTEMD" -eq 1 ] && [ "$DRY" -eq 0 ]; then
         ok "已跳过 systemd 安装：FreeBSD 请走 rc.d（口径 :18443/:18444，勿与本脚本 :7443/:7444 混改）"
     elif [ "$(id -u)" -ne 0 ] && [ "$DRY" -eq 0 ]; then
-        warn "--systemd 需要 root；请用 sudo 重跑本脚本。手工等价步骤："
+        warn "--systemd 需要 root（当前 whoami=$(id -un)）；请用 sudo 重跑本脚本。手工等价步骤："
         cat >&2 <<EOF
       # 1) 先按本脚本把二进制/profile 装到 $RUN_DIR（不带 --systemd 跑一遍即可）
       # 2) 渲染两个 unit（把 /opt/lightmem 换成 $RUN_DIR、端口 $PORT/$MCP_PORT、User 换成运行者）
@@ -534,8 +586,18 @@ EOF
             else
                 warn "没有 $TOKENS：unit 将以透传态运行（无鉴权）"
             fi
+
+            # T-0425：root + --systemd 时把 RUN_DIR 属主归一（必须在 systemctl start 之前）
+            # 幂等：重复跑只是再 chown/chmod 一次；非 root 场景压根不进这个分支。
+            if [ "$(id -u)" -eq 0 ] && [ "$SERVICE_USER" != root ]; then
+                ok "本次以 whoami=$(id -un)（uid=0）运行；RUN_DIR=$RUN_DIR 归一到 $SERVICE_USER"
+                lm_own_run_dir "$RUN_DIR" "$SERVICE_USER"
+            else
+                ok "本次以 whoami=$(id -un) 运行；非 root 或 service-user=root → 跳过 RUN_DIR chown（保持原语义）"
+            fi
         else
             printf '    [dry-run] 压平 %s → %s（单行 JSON，600）\n' "$TOKENS" "$ENV_FILE"
+            printf '    [dry-run] chown -R %s:%s %s（data/logs 750，env/tokens 600）\n' "$SERVICE_USER" "$SERVICE_USER" "$RUN_DIR"
         fi
 
 

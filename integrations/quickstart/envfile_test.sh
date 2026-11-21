@@ -14,6 +14,9 @@
 #   5) 主路径走 scripts/lm-env-compact.sh；只拿到 integrations/ 子集时走内联 python3 退化路径
 #   6) 反跑 A：造「旧写法」的多行 env，同一套判据必须**变红**（证明判据真的在测东西）
 #   7) 反跑 B：python3 不可用时 install.sh 必须**明确失败**，且不落盘会崩的 env
+#   8) RUN_DIR 属主归一（T-0425）：非 root 运行时**不**调用 chown（保持原语义）
+#   9) root + --service-user 时必须调用 chown，目标与 --service-user 一致，且 data/logs=750、env/tokens=600
+#  10) 反跑 C：把 chown 目标改到允许前缀之外（/tmp、/）必须被**拒绝**且一次 chown 都不发
 #
 # 用法（仓库根）：bash integrations/quickstart/envfile_test.sh
 # 依赖：POSIX sh + python3（install.sh 压平 JSON 本就需要 python3，测试沿用同一依赖）
@@ -22,6 +25,7 @@ set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 INSTALL="$HERE/install.sh"
+REPO=$(cd "$HERE/../.." && pwd)
 
 FAILED=0
 CHECKS=0
@@ -37,7 +41,8 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 TMP=${TMPDIR:-/tmp}/lm-envfile-test.$$
-trap 'rm -rf "$TMP"' EXIT HUP INT TERM
+OWNROOT="$REPO/.hive/tmp-own.$$"   # 属主归一用例必须落在 $ROOT 前缀内（安全边界要求）
+trap 'rm -rf "$TMP" "$OWNROOT"' EXIT HUP INT TERM
 mkdir -p "$TMP"
 
 # ---------------------------------------------------------------- 夹具：~35 行美化 JSON（贴近 issue_token.py 产物）
@@ -223,10 +228,91 @@ else
     fail "失败提示没说 python3（用户无从下手）"
 fi
 
+# ---------------------------------------------------------------- 5) RUN_DIR 属主归一（T-0425 / T-0417 TODO#2）
+# 用 PATH 垫片模拟 root（假 id）并拦截 chown（只记账不真改），这样非 root 的验收机也能测两个分支。
+OB="$OWNROOT/bin"
+mkdir -p "$OB" "$OWNROOT"
+cat > "$OB/id" <<'STUB'
+#!/bin/sh
+case "${1:-}" in
+  -u)  if [ "$#" -ge 2 ]; then echo 1000; else echo "${LM_FAKE_UID:-0}"; fi ;;
+  -un) if [ "$#" -ge 2 ]; then echo "$2"; else echo "${LM_FAKE_USER:-root}"; fi ;;
+  *)   echo 0 ;;
+esac
+STUB
+cat > "$OB/chown" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$*" >> "${LM_CHOWN_LOG:?LM_CHOWN_LOG 未设置}"
+STUB
+chmod 755 "$OB/id" "$OB/chown"
+perm_of() { python3 -c 'import os,stat,sys; print(oct(stat.S_IMODE(os.stat(sys.argv[1]).st_mode))[2:])' "$1"; }
+
+# 5a) root + --service-user tester → 必须 chown 到 tester:tester 且权限归一
+RA="$OWNROOT/run-root"
+mkdir -p "$RA/data"
+: > "$RA/lightmem.env"; : > "$RA/agent-tokens.json"
+CLOG_A="$OWNROOT/chown-a.log"; : > "$CLOG_A"
+if PATH="$OB:$PATH" LM_FAKE_UID=0 LM_FAKE_USER=root LM_CHOWN_LOG="$CLOG_A" \
+        "$SH_BIN" "$INSTALL" --own-run-dir "$RA" --service-user tester >"$OWNROOT/log-a" 2>&1; then
+    pass "root 模拟：--own-run-dir rc=0"
+else
+    fail "root 模拟：--own-run-dir 非 0 退出"
+    dump_log "$OWNROOT/log-a"
+fi
+if grep -qF -- "-R tester:tester $RA" "$CLOG_A"; then
+    pass "root 模拟：确实调用了 chown -R tester:tester <RUN_DIR>（目标与 --service-user 一致）"
+else
+    fail "root 模拟：没有按 service-user 调用 chown（实际：$(cat "$CLOG_A" 2>/dev/null | tr '\n' '|')）"
+fi
+[ "$(perm_of "$RA/data")" = 750 ] && pass "root 模拟：data/ = 750" || fail "data/ 权限 = $(perm_of "$RA/data")（期望 750）"
+[ "$(perm_of "$RA/logs")" = 750 ] && pass "root 模拟：logs/ = 750" || fail "logs/ 权限 = $(perm_of "$RA/logs")（期望 750）"
+[ "$(perm_of "$RA/lightmem.env")" = 600 ] && pass "root 模拟：lightmem.env = 600" || fail "env 权限 = $(perm_of "$RA/lightmem.env")（期望 600）"
+[ "$(perm_of "$RA/agent-tokens.json")" = 600 ] && pass "root 模拟：agent-tokens.json = 600" || fail "tokens 权限 = $(perm_of "$RA/agent-tokens.json")（期望 600）"
+
+# 5b) 非 root → 一次 chown 都不许发（纯 quickstart 语义不变）
+RB="$OWNROOT/run-nonroot"
+mkdir -p "$RB"
+CLOG_B="$OWNROOT/chown-b.log"; : > "$CLOG_B"
+if PATH="$OB:$PATH" LM_FAKE_UID=1000 LM_FAKE_USER=workbuddy LM_CHOWN_LOG="$CLOG_B" \
+        "$SH_BIN" "$INSTALL" --own-run-dir "$RB" --service-user tester >"$OWNROOT/log-b" 2>&1; then
+    pass "非 root：--own-run-dir rc=0（跳过而非报错）"
+else
+    fail "非 root：--own-run-dir 不该非 0 退出"
+    dump_log "$OWNROOT/log-b"
+fi
+if [ -s "$CLOG_B" ]; then
+    fail "非 root 竟然调用了 chown（纯 quickstart 语义被改：$(cat "$CLOG_B" | tr '\n' '|')）"
+else
+    pass "非 root：未调用 chown（保持原语义）"
+fi
+if grep -q '跳过 chown' "$OWNROOT/log-b" 2>/dev/null; then
+    pass "非 root：输出明确写了「跳过 chown」"
+else
+    fail "非 root：没有明确打印跳过原因"
+fi
+
+# 5c) 反跑 C：目标改到允许前缀之外（/tmp、/）必须被拒绝，且一次 chown 都不发
+for _bad in /tmp /; do
+    CLOG_C="$OWNROOT/chown-c.log"; : > "$CLOG_C"
+    if PATH="$OB:$PATH" LM_FAKE_UID=0 LM_FAKE_USER=root LM_CHOWN_LOG="$CLOG_C" \
+            "$SH_BIN" "$INSTALL" --own-run-dir "$_bad" --service-user tester >"$OWNROOT/log-c" 2>&1; then
+        fail "反跑 C：目标 $_bad 竟然被接受（红线：允许前缀校验失效）"
+    else
+        pass "反跑 C：目标 $_bad 被拒绝（$(sed -n '1p' "$OWNROOT/log-c" | cut -c1-70)）"
+    fi
+    if [ -s "$CLOG_C" ]; then
+        fail "反跑 C：目标 $_bad 被拒绝前仍发了 chown（$(cat "$CLOG_C" | tr '\n' '|')）"
+    else
+        pass "反跑 C：目标 $_bad 一次 chown 都没发"
+    fi
+done
+rm -rf "$OWNROOT"
+
 # ---------------------------------------------------------------- 汇总
 if [ "$FAILED" -eq 0 ]; then
-    printf '\nPASS: envfile_test 全绿（%d 项判据，含 2 组反跑）\n' "$CHECKS"
+    printf '\nPASS: envfile_test 全绿（%d 项判据，含 3 组反跑）\n' "$CHECKS"
     exit 0
 fi
 printf '\nFAIL: %d/%d 项判据未通过\n' "$FAILED" "$CHECKS" >&2
 exit 1
+
