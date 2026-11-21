@@ -424,3 +424,26 @@ error: skipping "/var/log/lightmem.log" because parent directory has insecure pe
 - 两条可选口径（**择一，别都做**）：给 unit 加 `StandardOutput=append:/var/log/lightmem.log`
   （让 logrotate 真正生效），或明确登记"journald 侧用 `SystemMaxUse` / `MaxRetentionSec` 治理"。
 - 本卡不改 unit 语义（红线），仅登记，待 A/C 线定夺。
+
+---
+
+## EOL 门禁（T-0427，T-0417 TODO#4）
+
+deploy/ 下的 systemd unit（`lightmem*.service` / `lightmem-watchdog.timer`）、cron 条目
+（`cron.d/`）、logrotate / newsyslog 规则，**行尾带 `\r`（CRLF）会让对应解析器直接失败**
+且报错隐晦：cron 静默不跑、systemd `ExecStart` 起不来、logrotate stat 报错。
+这些文件没有常规扩展名，曾落在 `* text=auto` 兜底里 —— Windows 检出成 CRLF，
+`git add` 时极易把 CRLF 提上去（T-0417 实测踩过：本地写入带 CRLF，logrotate 解析失败；
+`deploy/logrotate.d/lightmem` 还曾缺末行换行）。`.gitattributes` 已用**路径级**
+`text eol=lf` 钉死（见其 deploy 规则段），并要求这些文件末字节为 `0x0a`。
+
+自查（POSIX sh，零依赖，Windows 提交机可用 Git 自带的 `sh` 跑）：
+
+```sh
+sh scripts/check-eol-lf.sh
+```
+
+新增部署文件时同步两处：`.gitattributes` 的路径级规则 + `scripts/check-eol-lf.sh` 的
+`TARGETS` 清单（缺一处门禁会漏检或误报不同步）。
+
+> AI生成

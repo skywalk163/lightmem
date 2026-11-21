@@ -21,6 +21,19 @@
 # 它由 FreeBSD 的 `sh` 执行，CRLF 会直接报 `\r: not found`。
 integrations/lims-088-rc.d/lightmem text eol=lf
 
+# deploy/ 下无扩展名的部署文件同理必须显式钉 LF（T-0427，T-0417 TODO#4）：
+# systemd 的 ExecStart、cron 的定时行、logrotate 的规则行，行尾带 \r 都会解析
+# 失败且报错隐晦（cron 静默不跑 / logrotate stat 报错 / systemd 启动失败）。
+# 它们没有扩展名，落在 * text=auto 兜底里，Windows 检出成 CRLF，
+# 任何人 git add 时都可能把 CRLF 提上去 —— 与 *.sh 同理强制 LF。
+deploy/lightmem.service          text eol=lf
+deploy/lightmem-mcp.service      text eol=lf
+deploy/lightmem-watchdog.service text eol=lf
+deploy/lightmem-watchdog.timer   text eol=lf
+deploy/logrotate.d/*             text eol=lf
+deploy/cron.d/*                  text eol=lf
+deploy/newsyslog.d/*             text eol=lf
+
 # 二进制（勿做行尾/编码转换）
 *.docx  binary
 *.tgz   binary
