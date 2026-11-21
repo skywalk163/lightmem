@@ -24,7 +24,10 @@
 #                                   # resolveSecrets 读 LIMS_PG_PASSWORD 覆盖 profile。
 #   lightmem_log="/var/log/lightmem.log"
 #   lightmem_pidfile="/var/run/lightmem/lightmem.pid"
-#   lightmem_pg_wait="60"            # 启动前等待 PG 就绪的秒数
+#   lightmem_pg_wait="60"            # 等待 PG 就绪的秒数；**0 = 不等**（L-259 修）。
+#                                    # 是否真等由 profile 的 storage_backend 决定：
+#                                    # sqlite*（solo）不等，pgvector* 才等；
+#                                    # profile 读不出 backend 时保守等待，不静默放行。
 #   lightmem_restart_delay="5"       # R29-A：崩溃后重启延迟秒数（daemon -R）
 #   lightmem_restart_count="24"      # R29-A：最多重启次数（daemon -C；用尽后
 #                                    # daemon 自行退出 → 服务真下线，防无限刷屏）
@@ -114,9 +117,18 @@ procname="${lightmem_binary}"
 required_dirs="${lightmem_chdir}"
 required_files="${lightmem_binary} ${lightmem_profile}"
 
-# 仅匹配本服务的进程（含完整二进制路径与 profile），
+# 仅匹配本服务的**子进程**（含完整二进制路径与 profile），
 # 避免误杀同机上其它 lightmem 实例（例如 :8443 的旧实例）。
 lightmem_pkill_pattern="${lightmem_binary} -profile ${lightmem_profile}"
+# R30（L-260）：daemon(8) 的监督进程会把 cmdline 改写成 `daemon: <title>[<pid>] (daemon)`
+# （实测 `daemon: env[14105] (daemon)`），原始参数**全部不出现**，所以
+# `-profile` / `-o` 之类模式对它永远打不中。
+# 对策：启动时用 `-t` 给 supervisor 一个**按监听地址唯一**的标题，
+# 之后按该标题精确匹配，与 pidfile 无关——因此能发现“不在 pidfile 里的第二个
+# supervisor”，也不会误杀同机上别的 lightmem 实例（别的端口/别的日志）。
+lightmem_sup_title="lightmem-listen-$(echo "${lightmem_listen}" | tr -d ':')"
+# daemon(8) 改写后的实际 cmdline 前缀
+lightmem_sup_title_prefix="daemon: ${lightmem_sup_title}["
 
 lightmem_group() {
     id -g "${lightmem_user}" 2>/dev/null || echo wheel
@@ -132,7 +144,43 @@ lightmem_precmd() {
     if [ ! -f "${lightmem_log}" ]; then
         install -o "${lightmem_user}" -g "$(lightmem_group)" -m 644 /dev/null "${lightmem_log}"
     fi
-    # 等待 lims-pg jail 的 PostgreSQL 就绪（开机竞态保护）。
+    # 等待后端就绪（开机竞态保护；L-259 修，见 lightmem_wait_pg）。
+    lightmem_wait_pg
+}
+
+# 需要等待 PostgreSQL 的判定（L-259 修，R30）。
+#
+# 口径（按 storage_backend 决定，而不是“一律等”）：
+#   - profile 的 `storage_backend: pgvector*` 且 pg_wait > 0  → 等待（超时失败）
+#   - profile 的 `storage_backend: sqlite`（solo 档）        → 不等待
+#   - profile 读不出 backend 时**保守回退**到“等”（不静默放行）
+#   - pg_wait <= 0 显式关闭                                  → 不等待
+# 历史缺陷：旧实现在 pg_wait=0 时循环体不执行，随后无条件报“不可达”并 return 1，
+# 导致运维无法用 0 表达“不等”，无 PG 的机器任何档位都起不来。
+lightmem_need_pg() {
+    # 先取 backend：否则 pg_wait<=0 提前 return 时 _backend 会是上次调用的残留值，
+    # 日志打印出错误档位、误导排障。
+    _backend=$(sed -n 's/^storage_backend:[[:space:]]*\([A-Za-z0-9_]*\).*/\1/p' \
+        "${lightmem_profile}" 2>/dev/null | head -1)
+    if [ "${lightmem_pg_wait}" -le 0 ] 2>/dev/null; then
+        return 1
+    fi
+    case "${_backend}" in
+        sqlite*)   return 1 ;;   # solo 档：不需要 PG
+        pgvector*) return 0 ;;   # PG 档：必须等
+        *)         return 0 ;;   # 读不出 → 保守等待（不静默放行）
+    esac
+}
+
+lightmem_wait_pg() {
+    if ! lightmem_need_pg; then
+        # 只在“运维显式设了 pg_wait>0、但因 sqlite 档被跳过”时提示一句，
+        # 便于排障时确认“不是没等、而是不需要等”；pg_wait<=0 属显式关闭，不刷日志。
+        if [ "${lightmem_pg_wait}" -gt 0 ] 2>/dev/null; then
+            echo "lightmem: 跳过 PostgreSQL 等待（storage_backend=${_backend:-unknown} 不需要 PG），pg_wait=${lightmem_pg_wait} 对本站点不生效" >&2
+        fi
+        return 0
+    fi
     _i=0
     while [ "${_i}" -lt "${lightmem_pg_wait}" ]; do
         if nc -z -w 2 "${lightmem_pg_host}" "${lightmem_pg_port}" 2>/dev/null; then
@@ -146,7 +194,7 @@ lightmem_precmd() {
 }
 
 # 停止 daemon(8) 监督者及其 lightmem-kernel 子进程。
-# R29-A 顺序修正（v1.0 设计稿「现有顺序天然兼容」结论已作废）：
+# R29-A 顺序修正（v1.0 设计稿“现有顺序天然兼容”结论已作废）：
 #   旧顺序先 pkill 子进程 → 在 -R/-C 监督语义下，监督者会**立刻**拉起新子进程，
 #   随后 TERM 才到 → 竞态留下新实例占用端口 → 下次 start 报 EADDRINUSE。
 #   新顺序依据 daemon(8) 手册（0.88 实测语义）：SIGTERM 发给**监督者**时它转发给
@@ -155,33 +203,78 @@ lightmem_precmd() {
 #     ② 轮询等待 supervisor 与子进程都消失（带超时）
 #     ③ pkill -f "${lightmem_pkill_pattern}"  # 兜底：清孤儿（不再是首选）
 #     ④ rm -f "${pidfile}"
+#
+# R30（L-260 修）：④ 之前追加“清理所有同 profile 的孤儿 supervisor”。
+#   缺陷根因：pidfile 用 pidfile(3) 加锁，只记**一个** supervisor；历史上异常启动
+#   （启动失败/重复 start）留下的第二个 supervisor 不在 pidfile 里，仍在 -R 语义下
+#   持续拉起子进程 → `service stop` 后 20s 服务“复活”。
+#   注意 daemon(8) 监督进程的 cmdline 是 `daemon: env[<pid>] (daemon)`，**不含**
+#   `-profile`，所以必须用专门模式 `${lightmem_sup_pattern}` 匹配，不能用
+#   `${lightmem_pkill_pattern}`（那是子进程模式）。
+# 列出“本站点遗留的孤儿 supervisor”pid（L-260）。
+#
+# 依据：启动时给 daemon(8) 加了 `-t ${lightmem_sup_title}`，其 cmdline 被改写为
+#       `daemon: lightmem-listen-18443[<child_pid>] (daemon)`。
+#       按该前缀匹配即可枚举**所有**本站点 supervisor（含不在 pidfile 里的），
+#       且与“是否有存活子进程”无关 —— 这一点很重要：旧实现靠父子关系判定，
+#       一旦先杀掉了子进程，孤儿 supervisor 就再也认不出来（R30 实测踩到）。
+# 只依赖 grep 与 ps，不引入新依赖。
+lightmem_list_sups() {
+    ps -ax -o pid= -o command= 2>/dev/null \
+        | grep -F "${lightmem_sup_title_prefix}" \
+        | grep -v grep \
+        | awk '{print $1}'
+}
+
 lightmem_stop() {
-    # 1) 先 TERM 监督者：它转发 TERM 给子进程、清 pidfile、自行退出。
+    # R30（L-260）改写要点：**先枚举所有本站点 supervisor，再统一 TERM**。
+    #   旧实现只 TERM pidfile 里的那一个，孤儿 supervisor 完全不在视野内；
+    #   且旧实现先 pkill 子进程，导致“靠父子关系找 supervisor”的兜底也失效。
+    #   现在 supervior 由 `-t` 标题唯一标识，与 pidfile / 子进程存活都无关。
+    _sups=$(lightmem_list_sups 2>/dev/null)
+    _sup_in_file=""
+    [ -f "${pidfile}" ] && _sup_in_file=$(cat "${pidfile}" 2>/dev/null)
+
+    # 1) 先 TERM **所有** supervisor：daemon 会转发 TERM 给子进程、清 pidfile、自行退出。
     #    （-P 写的是 supervisor pid；若误用 -p 的子进程 pid，手册明确警告
-    #     「signal the child → daemon restarts it」——正是要避免的竞态。）
-    if [ -f "${pidfile}" ]; then
-        kill -TERM "$(cat "${pidfile}")" 2>/dev/null
-    fi
+    #     “signal the child → daemon restarts it”——正是要避免的竞态。）
+    for _s in ${_sups} ${_sup_in_file}; do
+        [ -z "${_s}" ] && continue
+        kill -TERM "${_s}" 2>/dev/null
+    done
     # 2) 轮询等待 supervisor 与子进程都消失（最多 20s）。
     _i=0
     while [ "${_i}" -lt 20 ]; do
-        _sup=""
-        [ -f "${pidfile}" ] && _sup=$(cat "${pidfile}" 2>/dev/null)
         _alive=""
-        [ -n "${_sup}" ] && kill -0 "${_sup}" 2>/dev/null && _alive="sup"
+        [ -n "$(lightmem_list_sups 2>/dev/null)" ] && _alive="sup"
         pgrep -f "${lightmem_pkill_pattern}" >/dev/null 2>&1 && _alive="${_alive}child"
         [ -z "${_alive}" ] && break
         sleep 1
         _i=$((_i + 1))
     done
-    # 3) 兜底：仍有残留（孤儿子进程/失联 pidfile）才强制清。
+    # 3) 兜底：仍有 supervisor 残留才强制清（-9 supervisor 会留下失监管子进程，
+    #    所以随后必须再清一次子进程）。
+    _left=$(lightmem_list_sups 2>/dev/null)
+    if [ -n "${_left}" ]; then
+        echo "lightmem: 优雅退出超时，强制结束 supervisor（pid $(echo "${_left}" | tr '\n' ' ')）" >&2
+        for _s in ${_left}; do
+            kill -9 "${_s}" 2>/dev/null
+        done
+        sleep 1
+    fi
+    # 4) 清理残留子进程（含孤儿 supervisor 拉起过、现已失监管的那些）。
     if pgrep -f "${lightmem_pkill_pattern}" >/dev/null 2>&1; then
-        echo "lightmem: 优雅退出超时，强制结束" >&2
+        echo "lightmem: 清理残留进程" >&2
         pkill -9 -f "${lightmem_pkill_pattern}" 2>/dev/null
         sleep 1
     fi
-    # 4) pidfile 必须清掉：否则 daemon -P 会认为「process already running」而拒绝启动。
+    # 5) pidfile 必须清掉：否则 daemon -P 会认为“process already running”而拒绝启动。
     rm -f "${pidfile}"
+    # 6) 自证：清完必须真的空，否则返回非 0 让人看见（不静默成功）。
+    if [ -n "$(lightmem_list_sups 2>/dev/null)" ] || pgrep -f "${lightmem_pkill_pattern}" >/dev/null 2>&1; then
+        echo "lightmem: 仍有进程残留，stop 未完成" >&2
+        return 1
+    fi
     return 0
 }
 
@@ -215,6 +308,17 @@ lightmem_status() {
 # -H -R -C：R29-A 监督重启（崩溃自愈 + 有界防抖 + SIGHUP 重开日志），
 # 详见上方 lightmem_restart_delay/lightmem_restart_count 注释。
 lightmem_start() {
+    # L-258 修（R30）：service(8) 把 CWD 置为 `/`，而 daemon(8) **不传 -c 时不做
+    # chdir、直接继承调用者 CWD**（daemon(8) 手册：只有 -c 才 chdir 到 `/`）。
+    # 因此这里必须显式 cd，否则 shipped profile 里 `storage.sqlite.path` 的相对路径
+    # `./data/lims.sqlite` 会被解析成 `/data/lims.sqlite` → 服务用户无写权限 →
+    # 日志刷 `unable to open database file`、健康检查超时。
+    # 注：lightmem_log / lightmem_pidfile 默认均为绝对路径，不受 chdir 影响；
+    #     若运维改用相对路径，请一并改绝对，避免日志/pidfile 落到 chdir 目录。
+    cd "${lightmem_chdir}" || {
+        echo "lightmem: 无法进入 ${lightmem_chdir}" >&2
+        return 1
+    }
     rm -f "${pidfile}"
     # R21 T3：token 表由 install 脚本落到 ${lightmem_tokens_file}（0600）。
     # 缺失 → 不注入 LIMS_AGENT_TOKENS → AuthMiddleware 透传（开发阶段/零回归）。
@@ -228,6 +332,7 @@ lightmem_start() {
     # 不会套用 ${name}_user 的 su 包装，否则服务会以 root 身份运行。
     if [ -n "${_tokens}" ]; then
         /usr/sbin/daemon -f -H -R "${lightmem_restart_delay}" -C "${lightmem_restart_count}" \
+            -t "${lightmem_sup_title}" \
             -u "${lightmem_user}" -P "${pidfile}" -o "${lightmem_log}" \
             env "HOME=${lightmem_home}" \
                 "LIMS_AGENT_TOKENS=${_tokens}" \
@@ -237,6 +342,7 @@ lightmem_start() {
             -embedder "${lightmem_embedder}" &
     else
         /usr/sbin/daemon -f -H -R "${lightmem_restart_delay}" -C "${lightmem_restart_count}" \
+            -t "${lightmem_sup_title}" \
             -u "${lightmem_user}" -P "${pidfile}" -o "${lightmem_log}" \
             env "HOME=${lightmem_home}" \
             "${lightmem_binary}" \
