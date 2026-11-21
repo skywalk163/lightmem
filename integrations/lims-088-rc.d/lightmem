@@ -126,7 +126,7 @@ lightmem_pkill_pattern="${lightmem_binary} -profile ${lightmem_profile}"
 # 对策：启动时用 `-t` 给 supervisor 一个**按监听地址唯一**的标题，
 # 之后按该标题精确匹配，与 pidfile 无关——因此能发现“不在 pidfile 里的第二个
 # supervisor”，也不会误杀同机上别的 lightmem 实例（别的端口/别的日志）。
-lightmem_sup_title="lightmem-listen-$(echo "${lightmem_listen}" | tr -d ':')"
+lightmem_sup_title="lightmem-listen-$(echo "${lightmem_listen#:}" | tr ':' '_')"
 # daemon(8) 改写后的实际 cmdline 前缀
 lightmem_sup_title_prefix="daemon: ${lightmem_sup_title}["
 
