@@ -369,6 +369,23 @@ $ （修复：按 shebang 分派 bash -n / sh -n）重跑
   - `agent-tokens.json` 一个字节未改（`--systemd` 分支只改「怎么塞进 EnvironmentFile」）。
   - 回归：`bash integrations/quickstart/envfile_test.sh`（主路径 / 退化路径 / 旧写法反跑变红 / python3 缺失反跑），验证记录见 §5.2.1。
 
+#### 5.2.1 根修验证记录（T-0424，FreeBSD 15.1 真机）
+
+- 环境：`fb98`（FreeBSD 15.1-RELEASE-p1，Python 3.12.13，bash 5.3.15），仓 `task/T-0424` 干净 clone 后跑。
+- 判据（三条全 rc=0）：
+
+```
+bash -n integrations/quickstart/install.sh                                      rc=0
+python3 -c "import sys; s=open('integrations/quickstart/install.sh',encoding='utf-8').read(); sys.exit(0 if 'json.dumps' in s or 'lm-env-compact' in s else 1)"    rc=0
+bash integrations/quickstart/envfile_test.sh                                    rc=0（12 项判据全绿）
+```
+
+- `envfile_test.sh` 实际输出（节选）：输入 34 行美化 JSON → `lightmem.env` `wc -l = 1`；前缀/`json.loads`/与源等价/600 全过；`agent-tokens.json` sha256 前后一致（未改一个字节）；退化路径（删掉 `scripts/` 后只留 `integrations/`）同样 1 行；反跑 A（旧写法 34 行 env）**变红**，报 `env 行数=34（期望恰好 1 行 + 结尾换行）`；反跑 B（PATH 里没有 python3）`install.sh` 非 0 退出且 `lightmem.env` 未落盘、提示里点了 python3。
+- 真机产出（非测试夹具）：`sh install.sh --write-token-env /tmp/t0424_real_run` → `OK: ... 单行 150 bytes, json 等价, 600`，`wc -l = 1`，`-rw-------`。
+- `--dry-run --systemd` 打印新路径：`[dry-run] 压平 .../agent-tokens.json → .../lightmem.env（单行 JSON，600）`。
+- 未做：本轮未在 **Linux systemd 真机**（Ubuntu 24.04）上重装服务复测（0.86 机未动）；写入路径与平台无关，已由上述真机 + dry-run 覆盖，systemd 侧「不再出现 unexpected end of JSON input」留待下次 Linux 真机回归确认。
+
+
 
 ### 5.3 【已在本卡修】logrotate 在 Ubuntu 上被"父目录权限不安全"整条跳过（C 线配置缺口）
 
