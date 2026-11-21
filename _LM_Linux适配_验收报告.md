@@ -383,7 +383,15 @@ bash integrations/quickstart/envfile_test.sh                                    
 - `envfile_test.sh` 实际输出（节选）：输入 34 行美化 JSON → `lightmem.env` `wc -l = 1`；前缀/`json.loads`/与源等价/600 全过；`agent-tokens.json` sha256 前后一致（未改一个字节）；退化路径（删掉 `scripts/` 后只留 `integrations/`）同样 1 行；反跑 A（旧写法 34 行 env）**变红**，报 `env 行数=34（期望恰好 1 行 + 结尾换行）`；反跑 B（PATH 里没有 python3）`install.sh` 非 0 退出且 `lightmem.env` 未落盘、提示里点了 python3。
 - 真机产出（非测试夹具）：`sh install.sh --write-token-env /tmp/t0424_real_run` → `OK: ... 单行 150 bytes, json 等价, 600`，`wc -l = 1`，`-rw-------`。
 - `--dry-run --systemd` 打印新路径：`[dry-run] 压平 .../agent-tokens.json → .../lightmem.env（单行 JSON，600）`。
-- 未做：本轮未在 **Linux systemd 真机**（Ubuntu 24.04）上重装服务复测（0.86 机未动）；写入路径与平台无关，已由上述真机 + dry-run 覆盖，systemd 侧「不再出现 unexpected end of JSON input」留待下次 Linux 真机回归确认。
+
+**Linux systemd 真机复测（Ubuntu 24.04.4 `ub86` / 192.168.0.86，2026-11-21 02:2x UTC）**
+
+- 用 `task/T-0424`（head `b825adb`）的干净 clone 跑 `install.sh --profile solo --systemd --service-user workbuddy`，`install_rc=0`；产出 `lightmem.env` = **891 bytes / `wc -l` = 1**（源 `agent-tokens.json` 仍是 **42 行**美化 JSON），`600 root`；`systemctl show -p EnvironmentFiles` 指向该 env。
+- 先前崩溃点消失：journal 只有 `[auth] token 表已装配（source=env, tokens=8）` + `[auth] agent token 鉴权已启用（tokens=8）`（kernel 与 MCP 各 8 个 token），**没有任何** `parse agent tokens json: unexpected end of JSON input`。
+- 服务真起来：`lightmem.service` `active (running)`，`ExecStart` 指向本次 clone 的 RUN_DIR，`/healthz` 返回 `version=b825adb…`（即本卡新二进制，不是旧部署的 `56df3c5`），MCP `/healthz` 也 `upstream_status=ok`。
+- 同轮暴露的**另一个坑（非本卡范围）**：root 跑 install 会把 RUN_DIR 建成 `root:root 755`，systemd 以 `--service-user` 起 kernel 时 SQLite 报 `attempt to write a readonly database (1544)` → 服务 `status=1/FAILURE` 连重启 5 次（即 §7 TODO#2）。验收时临时 `chown -R workbuddy` 该 RUN_DIR 后服务即正常；**本卡未改这条语义**，仅登记证据。
+- 复测后已收尾：卸本卡 unit、还原 0.86 原部署（`lightmem.service`/`lightmem-mcp.service` + `lightmem-watchdog.timer` 全部 `active`，旧 `/healthz` 恢复 `version=56df3c5`）。
+
 
 
 
@@ -446,7 +454,7 @@ bash integrations/quickstart/envfile_test.sh                                    
 | # | 事项 | 归属 | 优先级 |
 |---|---|---|---|
 | 1 | ~~`install.sh --systemd` 写 env 前压平 JSON（去掉对 `scripts/lm-env-compact.sh` 的人工依赖）~~ **已根修（T-0424，2026-11-21）** | A（T-0411 → T-0424） | P1 |
-| 2 | quickstart + systemd 混跑时 `RUN_DIR` 由 root 重建，二进制定为 root 属主；建议装完把 `_lightmem_run` chown 给 `--service-user` | A（T-0411） | P2 |
+| 2 | quickstart + systemd 混跑时 `RUN_DIR` 由 root 重建，二进制定为 root 属主；建议装完把 `_lightmem_run` chown 给 `--service-user`（T-0424 已在 0.86 复现硬证据：root 属主下 kernel 报 `attempt to write a readonly database (1544)`，chown 后正常，见 §5.2.1） | A（T-0411） | P2 |
 | 3 | systemd 路径下日志去向（journald vs 文件）与 logrotate 口径二选一 | A/C | P2 |
 | 4 | `.gitattributes` 给 `deploy/logrotate.d/*`、`deploy/*.sh` 加 `eol=lf`，防 Windows 侧 CRLF 回流（本轮自测时本地写入一度带 CRLF，导致 logrotate 解析失败，已本地纠正、未入库） | 仓库级 | P3 |
 | 5 | `hive doctor` 核对：本轮 T-0410/T-0411/T-0413/T-0415 的新增留言与状态 | 收口人 | P2 |
