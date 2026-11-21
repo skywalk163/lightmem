@@ -470,4 +470,36 @@ MaxRetentionSec=30day
 ```
 
 改完用 `journalctl --disk-usage` 复测；手工回收用 `journalctl --vacuum-size=500M`（先看后删）。
+### 10. 混跑（先非 root quickstart、后 `sudo --systemd`）RUN_DIR 属主留在 root（T-0425 已根修）
 
+`--systemd` 以 root 跑时，`$RUN_DIR`（`_lightmem_run` 或 `/opt/lightmem`）会被建成/保持 `root:root 755`。
+systemd 若以 `--service-user workbuddy` 起 kernel，SQLite 打开 `data/` 里的库时直接：
+
+```
+[boot] sqlite wal pragma: attempt to write a readonly database (1544)
+lightmem.service: Main process exited, code=exited, status=1/FAILURE
+（重试 5 次后 Start request repeated too quickly）
+```
+
+**极易误判**：`/healthz` 仍返回 `status: ok`（端口被先前非 root 起的旧进程占着），只有**写记忆**（`POST /memories`）才暴露。
+
+- 现状：`install.sh --systemd` 在 `uid=0` 且 `--service-user != root` 时调用 `lm_own_run_dir`，
+  在 `systemctl enable --now` 之前把 `$RUN_DIR` 归一给该用户：**先 `mkdir -p data logs` → 再 `chown -R`** →
+  `chmod 750`（RUN_DIR/data/logs）→ `lightmem.env` / `agent-tokens.json` 600。
+  安全性：先断言 `$RUN_DIR` 非空、不是 `/`、必须在 `$ROOT` 或 `/opt/lightmem` 前缀内、必须是真实目录、
+  `--service-user` 必须存在，任一不满足 `exit 1`；非 root 纯 quickstart 语义不变（打印跳过原因）。
+- 已经混跑过 / 手改过目录的事后修复：
+
+```sh
+sudo mkdir -p "$RUN_DIR/data" "$RUN_DIR/logs"
+sudo chown -R <service-user>:<service-user> "$RUN_DIR"
+sudo chmod 750 "$RUN_DIR" "$RUN_DIR/data" "$RUN_DIR/logs"
+sudo chmod 600 "$RUN_DIR/lightmem.env" "$RUN_DIR/agent-tokens.json"
+sudo systemctl restart lightmem.service lightmem-mcp.service
+```
+
+- 自查：`sudo stat -c '%U:%G %a' "$RUN_DIR" "$RUN_DIR/data" "$RUN_DIR/logs"` 三行都应是 `<user>:<user> 750`；
+  再 `sudo -u <service-user> touch "$RUN_DIR/logs/.w"` 应成功（`logs/` 留在 root 时这里就是 Permission denied）。
+- 顺序建议：**固定一种**。要 systemd 就一开始 `sudo --systemd`；要纯 quickstart 就始终以同一用户跑，
+  两者混跑时以最后一次 `install.sh` 的属主为准（T-0425 已让 `--systemd` 每次都重新归一，但这仍是"事后修正"）。
+- 回归：`bash integrations/quickstart/envfile_test.sh`（第 5 节 13 项属主判据：root 模拟 chown 记账 + 「chown 之前 data/logs 必须已存在」顺序断言、非 root 零 chown、`/tmp` 与 `/` 必拒）。
