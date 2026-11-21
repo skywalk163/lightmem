@@ -125,6 +125,12 @@ sh integrations/quickstart/install.sh
 ## 开发约定（如果你要改这个仓库）
 
 - **门禁**：`sh scripts/gate.sh`（版本/gofmt/vet/build/test/race/覆盖/红线白名单/PG 真机）。
+- **两个 module 事实（跑门禁前必读）**：本仓库有**两个** Go module——根 module `lightmem`
+  （`eval/` 等）和 `kernel/`（`github.com/lightmem/kernel`）。根 `go.mod` 里的
+  `require github.com/lightmem/kernel v0.0.0` 是永远拉不到的占位版本，靠
+  `replace github.com/lightmem/kernel => ./kernel` 指向本地。`sh scripts/gate.sh`
+  会**自动发现全部 go.mod 并逐个跑** vet/build/test（两个 module 各一遍），
+  所以根目录也能直接 `go build ./...`；内核单独的构建/测试仍可 `cd kernel && go test ./...`。
 - **红线**：
   - 只增不改 Schema 语义（`model.go` / `storage.go` / `lifecycle.go` / `compliance.go`）；
   - 既有 SQL 不动（`kernel/migrations/*.sql`）；

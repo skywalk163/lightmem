@@ -6,11 +6,16 @@
 
 ## 构建
 
-⚠️ **`kernel/` 是独立 Go module，所有 `go` 命令必须在 `kernel/` 下执行。**
+⚠️ **本仓库有「两个 module」：根 module `lightmem` 与 `kernel/`（`github.com/lightmem/kernel`）。**
 
-顶层 `go.mod` 的 module 是 `lightmem`，只 `require github.com/lightmem/kernel v0.0.0`，
-**没有** `replace` 到本地 `kernel/`。在仓库根直接 `go build ./...` 会去网络拉一个
-并不存在的版本而失败，报错看起来像「依赖拉不下来」，其实是路径问题。
+顶层 `go.mod` 里 `require github.com/lightmem/kernel v0.0.0` 只是占位版本号，
+靠 `replace github.com/lightmem/kernel => ./kernel` 指向本地（monorepo 标准做法）。
+因此根目录可以直接 `go build ./...` / `go vet ./...` / `go test ./...`，
+`eval/` 那批 import kernel 的代码会真正被编译和测试。
+
+完整门禁是 `sh scripts/gate.sh`，它会自动发现仓库里**所有** `go.mod` 并逐个跑
+vet/build/test（根 module 与 `kernel/` 各一遍），与 CI 口径一致。内核单独的
+构建/测试仍照旧在 `kernel/` 下执行：
 
 CI 也按这个口径配置：`.github/workflows/ci.yml` 的
 `defaults.run.working-directory: kernel`（文件头 1–13 行写明了原因，
