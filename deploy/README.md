@@ -470,6 +470,7 @@ MaxRetentionSec=30day
 ```
 
 改完用 `journalctl --disk-usage` 复测；手工回收用 `journalctl --vacuum-size=500M`（先看后删）。
+
 ### 10. 混跑（先非 root quickstart、后 `sudo --systemd`）RUN_DIR 属主留在 root（T-0425 已根修）
 
 `--systemd` 以 root 跑时，`$RUN_DIR`（`_lightmem_run` 或 `/opt/lightmem`）会被建成/保持 `root:root 755`。
@@ -503,3 +504,25 @@ sudo systemctl restart lightmem.service lightmem-mcp.service
 - 顺序建议：**固定一种**。要 systemd 就一开始 `sudo --systemd`；要纯 quickstart 就始终以同一用户跑，
   两者混跑时以最后一次 `install.sh` 的属主为准（T-0425 已让 `--systemd` 每次都重新归一，但这仍是"事后修正"）。
 - 回归：`bash integrations/quickstart/envfile_test.sh`（第 5 节 13 项属主判据：root 模拟 chown 记账 + 「chown 之前 data/logs 必须已存在」顺序断言、非 root 零 chown、`/tmp` 与 `/` 必拒）。
+---
+
+## EOL 门禁（T-0427，T-0417 TODO#4）
+
+deploy/ 下的 systemd unit（`lightmem*.service` / `lightmem-watchdog.timer`）、cron 条目
+（`cron.d/`）、logrotate / newsyslog 规则，**行尾带 `\r`（CRLF）会让对应解析器直接失败**
+且报错隐晦：cron 静默不跑、systemd `ExecStart` 起不来、logrotate stat 报错。
+这些文件没有常规扩展名，曾落在 `* text=auto` 兜底里 —— Windows 检出成 CRLF，
+`git add` 时极易把 CRLF 提上去（T-0417 实测踩过：本地写入带 CRLF，logrotate 解析失败；
+`deploy/logrotate.d/lightmem` 还曾缺末行换行）。`.gitattributes` 已用**路径级**
+`text eol=lf` 钉死（见其 deploy 规则段），并要求这些文件末字节为 `0x0a`。
+
+自查（POSIX sh，零依赖，Windows 提交机可用 Git 自带的 `sh` 跑）：
+
+```sh
+sh scripts/check-eol-lf.sh
+```
+
+新增部署文件时同步两处：`.gitattributes` 的路径级规则 + `scripts/check-eol-lf.sh` 的
+`TARGETS` 清单（缺一处门禁会漏检或误报不同步）。
+
+> AI生成
