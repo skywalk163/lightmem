@@ -161,7 +161,7 @@ secrets 文件缺失 → 空口令 → scram 下**连接失败并显式报错**�
 | 定时条目（cron） | `deploy/cron.d/lightmem-watchdog` | FreeBSD 默认；Linux 无 systemd 时的备选（`*/2 * * * * root ...`） |
 | systemd 看门狗单元 | `deploy/lightmem-watchdog.service` | Linux oneshot：`ExecStart=/usr/local/bin/lightmem-watchdog.sh`，`RuntimeDirectory=lightmem` |
 | systemd 看门狗计时器 | `deploy/lightmem-watchdog.timer` | Linux 每 2 分钟触发（`OnCalendar=*:0/2`、`Persistent=true`、`RandomizedDelaySec=10`） |
-| 日志轮转 | `deploy/newsyslog.d/lightmem.conf` | `lightmem.log` / `lightmem-mcp.log` 按日切、保留 7 份（对应 L-257） |
+| 日志轮转 | `deploy/newsyslog.d/lightmem.conf`（FreeBSD）、`deploy/logrotate.d/lightmem`（Linux） | `lightmem.log` / `lightmem-mcp.log` 按日切、保留 7 份（对应 L-257）；T-0426 起 unit 显式 append 到这两个文件 |
 | systemd 模板 | `deploy/lightmem.service` | 非 FreeBSD/容器部署用（FreeBSD 真机走 rc.d）；`Restart=always` 等 + 探针注释 |
 
 > 看门狗 + 定时器是 T0 的**补充件**，不替代 rc.d。FreeBSD 真机用 cron，Linux 默认 systemd timer；
@@ -371,9 +371,9 @@ sudo sysrc lightmem_profile="/usr/local/lightmem/profiles/lims-solo-abs.profile.
 - 回归：`deploy/platform_test.sh` 含「带 `.service` 后缀不再重复拼接 / 不产生 `.service.service`」两条用例。
 - 自查：`ls /etc/systemd/system/ | grep '.service.service'` 必须为空。
 
-### 6. `EnvironmentFile` 里塞了多行 JSON，kernel 启动即崩（A 线待根修，已给规避件）
+### 6. `EnvironmentFile` 里塞了多行 JSON，kernel 启动即崩（T-0424 已根修，规避件保留为事后修）
 
-`scripts` 侧签发的 `agent-tokens.json` 是约 40 行的**美化 JSON**；`install.sh --systemd` 用
+`issue_token.py` 签发的 `agent-tokens.json` 是约 40 行的**美化 JSON**；旧版 `install.sh --systemd` 用
 `printf 'LIMS_AGENT_TOKENS=%s\n' "$(cat ...)"` 原样写入 `lightmem.env`。systemd 的 `EnvironmentFile`
 **按行解析**，只保留首行 `{`，于是：
 
@@ -382,14 +382,20 @@ sudo sysrc lightmem_profile="/usr/local/lightmem/profiles/lims-solo-abs.profile.
 lightmem.service: Main process exited, code=exited, status=1/FAILURE   （重试 5 次后 Start request repeated too quickly）
 ```
 
-- 规避（可重复执行，实测 `891 bytes, 1 line`）：
+- 现状（**装之前不用再手工跑规避件**）：`install.sh` 写 `$RUN_DIR/lightmem.env` 前会先压成**单行** JSON
+  （仓库完整时调 `scripts/lm-env-compact.sh`；只有 integrations/ 子集时内联 `python3 json.dumps`），
+  写完自检「恰好 1 行 + 前缀 + 解析回来与源 JSON 等价 + 600」，任何一条不满足即 `exit 1`；
+  `python3` 缺失时明确失败，不会静默写出会崩的 env。`agent-tokens.json` 本身不被改动。
+- 事后修复 / 换 token 后重压（可重复执行，实测 `891 bytes, 1 line`）：
 
 ```sh
 sudo sh scripts/lm-env-compact.sh /opt/lightmem/_lightmem_run    # 或你的 RUN_DIR
 sudo systemctl restart lightmem.service lightmem-mcp.service
 ```
 
-- 自查：`wc -l "$RUN_DIR/lightmem.env"` 必须是 `1`；`sudo systemctl show lightmem.service -p Environment | head -c 200` 应能看到完整 JSON。
+- 自查：`wc -l "$RUN_DIR/lightmem.env"` 必须是 `1`（而不是 40+）；`sudo systemctl show lightmem.service -p Environment | head -c 200` 应能看到完整 JSON。
+- 回归：`bash integrations/quickstart/envfile_test.sh`（含「旧写法必须变红」与「python3 缺失必须失败」两组反跑）。
+
 
 ### 7. logrotate 在 Ubuntu/Debian 上被「父目录权限不安全」整条跳过（已修）
 
@@ -415,15 +421,55 @@ error: skipping "/var/log/lightmem.log" because parent directory has insecure pe
 - 现状：本文档「安装（FreeBSD 真机）」「安装（Linux）」两段步骤均已补 `mkdir -p /usr/local/libexec/lightmem`。
 - 自查：`sh -c '. /usr/local/libexec/lightmem/platform.sh; lm_detect_os'` 应打印 `linux`/`freebsd`（rc 0）。
 
-### 9. 登记（不改）：systemd 部署下服务日志走 journald，logrotate 对真实日志是空转
+### 9. 已定夺（T-0426）：systemd 部署日志显式落文件，logrotate 轮转真实日志
 
-`deploy/lightmem.service` / `lightmem-mcp.service` 未配 `StandardOutput=`，日志默认进 journald
-（`journalctl -u lightmem.service` 可见 `[access]` 行）；`/var/log/lightmem*.log` 在 systemd 路径下**并不存在**，
-`deploy/logrotate.d/lightmem` 因 `missingok` 每晚静默跳过，真实日志由 journald 自行回收。
+`deploy/lightmem.service` / `lightmem-mcp.service` 现在显式声明：
 
-- 两条可选口径（**择一，别都做**）：给 unit 加 `StandardOutput=append:/var/log/lightmem.log`
-  （让 logrotate 真正生效），或明确登记"journald 侧用 `SystemMaxUse` / `MaxRetentionSec` 治理"。
-- 本卡不改 unit 语义（红线），仅登记，待 A/C 线定夺。
+```ini
+StandardOutput=append:/var/log/lightmem.log
+StandardError=append:/var/log/lightmem.log
+# lightmem-mcp.service 同理，路径为 /var/log/lightmem-mcp.log
+```
+
+**决策：方案甲（落文件），不选 journald 作为业务日志主通道。** 理由与代价：
+
+| | 方案甲（本仓库现状） | 方案乙（journald） |
+|---|---|---|
+| 日志去哪 | `/var/log/lightmem*.log` | `journalctl -u lightmem*` |
+| 谁回收 | logrotate，按日保留 7 份、旧档 gzip | journald，按 `SystemMaxUse`（默认 10% 文件系统，上限 4G） |
+| 可预期性 | 每服务独立配额，`ls`/`tail` 直接可看 | 全局配额，单服务占用需 `journalctl -u ... -o export \| wc -c` |
+| 代价 | systemd >= 240；journalctl 里只剩生命周期消息；`/var/log` 需可写 | 单服务无法独立限流；logrotate 规则空转 |
+
+两条线此前「各说各话」的根因：unit 走 journald，而 `deploy/logrotate.d/lightmem` 轮转的是
+`/var/log/lightmem*.log`（不存在，被 `missingok` 静默跳过）。T-0426 用方案甲把两边对齐，
+并实测 `append:`（O_APPEND）与 `copytruncate`（同 inode 截断）可以共存 —— 轮转后服务继续往
+同一 inode 写、文件继续增长、无空洞，详见 `deploy/logrotate.d/README.md` 的实测记录。
+
+**三行运维答案**：
+
+- 日志去哪：`/var/log/lightmem.log`（kernel/REST）、`/var/log/lightmem-mcp.log`（MCP/HTTP）。
+- 谁回收：logrotate（`deploy/logrotate.d/lightmem` → `/etc/logrotate.d/lightmem`），按日、保留 7 份、gzip。
+- 怎么量：`ls -l /var/log/lightmem*.log*` + `du -sh /var/log/lightmem*.log*`；规则体检用
+  `sudo logrotate -d /etc/logrotate.d/lightmem`。
+
+**30 天后**：只剩最近 7 份（第 8 天起最旧一份被 logrotate 删除），总量约 `7 × 单日日志量`，
+删除者是 logrotate，不是 journald。
+
+**不要用 `touch` 空文件去「让 logrotate 生效」**：空文件被 `notifempty` 跳过，反而掩盖空转。
+判断是否接通，看 `journalctl -u lightmem.service` 里是否还有 `[access]` 业务行（方案甲下应只剩
+systemd 生命周期消息），以及 `/var/log/lightmem.log` 是否随请求增长。
+
+**journald 侧仍需治理的残余**（systemd 自己的 `Started/Stopped` 消息、以及其他服务）：
+默认 `SystemMaxUse` 是所在文件系统的 10%（上限 4G），默认不按时间过期（`MaxRetentionSec=0`）。
+建议在 `/etc/systemd/journald.conf` 显式写明并 `systemctl restart systemd-journald`：
+
+```ini
+[Journal]
+SystemMaxUse=500M
+MaxRetentionSec=30day
+```
+
+改完用 `journalctl --disk-usage` 复测；手工回收用 `journalctl --vacuum-size=500M`（先看后删）。
 
 ---
 
