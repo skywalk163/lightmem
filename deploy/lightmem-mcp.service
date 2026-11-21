@@ -41,6 +41,18 @@ RestartSec=2
 TimeoutStartSec=60
 TimeoutStopSec=30
 
+# ---------------------------------------------------------------- 日志（T-0426 定夺：方案甲，显式落文件）
+# 与 deploy/logrotate.d/lightmem 配套：本单元写 /var/log/lightmem-mcp.log，
+# kernel 单元写 /var/log/lightmem.log；两个 unit 口径一致（都 append，不混 journald）。
+# 文件由 systemd 在启动服务前打开（root:root 0644），User= 不影响可写性，
+# 因此不需要把 /var/log 加进 ReadWritePaths；ProtectSystem=strict 照旧生效。
+# append: 以 O_APPEND 打开；logrotate 用 copytruncate（同 inode 原地截断），
+# 轮转后进程继续写同一 inode，不会写到旧 inode 丢日志（实测见 deploy/README.md）。
+# 需要 systemd >= 240（append: 语法）；更老的系统请退回 journald 并按文档设 SystemMaxUse。
+StandardOutput=append:/var/log/lightmem-mcp.log
+StandardError=append:/var/log/lightmem-mcp.log
+SyslogIdentifier=lightmem-mcp
+
 # ---------------------------------------------------------------- 加固
 NoNewPrivileges=true
 PrivateTmp=true

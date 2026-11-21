@@ -1,24 +1,39 @@
-# R29 L-257 / T-0413：lightmem 日志轮转（Linux 侧）
+# T-0413 / T-0426：lightmem 日志轮转（Linux 侧）
+#
+# 【T-0426 定夺】两个 systemd unit 已显式落文件（方案甲）：
+#   lightmem.service     StandardOutput/StandardError=append:/var/log/lightmem.log
+#   lightmem-mcp.service StandardOutput/StandardError=append:/var/log/lightmem-mcp.log
+# 因此本文件轮转的就是**真实在写的日志**，不再是 T-0417 登记的空转状态。
+# 若你的部署刻意保留 journald（没有装 T-0426 之后的 unit），本文件会被 missingok
+# 静默跳过 —— 那种部署请看 deploy/README.md 的 journald 回收（SystemMaxUse）一节。
 #
 # 与 deploy/newsyslog.d/lightmem.conf 口径对齐（FreeBSD 走 newsyslog，Linux 走 logrotate）：
 #   - 按日轮转、保留 7 份（≈ 一周），旧档 gzip；
-#   - 空文件跳过、文件不存在不报错（Linux 上日志可能由 journald / 重定向产生，
-#     不一定存在，故 missingok 是必须的，否则 logrotate 每晚刷 "stat ... No such file"）；
-#   - copytruncate：不依赖服务支持 reopen（lightmem / lightmem-mcp 未实现 SIGHUP 重开），
-#     轮转后原地截断，进程继续写同一 inode，代价是极短窗口内可能丢几行；
-#   - delaycompress：与 copytruncate 搭配使用，轮转当拍不压、下一拍再压，
-#     避免「进程还在写上一份、这边就压」的竞态。
+#   - 空文件跳过、文件不存在不报错；
+#   - copytruncate：不依赖服务支持 reopen（lightmem / lightmem-mcp 未实现 SIGHUP 重开）。
 #
-# 日志路径口径由服务端决定（/var/log/lightmem.log、/var/log/lightmem-mcp.log），
-# 本文件只负责轮转，不改路径。
+# 为什么 append + copytruncate 不打架（T-0426 实测，Ubuntu 24.04 / systemd 255）：
+#   systemd 的 append: 以 O_APPEND 打开文件，每次 write 都定位到当前文件末尾；
+#   copytruncate 是「拷走内容 → 原地 truncate」，inode 不变，fd 仍然有效。
+#   轮转后下一次写入落在新的末尾，不会像 rename+create 那样继续写旧 inode。
+#   实测：rotate 后 inode 不变、文件继续增长、无 NUL 空洞（du == size）、.1 内容完整。
+#   反过来，若改成 create + rename（不 truncate），append: 的 fd 会指向旧 inode，
+#   日志被写进 .1 而新文件不再增长 —— 所以本文件必须保留 copytruncate。
+#
+# 文件属主：StandardOutput= 的文件由 systemd 创建（root:root 0644），
+#   与 User=lightmem 无关；logrotate 用 su root root 运行，copytruncate 不受属主影响。
 #
 # su root root（T-0417 真机验收补）：Ubuntu/Debian 的 /var/log 是 root:syslog 775，
 #   属组可写 → logrotate 判定「parent directory has insecure permissions」并**直接跳过**
-#   （实测 `logrotate -f` rc=1，旧档根本不生成）。加 su 后以 root:root 身份执行轮转，
-#   与文件属主无关（root 始终能在 /var/log 里 rename/create）。
+#   （实测 `logrotate -f` rc=1，旧档根本不生成）。加 su 后以 root:root 身份执行轮转。
+#
+# 不要用 touch 空文件「验证」本配置：空文件会被 notifempty 跳过，看起来像没生效；
+#   正确做法是让服务真正写一行，或直接看 miss/ok 的 -d 输出。
 #
 # 安装：sudo install -m 644 deploy/logrotate.d/lightmem /etc/logrotate.d/lightmem
 #      （等价：. deploy/platform.sh && lm_logrotate_install deploy/logrotate.d/lightmem）
+#      注意：必须带上 src 参数。platform.sh 无参数时的内置兜底规则没有 su root root，
+#      在 Debian/Ubuntu 上会被「父目录权限不安全」整条跳过。
 # 自检：sudo logrotate -d /etc/logrotate.d/lightmem
 /var/log/lightmem.log /var/log/lightmem-mcp.log {
     su root root
